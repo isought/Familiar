@@ -101,7 +101,7 @@ The docs were generated from the app's repo and use its real button labels.
 | docsStuffLimitChars | 24000 | how much doc text to paste before switching to read_file |
 | uvPath | "" | override the uv binary |
 | wandHoldSeconds | 0.8 | how long to hold the bubble to charge the wand |
-| mascotStyle | innocent | character brows: `innocent` (high, arched, never lowered) or `sharp` (the original) |
+| mascotStyle | innocent | character brows: `innocent` (v3, traced from the reference), `innocentV2`, `innocentV1`, or `sharp` (the original merge) |
 | hotkey | control+option+space | wand hotkey, e.g. `cmd+shift+k` |
 | allowControl | false | let Familiar move the mouse and type when asked |
 | env | {} | non-secret variables handed to every script |

@@ -5,7 +5,7 @@ import SwiftUI
 /// Two brow personalities. `sharp` is the original merge; `innocent` keeps both brows high and arched so curiosity
 /// reads as wide-eyed rather than skeptical (a lowered brow is what makes a face look suspicious).
 enum MascotStyle: String, CaseIterable {
-    case sharp, innocent, innocentV1
+    case sharp, innocent, innocentV1, innocentV2
     nonisolated(unsafe) static var current: MascotStyle = .innocent
     var isInnocentFamily: Bool { self != .sharp }
 }
@@ -77,6 +77,7 @@ private struct Expression {
         switch MascotStyle.current {
         case .innocent: return innocent(mood)
         case .innocentV1: return innocentV1(mood)
+        case .innocentV2: return innocentV2(mood)
         case .sharp: break
         }
         switch mood {
@@ -109,9 +110,43 @@ private struct Expression {
         }
     }
 
-    /// Innocent brows, v2: long shallow arcs like the reference (about a fifth as tall as they are wide), the same size
-    /// and height at rest, never below neutral. Curiosity is a modest lift of one brow plus the sideways glance.
+    /// Innocent brows, v3, traced from the reference: both brows are the SAME stroke, not mirror images. Each peaks near
+    /// its left end and its tail droops down to the right, the whole pair tilted clockwise; the right brow sits lower,
+    /// almost on its eye. Together with the lower right eye the face is cocked, which is what reads as sweetly dim.
     static func innocent(_ mood: MascotMood) -> Expression {
+        let P = 0.36   // apex toward the left end of every brow
+        switch mood {
+        case .idle:
+            return Expression(left: Brow(raise: 0.06, innerUp: -14, arch: 0.75, peak: P), right: Brow(raise: 0.0, innerUp: 18, arch: 0.7, peak: P), lean: 3)
+        case .curious:
+            return Expression(left: Brow(raise: 0.09, innerUp: -12, arch: 0.85, peak: P), right: Brow(raise: 0.0, innerUp: 20, arch: 0.6, peak: 0.4),
+                              gaze: CGPoint(x: 0.8, y: 0.25), lean: 5)
+        case .happy:
+            return Expression(left: Brow(raise: 0.07, innerUp: -12, arch: 0.8, peak: P), right: Brow(raise: 0.02, innerUp: 16, arch: 0.75, peak: P),
+                              happy: 1, lean: -5, shift: CGSize(width: 0, height: -0.02))
+        case .thinking:
+            return Expression(left: Brow(raise: 0.10, innerUp: -10, arch: 0.8, peak: P), right: Brow(raise: 0.06, innerUp: 16, arch: 0.75, peak: P),
+                              gaze: CGPoint(x: -0.7, y: -0.85), followsPointer: false, lean: -3)
+        case .charging:
+            return Expression(left: Brow(raise: 0.03, innerUp: -10, arch: 0.6, peak: P), right: Brow(raise: 0.0, innerUp: 14, arch: 0.55, peak: P),
+                              eyeOpen: 0.55, gaze: CGPoint(x: 0, y: 0.15), followsPointer: false)
+        case .onIt:
+            return Expression(left: Brow(raise: 0.05, innerUp: -6, arch: 0.6, peak: P), right: Brow(raise: 0.0, innerUp: 10, arch: 0.55, peak: P),
+                              eyeOpen: 0.85, gaze: CGPoint(x: 0.6, y: 0), followsPointer: false, lean: 7,
+                              shift: CGSize(width: 0.04, height: 0), squashX: 1.03, squashY: 0.97, motionLines: 1)
+        case .peek:
+            return Expression(left: Brow(raise: 0.08, innerUp: -12, arch: 0.8, peak: P), right: Brow(raise: 0.0, innerUp: 18, arch: 0.6, peak: 0.4),
+                              gaze: CGPoint(x: 0.85, y: 0.2), followsPointer: false, lean: -6,
+                              shift: CGSize(width: -0.07, height: 0.02), hidden: 1)
+        case .sad:
+            return Expression(left: Brow(raise: 0.05, innerUp: 18, arch: 0.35, peak: 0.5), right: Brow(raise: 0.04, innerUp: 24, arch: 0.35, peak: 0.5),
+                              eyeOpen: 0.9, eyeScale: 0.7, gaze: CGPoint(x: 0.1, y: 0.7), followsPointer: false, lean: -2,
+                              shift: CGSize(width: 0, height: 0.03), squashX: 1.02, squashY: 0.97)
+        }
+    }
+
+    /// Innocent brows, v2 (tagged mascot-v2): long shallow arcs, same size at rest. Kept for comparison.
+    static func innocentV2(_ mood: MascotMood) -> Expression {
         let L = 0.44, R = 0.56
         switch mood {
         case .idle:
@@ -335,11 +370,12 @@ struct MascotView: View {
         let leftDX: CGFloat = v1 ? 0.02 : innocent ? 0.045 : 0.02            // outward push of the left brow
         let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.045 : 0.01
         let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.06 : 0.015
+        let cock: CGFloat = style == .innocent ? 1 : 0     // v3: the face is cocked like the reference (right eye lower)
         return ZStack {
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
-                .position(x: cx - eyeDX + drift.width, y: eyeY + drift.height)
+                .position(x: cx - eyeDX + drift.width, y: eyeY + drift.height - b * 0.012 * cock)
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
-                .position(x: cx + eyeDX + drift.width, y: eyeY + drift.height)
+                .position(x: cx + eyeDX + drift.width, y: eyeY + drift.height + b * 0.03 * cock)
             brow(width: browW, lineWidth: browLW, arch: ex.left.arch, peak: ex.left.peak)
                 .rotationEffect(.degrees(Double(-ex.left.innerUp)))
                 .position(x: cx - eyeDX - b * leftDX, y: browY - ex.left.raise * b - browTwitch)
