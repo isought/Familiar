@@ -5,8 +5,9 @@ import SwiftUI
 /// Two brow personalities. `sharp` is the original merge; `innocent` keeps both brows high and arched so curiosity
 /// reads as wide-eyed rather than skeptical (a lowered brow is what makes a face look suspicious).
 enum MascotStyle: String, CaseIterable {
-    case sharp, innocent
+    case sharp, innocent, innocentV1
     nonisolated(unsafe) static var current: MascotStyle = .innocent
+    var isInnocentFamily: Bool { self != .sharp }
 }
 
 enum MascotMood: String, CaseIterable {
@@ -73,7 +74,11 @@ private struct Expression {
     var hidden: CGFloat = 0      // 1 = half hidden behind a left edge (peek)
 
     static func of(_ mood: MascotMood) -> Expression {
-        if MascotStyle.current == .innocent { return innocent(mood) }
+        switch MascotStyle.current {
+        case .innocent: return innocent(mood)
+        case .innocentV1: return innocentV1(mood)
+        case .sharp: break
+        }
         switch mood {
         case .idle:
             return Expression(left: Brow(raise: 0.03, innerUp: 6, arch: 1), right: Brow(raise: -0.015, innerUp: 4, arch: 0.9), lean: 3)
@@ -104,9 +109,42 @@ private struct Expression {
         }
     }
 
-    /// Innocent brows: high above the eyes, apex toward the outer ends, inner ends gently lifted, never below neutral.
-    /// Curiosity = one brow even higher + the sideways glance; effort = raised brows with narrowed eyes, not a frown.
+    /// Innocent brows, v2: long shallow arcs like the reference (about a fifth as tall as they are wide), the same size
+    /// and height at rest, never below neutral. Curiosity is a modest lift of one brow plus the sideways glance.
     static func innocent(_ mood: MascotMood) -> Expression {
+        let L = 0.44, R = 0.56
+        switch mood {
+        case .idle:
+            return Expression(left: Brow(raise: 0.045, innerUp: 6, arch: 0.72, peak: L), right: Brow(raise: 0.045, innerUp: 6, arch: 0.72, peak: R), lean: 3)
+        case .curious:
+            return Expression(left: Brow(raise: 0.08, innerUp: 8, arch: 0.85, peak: L), right: Brow(raise: 0.045, innerUp: 5, arch: 0.72, peak: R),
+                              gaze: CGPoint(x: 0.8, y: 0.25), lean: 5)
+        case .happy:
+            return Expression(left: Brow(raise: 0.075, innerUp: 6, arch: 0.8, peak: L), right: Brow(raise: 0.07, innerUp: 6, arch: 0.8, peak: R),
+                              happy: 1, lean: -5, shift: CGSize(width: 0, height: -0.02))
+        case .thinking:
+            return Expression(left: Brow(raise: 0.10, innerUp: 12, arch: 0.8, peak: 0.46), right: Brow(raise: 0.095, innerUp: 12, arch: 0.8, peak: 0.54),
+                              gaze: CGPoint(x: -0.7, y: -0.85), followsPointer: false, lean: -3)
+        case .charging:
+            return Expression(left: Brow(raise: 0.025, innerUp: 10, arch: 0.62, peak: 0.45), right: Brow(raise: 0.025, innerUp: 10, arch: 0.62, peak: 0.55),
+                              eyeOpen: 0.55, gaze: CGPoint(x: 0, y: 0.15), followsPointer: false)
+        case .onIt:
+            return Expression(left: Brow(raise: 0.02, innerUp: -6, arch: 0.6, peak: 0.45), right: Brow(raise: 0.02, innerUp: -6, arch: 0.6, peak: 0.55),
+                              eyeOpen: 0.85, gaze: CGPoint(x: 0.6, y: 0), followsPointer: false, lean: 7,
+                              shift: CGSize(width: 0.04, height: 0), squashX: 1.03, squashY: 0.97, motionLines: 1)
+        case .peek:
+            return Expression(left: Brow(raise: 0.065, innerUp: 8, arch: 0.8, peak: L), right: Brow(raise: 0.045, innerUp: 6, arch: 0.72, peak: R),
+                              gaze: CGPoint(x: 0.85, y: 0.2), followsPointer: false, lean: -6,
+                              shift: CGSize(width: -0.07, height: 0.02), hidden: 1)
+        case .sad:
+            return Expression(left: Brow(raise: 0.05, innerUp: 20, arch: 0.45, peak: 0.45), right: Brow(raise: 0.05, innerUp: 20, arch: 0.45, peak: 0.55),
+                              eyeOpen: 0.9, eyeScale: 0.7, gaze: CGPoint(x: 0.1, y: 0.7), followsPointer: false, lean: -2,
+                              shift: CGSize(width: 0, height: 0.03), squashX: 1.02, squashY: 0.97)
+        }
+    }
+
+    /// Innocent brows, v1 (tagged mascot-v1): taller arcs, a smaller right brow that dodges the curl. Kept for comparison.
+    static func innocentV1(_ mood: MascotMood) -> Expression {
         let L = 0.42, R = 0.58   // apex positions: toward each brow's outer end
         switch mood {
         case .idle:
@@ -288,9 +326,13 @@ struct MascotView: View {
         let eyeW = b * 0.15 * ex.eyeScale, eyeH = b * 0.255 * ex.eyeScale
         let eyeDX = b * 0.17, eyeY = cy + b * 0.10
         let drift = CGSize(width: gaze.x * b * 0.02, height: gaze.y * b * 0.015)   // the eyes themselves drift a hair; the pupils do the looking
-        let innocent = MascotStyle.current == .innocent
+        let style = MascotStyle.current
+        let innocent = style.isInnocentFamily, v1 = style == .innocentV1
         let browY = cy - b * (innocent ? 0.225 : 0.19)          // innocent: a wider gap above the eyes
-        let browW = b * (innocent ? 0.26 : 0.27), browLW = b * (innocent ? 0.034 : 0.042)
+        let browW = b * (v1 ? 0.26 : 0.27), browLW = b * (v1 ? 0.034 : innocent ? 0.038 : 0.042)
+        let rightScale: CGFloat = v1 ? 0.80 : innocent ? 0.90 : 0.93        // v1 shortened the right brow to dodge the curl
+        let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.04 : 0.01
+        let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.03 : 0.015
         return ZStack {
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
                 .position(x: cx - eyeDX + drift.width, y: eyeY + drift.height)
@@ -299,9 +341,9 @@ struct MascotView: View {
             brow(width: browW, lineWidth: browLW, arch: ex.left.arch, peak: ex.left.peak)
                 .rotationEffect(.degrees(Double(-ex.left.innerUp)))
                 .position(x: cx - eyeDX - b * 0.02, y: browY - ex.left.raise * b - browTwitch)
-            brow(width: browW * (innocent ? 0.80 : 0.93), lineWidth: browLW, arch: ex.right.arch, peak: ex.right.peak)   // shorter, lower and further from the curl
+            brow(width: browW * rightScale, lineWidth: browLW, arch: ex.right.arch, peak: ex.right.peak)   // a touch shorter and lower so it clears the curl
                 .rotationEffect(.degrees(Double(ex.right.innerUp)))
-                .position(x: cx + eyeDX - b * (innocent ? 0.065 : 0.01), y: browY + b * (innocent ? 0.04 : 0.015) - ex.right.raise * b)
+                .position(x: cx + eyeDX - b * rightDX, y: browY + b * rightDY - ex.right.raise * b)
         }
     }
 

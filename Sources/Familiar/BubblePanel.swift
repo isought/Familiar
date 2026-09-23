@@ -312,7 +312,7 @@ final class BubbleSense: ObservableObject {
         let k = min(1, dist / 180)
         let g = dist < 1 ? CGPoint.zero : CGPoint(x: dx / dist * k, y: dy / dist * k)
         if let old = gaze, abs(old.x - g.x) < 0.02, abs(old.y - g.y) < 0.02 {} else { gaze = g }
-        let near = dist < 110 && dist > 20
+        let near = dist < 30            // curious only when the pointer is actually over the note; nearby motion just gets the eyes
         if near != pointerNear { pointerNear = near }
     }
 }
