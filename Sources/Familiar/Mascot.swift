@@ -359,7 +359,7 @@ struct MascotView: View {
     private func face(body: CGRect, ex: Expression, open: CGFloat, gaze: CGPoint, browTwitch: CGFloat) -> some View {
         let b = body.width
         let cx = body.midX, cy = body.midY
-        let eyeW = b * 0.15 * ex.eyeScale, eyeH = b * 0.255 * ex.eyeScale
+        let eyeW = b * 0.175 * ex.eyeScale, eyeH = b * 0.30 * ex.eyeScale   // big, tall eyes: the main "young and harmless" signal
         let eyeDX = b * 0.17, eyeY = cy - b * 0.005          // eyes on the note's midline (they used to hang at 60%)
         let drift = CGSize(width: gaze.x * b * 0.02, height: gaze.y * b * 0.015)   // the eyes themselves drift a hair; the pupils do the looking
         let style = MascotStyle.current
@@ -378,8 +378,10 @@ struct MascotView: View {
         let liftR = proximity * b * (0.025 + 0.02 * max(0, side))
         return ZStack {
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
+                .rotationEffect(.degrees(6))
                 .position(x: cx - eyeDX + drift.width, y: eyeY + drift.height - b * 0.012 * cock)
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
+                .rotationEffect(.degrees(6))
                 .position(x: cx + eyeDX + drift.width, y: eyeY + drift.height + b * 0.03 * cock)
             brow(width: browW, lineWidth: browLW, arch: ex.left.arch, peak: ex.left.peak)
                 .rotationEffect(.degrees(Double(-ex.left.innerUp)))
@@ -403,8 +405,8 @@ struct MascotView: View {
                     .overlay(
                         Ellipse()
                             .fill(Color.white.opacity(0.95))
-                            .frame(width: w * 0.36, height: h * 0.22)
-                            .offset(x: w * 0.12, y: -h * 0.26))
+                            .frame(width: w * 0.38, height: h * 0.23)
+                            .offset(x: w * 0.12, y: -h * 0.33))   // catchlight high in the eye, like the reference
                     .scaleEffect(1 - 0.14 * look)
                     .offset(slide)
             }
