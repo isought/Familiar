@@ -329,10 +329,12 @@ struct MascotView: View {
         let style = MascotStyle.current
         let innocent = style.isInnocentFamily, v1 = style == .innocentV1
         let browY = cy - b * (innocent ? 0.225 : 0.19)          // innocent: a wider gap above the eyes
-        let browW = b * (v1 ? 0.26 : 0.27), browLW = b * (v1 ? 0.034 : innocent ? 0.038 : 0.042)
-        let rightScale: CGFloat = v1 ? 0.80 : innocent ? 0.90 : 0.93        // v1 shortened the right brow to dodge the curl
-        let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.04 : 0.01
-        let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.03 : 0.015
+        // v2: shorter brows set wide apart, each floating over its own eye (the Clippy "harmless" look)
+        let browW = b * (v1 ? 0.26 : innocent ? 0.215 : 0.27), browLW = b * (v1 ? 0.034 : innocent ? 0.038 : 0.042)
+        let rightScale: CGFloat = v1 ? 0.80 : innocent ? 0.95 : 0.93        // v1 shortened the right brow to dodge the curl
+        let leftDX: CGFloat = v1 ? 0.02 : innocent ? 0.045 : 0.02            // outward push of the left brow
+        let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.025 : 0.01
+        let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.045 : 0.015
         return ZStack {
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
                 .position(x: cx - eyeDX + drift.width, y: eyeY + drift.height)
@@ -340,7 +342,7 @@ struct MascotView: View {
                 .position(x: cx + eyeDX + drift.width, y: eyeY + drift.height)
             brow(width: browW, lineWidth: browLW, arch: ex.left.arch, peak: ex.left.peak)
                 .rotationEffect(.degrees(Double(-ex.left.innerUp)))
-                .position(x: cx - eyeDX - b * 0.02, y: browY - ex.left.raise * b - browTwitch)
+                .position(x: cx - eyeDX - b * leftDX, y: browY - ex.left.raise * b - browTwitch)
             brow(width: browW * rightScale, lineWidth: browLW, arch: ex.right.arch, peak: ex.right.peak)   // a touch shorter and lower so it clears the curl
                 .rotationEffect(.degrees(Double(ex.right.innerUp)))
                 .position(x: cx + eyeDX - b * rightDX, y: browY + b * rightDY - ex.right.raise * b)
