@@ -333,7 +333,7 @@ struct MascotView: View {
         let browW = b * (v1 ? 0.26 : innocent ? 0.215 : 0.27), browLW = b * (v1 ? 0.034 : innocent ? 0.038 : 0.042)
         let rightScale: CGFloat = v1 ? 0.80 : innocent ? 0.95 : 0.93        // v1 shortened the right brow to dodge the curl
         let leftDX: CGFloat = v1 ? 0.02 : innocent ? 0.045 : 0.02            // outward push of the left brow
-        let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.025 : 0.01
+        let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.045 : 0.01
         let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.045 : 0.015
         return ZStack {
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
