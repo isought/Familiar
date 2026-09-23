@@ -74,7 +74,7 @@ struct BubbleView: View {
     }
 
     private var orb: some View {
-        MascotView(mood: mood, lookAt: sense.gaze, charge: charge, size: 64, peel: stuck, animated: sense.visible)
+        MascotView(mood: mood, lookAt: sense.gaze, proximity: sense.proximity, charge: charge, size: 64, peel: stuck, animated: sense.visible)
         .frame(width: 64, height: 64)
         .padding(8)
         .contentShape(Rectangle())
@@ -284,6 +284,7 @@ final class BubbleSense: ObservableObject {
     @Published var visible = true
     @Published var gaze: CGPoint? = nil
     @Published var pointerNear = false
+    @Published var proximity: CGFloat = 0      // 0 far away … 1 at the note; drives a gentle brow lift
     @Published var controlActive = false
     var isControlActive: () -> Bool = { false }
     private var timer: Timer?
@@ -314,5 +315,7 @@ final class BubbleSense: ObservableObject {
         if let old = gaze, abs(old.x - g.x) < 0.02, abs(old.y - g.y) < 0.02 {} else { gaze = g }
         let near = dist < 30            // curious only when the pointer is actually over the note; nearby motion just gets the eyes
         if near != pointerNear { pointerNear = near }
+        let prox = max(0, 1 - dist / 240)
+        if abs(prox - proximity) > 0.02 { proximity = prox }
     }
 }

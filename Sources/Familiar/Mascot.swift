@@ -215,6 +215,7 @@ private struct Expression {
 struct MascotView: View {
     var mood: MascotMood
     var lookAt: CGPoint? = nil     // direction the pupils look, x right / y down, magnitude 0…1; nil = straight ahead
+    var proximity: CGFloat = 0     // 0…1 how close the pointer is; the brows lift a little as it approaches
     var charge: CGFloat = 0        // 0…1 hold-to-charge progress
     var size: CGFloat = 48
     /// 0 = stuck on, 1 = peeled off the screen (rotated away and faded). Animate it when hiding/showing the bubble.
@@ -262,6 +263,7 @@ struct MascotView: View {
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: charge)
         .animation(.spring(response: 0.45, dampingFraction: 0.65), value: peel)
         .animation(.easeOut(duration: 0.12), value: lookAt)
+        .animation(.easeOut(duration: 0.2), value: proximity)
         .onAppear { if animated { clock.begin() } }
         .onDisappear { clock.end() }
         .onChange(of: animated) { _, now in if now { clock.begin() } else { clock.end() } }
@@ -371,6 +373,10 @@ struct MascotView: View {
         let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.045 : 0.01
         let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.045 : 0.015
         let cock: CGFloat = style == .innocent ? 1 : 0     // v3: the face is cocked like the reference (right eye lower)
+        // Pointer proximity: both brows drift up a little as the mouse approaches, the one on the pointer's side a bit more.
+        let side = max(-1, min(1, gaze.x * 3))
+        let liftL = proximity * b * (0.025 + 0.02 * max(0, -side))
+        let liftR = proximity * b * (0.025 + 0.02 * max(0, side))
         return ZStack {
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
                 .position(x: cx - eyeDX + drift.width, y: eyeY + drift.height - b * 0.012 * cock)
@@ -378,10 +384,10 @@ struct MascotView: View {
                 .position(x: cx + eyeDX + drift.width, y: eyeY + drift.height + b * 0.03 * cock)
             brow(width: browW, lineWidth: browLW, arch: ex.left.arch, peak: ex.left.peak)
                 .rotationEffect(.degrees(Double(-ex.left.innerUp)))
-                .position(x: cx - eyeDX - b * leftDX, y: browY - ex.left.raise * b - browTwitch)
+                .position(x: cx - eyeDX - b * leftDX, y: browY - ex.left.raise * b - browTwitch - liftL)
             brow(width: browW * rightScale, lineWidth: browLW, arch: ex.right.arch, peak: ex.right.peak)   // a touch shorter and lower so it clears the curl
                 .rotationEffect(.degrees(Double(ex.right.innerUp)))
-                .position(x: cx + eyeDX - b * rightDX, y: browY + b * rightDY - ex.right.raise * b)
+                .position(x: cx + eyeDX - b * rightDX, y: browY + b * rightDY - ex.right.raise * b - liftR)
         }
     }
 

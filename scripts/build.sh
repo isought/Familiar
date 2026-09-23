@@ -4,7 +4,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG="${1:-release}"
-swift build -c "$CONFIG" 2>&1 | grep -E 'error|warning' || true
+if ! OUT=$(swift build -c "$CONFIG" 2>&1); then
+  echo "$OUT" | grep -E 'error' | head -20
+  echo "build failed"; exit 1
+fi
+echo "$OUT" | grep -E 'warning' | head -5 || true
 BIN=".build/$CONFIG/Familiar"
 [ -x "$BIN" ] || { echo "build failed: $BIN missing"; exit 1; }
 
