@@ -50,35 +50,43 @@ struct BubbleView: View {
     var body: some View {
         Group { if state.expanded { card } else { orb } }
             .animation(.easeOut(duration: 0.15), value: state.expanded)
+            .onAppear {
+                sense.isControlActive = { [weak state] in state?.control?.active ?? false }
+                sense.begin()
+            }
+            .onDisappear { sense.end() }
     }
 
-    // MARK: collapsed orb = the wand
+    // MARK: collapsed orb = the mascot
 
     @State private var charge: CGFloat = 0        // 0…1 ring fill while holding
     @State private var charging = false
+    @State private var reaction: MascotMood?      // brief happy/sad after an answer
+    @State private var stuck: CGFloat = 1         // 1 = peeled away; animates to 0 as the note sticks on at launch
+    @StateObject private var sense = BubbleSense()
+
+    private var mood: MascotMood {
+        if charging { return .charging }
+        if sense.controlActive { return .onIt }
+        if state.busy { return .thinking }
+        if let r = reaction { return r }
+        return sense.pointerNear ? .curious : .idle
+    }
 
     private var orb: some View {
         ZStack {
-            Circle()
-                .fill(LinearGradient(colors: [Color(red: 0.35, green: 0.45, blue: 1.0), Color(red: 0.55, green: 0.25, blue: 0.95)],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
-                .shadow(color: Color(red: 0.55, green: 0.3, blue: 0.95).opacity(charging ? 0.7 : 0.25), radius: charging ? 10 : 6, y: charging ? 0 : 3)
-            Circle()   // charge ring
-                .trim(from: 0, to: charge)
-                .stroke(AngularGradient(colors: [.white, Color(red: 1, green: 0.85, blue: 0.4), .white], center: .center),
-                        style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .padding(1)
-            Image(systemName: state.busy ? "hourglass" : "wand.and.stars")
-                .font(.system(size: 21, weight: .semibold))
-                .foregroundStyle(.white)
-                .rotationEffect(.degrees(charging ? -12 : 0))
+            MascotView(mood: mood, lookAt: sense.gaze, charge: charge, size: 48, peel: stuck)
         }
         .frame(width: 48, height: 48)
-        .scaleEffect(charging ? 1.08 : 1)
-        .animation(.easeOut(duration: 0.15), value: charging)
         .padding(8)
         .contentShape(Rectangle())
+        .onAppear {   // stick-on: the note lands on the screen when the bubble first appears
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { withAnimation(.spring(response: 0.5, dampingFraction: 0.6)) { stuck = 0 } }
+        }
+        .onChange(of: state.busy) { was, now in
+            guard was, !now else { return }
+            react(state.transcript.last?.role == .error ? .sad : .happy)
+        }
         .gesture(
             DragGesture(minimumDistance: 4, coordinateSpace: .global)
                 .onChanged { _ in state.onDragBubble?(.moved) }
@@ -110,6 +118,11 @@ struct BubbleView: View {
         .help("Click: chat  ·  Hold: charge the wand  ·  ⌃⌥Space: wand")
     }
 
+    private func react(_ m: MascotMood) {
+        reaction = m
+        DispatchQueue.main.asyncAfter(deadline: .now() + (m == .sad ? 2.2 : 1.5)) { if reaction == m { reaction = nil } }
+    }
+
     // MARK: expanded card
 
     private var card: some View {
@@ -132,7 +145,7 @@ struct BubbleView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "wand.and.stars").foregroundStyle(.tint)
+            MascotView(mood: state.busy ? .thinking : .idle, lookAt: sense.gaze, size: 28).frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Familiar").font(.headline)
                 Text(state.contextLine).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
@@ -262,5 +275,42 @@ struct BubbleView: View {
         }
         .font(.caption2).foregroundStyle(.secondary)
         .padding(.horizontal, 12).padding(.bottom, 8)
+    }
+}
+
+/// What the collapsed bubble senses about the world, polled at 30 Hz: where the pointer is relative to the panel
+/// (so the eyes can follow it), whether it is hovering close, and whether the computer controller is driving the mouse.
+@MainActor
+final class BubbleSense: ObservableObject {
+    @Published var gaze: CGPoint? = nil
+    @Published var pointerNear = false
+    @Published var controlActive = false
+    var isControlActive: () -> Bool = { false }
+    private var timer: Timer?
+
+    func begin() {
+        guard timer == nil else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sample() }
+        }
+        RunLoop.main.add(timer!, forMode: .common)
+    }
+
+    func end() { timer?.invalidate(); timer = nil }
+
+    private func sample() {
+        guard let panel = NSApp.windows.first(where: { $0 is BubblePanel }) else { return }
+        let c = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
+        let m = NSEvent.mouseLocation
+        let dx = m.x - c.x, dy = c.y - m.y            // screen y is up; the mascot's y is down
+        let dist = hypot(dx, dy)
+        // full deflection from ~180pt away, eased in so nearby motion is gentle
+        let k = min(1, dist / 180)
+        let g = dist < 1 ? CGPoint.zero : CGPoint(x: dx / dist * k, y: dy / dist * k)
+        if let old = gaze, abs(old.x - g.x) < 0.02, abs(old.y - g.y) < 0.02 {} else { gaze = g }
+        let near = dist < 110 && dist > 20
+        if near != pointerNear { pointerNear = near }
+        let active = isControlActive()
+        if active != controlActive { controlActive = active }
     }
 }
