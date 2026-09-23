@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.info("Familiar launching (bundle: \(Bundle.main.bundleIdentifier ?? "none"), config: \(Config.file.path))")
         seedToolsIfMissing()
+        MascotStyle.current = MascotStyle(rawValue: config.mascotStyle) ?? .innocent
         runner = ScriptRunner(config: config)
         registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
         assistant = Assistant(config: config, watcher: watcher, registry: registry)
@@ -312,6 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.assistant.reconfigure(self.config)
             self.runner.extraEnv = self.config.env
             self.setupHotKey()
+            MascotStyle.current = MascotStyle(rawValue: self.config.mascotStyle) ?? .innocent
             self.panel.sharingType = self.config.hideFromScreenShare ? .none : .readOnly
             Log.info("settings saved (key: \(self.assistant.hasApiKey ? "set" : "missing"), hotkey: \(self.config.hotkey))")
         }, onOpenTools: { [weak self] in self?.openTools() }, onReloadTools: { [weak self] in self?.reloadTools() })

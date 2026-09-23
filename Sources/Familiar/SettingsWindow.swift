@@ -14,6 +14,7 @@ final class SettingsModel: ObservableObject {
     @Published var hideFromScreenShare = false
     @Published var startAtLogin = false
     @Published var allowControl = false
+    @Published var mascotStyle = "innocent"
     @Published var packSecrets: [PackSecret] = []
     @Published var message = ""
 
@@ -36,6 +37,7 @@ final class SettingsModel: ObservableObject {
         hideFromScreenShare = config.hideFromScreenShare
         startAtLogin = SMAppService.mainApp.status == .enabled
         allowControl = config.allowControl
+        mascotStyle = config.mascotStyle
         toolsDir = config.resolvedToolsDir.path
         var byKey: [String: [String]] = [:]
         for p in packs { for k in p.requires { byKey[k, default: []].append(p.name) } }
@@ -65,6 +67,7 @@ final class SettingsModel: ObservableObject {
         c.attachScreenshotOnText = attachScreenshotOnText
         c.hideFromScreenShare = hideFromScreenShare
         c.allowControl = allowControl
+        c.mascotStyle = mascotStyle
         for s in packSecrets where !Secrets.set(s.id, s.value) { message = "Could not save \(s.id) to the Keychain." }
         do {
             if startAtLogin, SMAppService.mainApp.status != .enabled { try SMAppService.mainApp.register() }
@@ -123,6 +126,10 @@ struct SettingsView: View {
                 Toggle("Hide the bubble from screenshots and screen shares", isOn: $model.hideFromScreenShare)
                 Toggle("Start Familiar at login", isOn: $model.startAtLogin)
                 Toggle("Allow Familiar to control the mouse and keyboard when asked", isOn: $model.allowControl)
+                Picker("Character brows", selection: $model.mascotStyle) {
+                    Text("Innocent").tag("innocent")
+                    Text("Sharp").tag("sharp")
+                }
             }
             Section {
                 HStack {

@@ -30,7 +30,7 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
 ./scripts/make-dev-cert.sh                # once: local signing identity so permission grants survive rebuilds
 ./scripts/run.sh                          # builds build/Familiar.app and launches it
 .build/release/Familiar --selftest tools  # loads the packs, runs three scripts, no UI, no API
-.build/release/Familiar --render-mascot /tmp/mascot   # renders every mood, the quill cursor and the app-icon source as PNGs
+.build/release/Familiar --render-mascot /tmp/mascot [--style innocent|sharp]   # renders every mood, the quill cursor and the app-icon source as PNGs
 build/Familiar.app/Contents/MacOS/Familiar --ask "question" [url] [--shot] [--control]   # headless Claude call, real tool loop
 ```
 First launch creates `~/.familiar/` (or `$FAMILIAR_HOME`) with `config.json`, `tools/` (example packs copied in) and `familiar.log`.
@@ -101,6 +101,7 @@ The docs were generated from the app's repo and use its real button labels.
 | docsStuffLimitChars | 24000 | how much doc text to paste before switching to read_file |
 | uvPath | "" | override the uv binary |
 | wandHoldSeconds | 0.8 | how long to hold the bubble to charge the wand |
+| mascotStyle | innocent | character brows: `innocent` (high, arched, never lowered) or `sharp` (the original) |
 | hotkey | control+option+space | wand hotkey, e.g. `cmd+shift+k` |
 | allowControl | false | let Familiar move the mouse and type when asked |
 | env | {} | non-secret variables handed to every script |

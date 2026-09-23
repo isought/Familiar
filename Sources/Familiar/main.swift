@@ -102,7 +102,8 @@ func runHeadlessAsk() async {
 @MainActor
 func runRenderMascot() {
     let args = CommandLine.arguments
-    guard let i = args.firstIndex(of: "--render-mascot"), i + 1 < args.count else { print("usage: --render-mascot <dir>"); exit(2) }
+    guard let i = args.firstIndex(of: "--render-mascot"), i + 1 < args.count else { print("usage: --render-mascot <dir> [--style innocent|sharp]"); exit(2) }
+    if let si = args.firstIndex(of: "--style"), si + 1 < args.count, let st = MascotStyle(rawValue: args[si + 1]) { MascotStyle.current = st }
     let dir = URL(fileURLWithPath: args[i + 1])
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let paper = Color(red: 0.98, green: 0.975, blue: 0.96)

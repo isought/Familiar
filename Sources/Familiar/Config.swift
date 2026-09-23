@@ -17,6 +17,7 @@ struct Config: Codable {
     var docsStuffLimitChars: Int = 24000
     var uvPath: String = ""                  // empty = bundled uv, then ~/.local/bin, homebrew
     var wandHoldSeconds: Double = 0.8        // hold the bubble this long to charge the wand
+    var mascotStyle: String = "innocent"     // "innocent" (high, arched brows) or "sharp" (the original merge)
     var hotkey: String = "control+option+space"
     var allowControl: Bool = false           // let Familiar move the mouse and type when asked to do something
     var env: [String: String] = [:]          // non-secret variables handed to every script (secrets go to the Keychain)
@@ -63,6 +64,7 @@ struct Config: Codable {
         docsStuffLimitChars = try c.decodeIfPresent(Int.self, forKey: .docsStuffLimitChars) ?? d.docsStuffLimitChars
         uvPath = try c.decodeIfPresent(String.self, forKey: .uvPath) ?? d.uvPath
         wandHoldSeconds = try c.decodeIfPresent(Double.self, forKey: .wandHoldSeconds) ?? d.wandHoldSeconds
+        mascotStyle = try c.decodeIfPresent(String.self, forKey: .mascotStyle) ?? d.mascotStyle
         hotkey = try c.decodeIfPresent(String.self, forKey: .hotkey) ?? d.hotkey
         allowControl = try c.decodeIfPresent(Bool.self, forKey: .allowControl) ?? d.allowControl
         env = try c.decodeIfPresent([String: String].self, forKey: .env) ?? d.env

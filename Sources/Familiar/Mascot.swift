@@ -2,6 +2,13 @@ import SwiftUI
 
 /// The Familiar character: a small yellow sticky note with two elliptical eyes, two glossy eyebrows and a curled corner.
 /// Drawn entirely with SwiftUI shapes so every part can animate.
+/// Two brow personalities. `sharp` is the original merge; `innocent` keeps both brows high and arched so curiosity
+/// reads as wide-eyed rather than skeptical (a lowered brow is what makes a face look suspicious).
+enum MascotStyle: String, CaseIterable {
+    case sharp, innocent
+    nonisolated(unsafe) static var current: MascotStyle = .innocent
+}
+
 enum MascotMood: String, CaseIterable {
     case idle, curious, happy, thinking, charging, onIt, peek, sad
 }
@@ -52,7 +59,7 @@ final class MascotClock: ObservableObject {
 
 /// Everything that changes between moods. All fields are plain numbers so SwiftUI can spring between them.
 private struct Expression {
-    struct Brow { var raise: CGFloat; var innerUp: CGFloat; var arch: CGFloat }  // raise: fraction of body side (+ = up); innerUp: degrees the inner end sits above the outer end
+    struct Brow { var raise: CGFloat; var innerUp: CGFloat; var arch: CGFloat; var peak: CGFloat = 0.5 }  // raise: fraction of body side (+ = up); innerUp: degrees the inner end sits above the outer end; peak: where along the brow the apex sits (0 = outer end … 1 = inner end for the left brow; mirrored for the right)
     var left: Brow, right: Brow
     var eyeOpen: CGFloat = 1     // 1 open … 0 closed (lid squash)
     var eyeScale: CGFloat = 1
@@ -66,6 +73,7 @@ private struct Expression {
     var hidden: CGFloat = 0      // 1 = half hidden behind a left edge (peek)
 
     static func of(_ mood: MascotMood) -> Expression {
+        if MascotStyle.current == .innocent { return innocent(mood) }
         switch mood {
         case .idle:
             return Expression(left: Brow(raise: 0.03, innerUp: 6, arch: 1), right: Brow(raise: -0.015, innerUp: 4, arch: 0.9), lean: 3)
@@ -91,6 +99,40 @@ private struct Expression {
                               shift: CGSize(width: -0.07, height: 0.02), hidden: 1)
         case .sad:
             return Expression(left: Brow(raise: 0.035, innerUp: 26, arch: 0.55), right: Brow(raise: 0.035, innerUp: 26, arch: 0.55),
+                              eyeOpen: 0.9, eyeScale: 0.7, gaze: CGPoint(x: 0.1, y: 0.7), followsPointer: false, lean: -2,
+                              shift: CGSize(width: 0, height: 0.03), squashX: 1.02, squashY: 0.97)
+        }
+    }
+
+    /// Innocent brows: high above the eyes, apex toward the outer ends, inner ends gently lifted, never below neutral.
+    /// Curiosity = one brow even higher + the sideways glance; effort = raised brows with narrowed eyes, not a frown.
+    static func innocent(_ mood: MascotMood) -> Expression {
+        let L = 0.42, R = 0.58   // apex positions: toward each brow's outer end
+        switch mood {
+        case .idle:
+            return Expression(left: Brow(raise: 0.045, innerUp: 8, arch: 1.05, peak: L), right: Brow(raise: 0.03, innerUp: 8, arch: 1.0, peak: R), lean: 3)
+        case .curious:
+            return Expression(left: Brow(raise: 0.105, innerUp: 12, arch: 1.25, peak: L), right: Brow(raise: 0.045, innerUp: 7, arch: 1.0, peak: R),
+                              gaze: CGPoint(x: 0.8, y: 0.25), lean: 5)
+        case .happy:
+            return Expression(left: Brow(raise: 0.085, innerUp: 8, arch: 1.15, peak: L), right: Brow(raise: 0.07, innerUp: 8, arch: 1.1, peak: R),
+                              happy: 1, lean: -5, shift: CGSize(width: 0, height: -0.02))
+        case .thinking:
+            return Expression(left: Brow(raise: 0.095, innerUp: 14, arch: 1.15, peak: L), right: Brow(raise: 0.07, innerUp: 12, arch: 1.1, peak: R),
+                              gaze: CGPoint(x: -0.7, y: -0.85), followsPointer: false, lean: -3)
+        case .charging:
+            return Expression(left: Brow(raise: 0.06, innerUp: 16, arch: 0.9, peak: 0.45), right: Brow(raise: 0.06, innerUp: 16, arch: 0.9, peak: 0.55),
+                              eyeOpen: 0.55, gaze: CGPoint(x: 0, y: 0.15), followsPointer: false)
+        case .onIt:
+            return Expression(left: Brow(raise: 0.02, innerUp: -6, arch: 0.85, peak: 0.45), right: Brow(raise: 0.02, innerUp: -6, arch: 0.85, peak: 0.55),
+                              eyeOpen: 0.85, gaze: CGPoint(x: 0.6, y: 0), followsPointer: false, lean: 7,
+                              shift: CGSize(width: 0.04, height: 0), squashX: 1.03, squashY: 0.97, motionLines: 1)
+        case .peek:
+            return Expression(left: Brow(raise: 0.07, innerUp: 12, arch: 1.15, peak: L), right: Brow(raise: 0.04, innerUp: 8, arch: 1.0, peak: R),
+                              gaze: CGPoint(x: 0.85, y: 0.2), followsPointer: false, lean: -6,
+                              shift: CGSize(width: -0.07, height: 0.02), hidden: 1)
+        case .sad:
+            return Expression(left: Brow(raise: 0.05, innerUp: 22, arch: 0.6, peak: 0.45), right: Brow(raise: 0.05, innerUp: 22, arch: 0.6, peak: 0.55),
                               eyeOpen: 0.9, eyeScale: 0.7, gaze: CGPoint(x: 0.1, y: 0.7), followsPointer: false, lean: -2,
                               shift: CGSize(width: 0, height: 0.03), squashX: 1.02, squashY: 0.97)
         }
@@ -246,19 +288,20 @@ struct MascotView: View {
         let eyeW = b * 0.15 * ex.eyeScale, eyeH = b * 0.255 * ex.eyeScale
         let eyeDX = b * 0.17, eyeY = cy + b * 0.10
         let drift = CGSize(width: gaze.x * b * 0.02, height: gaze.y * b * 0.015)   // the eyes themselves drift a hair; the pupils do the looking
-        let browY = cy - b * 0.19
-        let browW = b * 0.27, browLW = b * 0.042
+        let innocent = MascotStyle.current == .innocent
+        let browY = cy - b * (innocent ? 0.225 : 0.19)          // innocent: a wider gap above the eyes
+        let browW = b * (innocent ? 0.26 : 0.27), browLW = b * (innocent ? 0.034 : 0.042)
         return ZStack {
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
                 .position(x: cx - eyeDX + drift.width, y: eyeY + drift.height)
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
                 .position(x: cx + eyeDX + drift.width, y: eyeY + drift.height)
-            brow(width: browW, lineWidth: browLW, arch: ex.left.arch)
+            brow(width: browW, lineWidth: browLW, arch: ex.left.arch, peak: ex.left.peak)
                 .rotationEffect(.degrees(Double(-ex.left.innerUp)))
                 .position(x: cx - eyeDX - b * 0.02, y: browY - ex.left.raise * b - browTwitch)
-            brow(width: browW * 0.93, lineWidth: browLW, arch: ex.right.arch)   // a touch shorter and lower so it clears the curl
+            brow(width: browW * (innocent ? 0.84 : 0.93), lineWidth: browLW, arch: ex.right.arch, peak: ex.right.peak)   // shorter, lower and further from the curl
                 .rotationEffect(.degrees(Double(ex.right.innerUp)))
-                .position(x: cx + eyeDX - b * 0.01, y: browY + b * 0.015 - ex.right.raise * b)
+                .position(x: cx + eyeDX - b * (innocent ? 0.05 : 0.01), y: browY + b * (innocent ? 0.035 : 0.015) - ex.right.raise * b)
         }
     }
 
@@ -293,25 +336,25 @@ struct MascotView: View {
     }
 
     /// A chrome tube: soft drop shadow, dark body, a broad gloss along the top, a thin white sheen and a faint reflection underneath.
-    private func brow(width: CGFloat, lineWidth: CGFloat, arch: CGFloat) -> some View {
+    private func brow(width: CGFloat, lineWidth: CGFloat, arch: CGFloat, peak: CGFloat) -> some View {
         let h = width * 0.30 * arch
-        let tube = BrowArc(arch: arch).stroke(style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+        let tube = BrowArc(arch: arch, peak: peak).stroke(style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
         return ZStack {
-            BrowArc(arch: arch)
+            BrowArc(arch: arch, peak: peak)
                 .stroke(Color.black.opacity(0.25), style: StrokeStyle(lineWidth: lineWidth * 1.15, lineCap: .round))
                 .offset(y: lineWidth * 0.35)
                 .blur(radius: lineWidth * 0.25)
-            BrowArc(arch: arch)
+            BrowArc(arch: arch, peak: peak)
                 .stroke(LinearGradient(colors: [Color(red: 0.40, green: 0.39, blue: 0.40), Color(red: 0.20, green: 0.19, blue: 0.20)], startPoint: .top, endPoint: .bottom),
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
             ZStack {
-                BrowArc(arch: arch)   // gloss
+                BrowArc(arch: arch, peak: peak)   // gloss
                     .stroke(Color.white.opacity(0.55), style: StrokeStyle(lineWidth: lineWidth * 0.28, lineCap: .round))
                     .offset(y: -lineWidth * 0.22)
-                BrowArc(arch: arch)   // sheen
+                BrowArc(arch: arch, peak: peak)   // sheen
                     .stroke(Color.white.opacity(0.85), style: StrokeStyle(lineWidth: lineWidth * 0.10, lineCap: .round))
                     .offset(y: -lineWidth * 0.34)
-                BrowArc(arch: arch)   // reflection on the underside
+                BrowArc(arch: arch, peak: peak)   // reflection on the underside
                     .stroke(Color(white: 0.7).opacity(0.45), style: StrokeStyle(lineWidth: lineWidth * 0.14, lineCap: .round))
                     .offset(y: lineWidth * 0.30)
             }
@@ -418,12 +461,16 @@ private struct NoteCurl: Shape {
 
 private struct BrowArc: Shape {
     var arch: CGFloat
-    var animatableData: CGFloat { get { arch } set { arch = newValue } }
+    var peak: CGFloat = 0.5   // apex position along the width
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(arch, peak) }
+        set { arch = newValue.first; peak = newValue.second }
+    }
     func path(in rect: CGRect) -> Path {
         var p = Path()
         let y = rect.maxY - rect.height * 0.1
         p.move(to: CGPoint(x: rect.minX, y: y))
-        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: y), control: CGPoint(x: rect.midX, y: y - rect.width * 0.55 * arch))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: y), control: CGPoint(x: rect.minX + rect.width * peak, y: y - rect.width * 0.55 * arch))
         return p
     }
 }
