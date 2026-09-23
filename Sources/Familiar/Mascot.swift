@@ -257,7 +257,7 @@ struct MascotView: View {
     private func note(s: CGFloat, ex: Expression, open: CGFloat, gaze: CGPoint, browTwitch: CGFloat) -> some View {
         let b = s * 0.80                       // body side
         let inset = (s - b) / 2
-        let curl = b * 0.27
+        let curl = b * 0.235
         let rolled = s >= 64                   // the big soft roll needs pixels; below that a plain dog-ear reads better
         let body = CGRect(x: inset, y: inset, width: b, height: b)
         return ZStack {
@@ -324,17 +324,17 @@ struct MascotView: View {
         let b = body.width
         let cx = body.midX, cy = body.midY
         let eyeW = b * 0.15 * ex.eyeScale, eyeH = b * 0.255 * ex.eyeScale
-        let eyeDX = b * 0.17, eyeY = cy + b * 0.10
+        let eyeDX = b * 0.17, eyeY = cy - b * 0.005          // eyes on the note's midline (they used to hang at 60%)
         let drift = CGSize(width: gaze.x * b * 0.02, height: gaze.y * b * 0.015)   // the eyes themselves drift a hair; the pupils do the looking
         let style = MascotStyle.current
         let innocent = style.isInnocentFamily, v1 = style == .innocentV1
-        let browY = cy - b * (innocent ? 0.225 : 0.19)          // innocent: a wider gap above the eyes
+        let browY = cy - b * (innocent ? 0.235 : 0.21)          // just above the eyes, like the reference
         // v2: shorter brows set wide apart, each floating over its own eye (the Clippy "harmless" look)
         let browW = b * (v1 ? 0.26 : innocent ? 0.215 : 0.27), browLW = b * (v1 ? 0.034 : innocent ? 0.038 : 0.042)
         let rightScale: CGFloat = v1 ? 0.80 : innocent ? 0.95 : 0.93        // v1 shortened the right brow to dodge the curl
         let leftDX: CGFloat = v1 ? 0.02 : innocent ? 0.045 : 0.02            // outward push of the left brow
         let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.045 : 0.01
-        let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.045 : 0.015
+        let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.06 : 0.015
         return ZStack {
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
                 .position(x: cx - eyeDX + drift.width, y: eyeY + drift.height)

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Floating, non-activating panel that stays above everything and follows across Spaces.
 final class BubblePanel: NSPanel {
-    static let collapsedSize = NSSize(width: 64, height: 64)
+    static let collapsedSize = NSSize(width: 84, height: 84)
     static let expandedSize = NSSize(width: 400, height: 540)
 
     init(hideFromScreenShare: Bool) {
@@ -74,8 +74,8 @@ struct BubbleView: View {
     }
 
     private var orb: some View {
-        MascotView(mood: mood, lookAt: sense.gaze, charge: charge, size: 48, peel: stuck, animated: sense.visible)
-        .frame(width: 48, height: 48)
+        MascotView(mood: mood, lookAt: sense.gaze, charge: charge, size: 64, peel: stuck, animated: sense.visible)
+        .frame(width: 64, height: 64)
         .padding(8)
         .contentShape(Rectangle())
         .onAppear {   // stick-on: the note lands on the screen when the bubble first appears

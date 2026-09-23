@@ -92,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         host.frame = NSRect(origin: .zero, size: BubblePanel.collapsedSize)
         panel.contentView = host
         if let x = config.bubbleX, let y = config.bubbleY,
-           NSScreen.screens.contains(where: { $0.visibleFrame.insetBy(dx: -20, dy: -20).contains(NSPoint(x: x + 32, y: y + 32)) }) {
+           NSScreen.screens.contains(where: { $0.visibleFrame.insetBy(dx: -20, dy: -20).contains(NSPoint(x: x + 42, y: y + 42)) }) {
             panel.setFrameOrigin(NSPoint(x: x, y: y))
         } else {
             panel.placeAtBottomRight()
