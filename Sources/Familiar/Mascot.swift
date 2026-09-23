@@ -118,10 +118,10 @@ private struct Expression {
             return Expression(left: Brow(raise: 0.085, innerUp: 8, arch: 1.15, peak: L), right: Brow(raise: 0.07, innerUp: 8, arch: 1.1, peak: R),
                               happy: 1, lean: -5, shift: CGSize(width: 0, height: -0.02))
         case .thinking:
-            return Expression(left: Brow(raise: 0.095, innerUp: 14, arch: 1.15, peak: L), right: Brow(raise: 0.07, innerUp: 12, arch: 1.1, peak: R),
+            return Expression(left: Brow(raise: 0.115, innerUp: 16, arch: 1.2, peak: 0.46), right: Brow(raise: 0.105, innerUp: 16, arch: 1.15, peak: 0.54),
                               gaze: CGPoint(x: -0.7, y: -0.85), followsPointer: false, lean: -3)
         case .charging:
-            return Expression(left: Brow(raise: 0.06, innerUp: 16, arch: 0.9, peak: 0.45), right: Brow(raise: 0.06, innerUp: 16, arch: 0.9, peak: 0.55),
+            return Expression(left: Brow(raise: 0.025, innerUp: 12, arch: 0.85, peak: 0.45), right: Brow(raise: 0.025, innerUp: 12, arch: 0.85, peak: 0.55),
                               eyeOpen: 0.55, gaze: CGPoint(x: 0, y: 0.15), followsPointer: false)
         case .onIt:
             return Expression(left: Brow(raise: 0.02, innerUp: -6, arch: 0.85, peak: 0.45), right: Brow(raise: 0.02, innerUp: -6, arch: 0.85, peak: 0.55),
@@ -299,9 +299,9 @@ struct MascotView: View {
             brow(width: browW, lineWidth: browLW, arch: ex.left.arch, peak: ex.left.peak)
                 .rotationEffect(.degrees(Double(-ex.left.innerUp)))
                 .position(x: cx - eyeDX - b * 0.02, y: browY - ex.left.raise * b - browTwitch)
-            brow(width: browW * (innocent ? 0.84 : 0.93), lineWidth: browLW, arch: ex.right.arch, peak: ex.right.peak)   // shorter, lower and further from the curl
+            brow(width: browW * (innocent ? 0.80 : 0.93), lineWidth: browLW, arch: ex.right.arch, peak: ex.right.peak)   // shorter, lower and further from the curl
                 .rotationEffect(.degrees(Double(ex.right.innerUp)))
-                .position(x: cx + eyeDX - b * (innocent ? 0.05 : 0.01), y: browY + b * (innocent ? 0.035 : 0.015) - ex.right.raise * b)
+                .position(x: cx + eyeDX - b * (innocent ? 0.065 : 0.01), y: browY + b * (innocent ? 0.04 : 0.015) - ex.right.raise * b)
         }
     }
 
