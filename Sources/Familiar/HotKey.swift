@@ -49,10 +49,13 @@ final class HotKey {
         Log.info("hotkey registered (status \(status))")
     }
 
-    deinit {
-        if let ref { UnregisterEventHotKey(ref) }
+    /// Explicit release: the registry holds a strong reference, so deinit alone never runs.
+    func unregister() {
+        if let ref { UnregisterEventHotKey(ref); self.ref = nil }
         HotKey.registry[id] = nil
     }
+
+    deinit { unregister() }
 
     private static func installHandlerIfNeeded() {
         guard !handlerInstalled else { return }

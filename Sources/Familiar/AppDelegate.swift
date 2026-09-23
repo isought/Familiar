@@ -144,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func setupHotKey() {
+        hotKey?.unregister()
         hotKey = nil
         let spec = config.hotkey.isEmpty ? "control+option+space" : config.hotkey
         guard let (code, mods) = HotKey.parse(spec) else { Log.info("hotkey: cannot parse \"\(spec)\""); return }
