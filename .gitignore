@@ -3,3 +3,5 @@ build/
 *.xcodeproj
 .DS_Store
 tools/waxwing/token
+__pycache__/
+*.pyc
