@@ -27,6 +27,7 @@ final class MascotClock: ObservableObject {
     func end() {
         tick?.invalidate(); tick = nil
         blinkTimer?.invalidate(); blinkTimer = nil
+        blink = 0
     }
 
     private func scheduleBlink(after delay: Double) {
@@ -72,10 +73,10 @@ private struct Expression {
             return Expression(left: Brow(raise: 0.085, innerUp: 14, arch: 1.5), right: Brow(raise: -0.025, innerUp: -3, arch: 0.6),
                               gaze: CGPoint(x: 0.8, y: 0.25), lean: 5)
         case .happy:
-            return Expression(left: Brow(raise: 0.07, innerUp: 6, arch: 1.2), right: Brow(raise: 0.07, innerUp: 6, arch: 1.2),
+            return Expression(left: Brow(raise: 0.07, innerUp: 6, arch: 1.2), right: Brow(raise: 0.05, innerUp: 6, arch: 1.15),
                               happy: 1, lean: -5, shift: CGSize(width: 0, height: -0.02))
         case .thinking:
-            return Expression(left: Brow(raise: 0.07, innerUp: 10, arch: 1.2), right: Brow(raise: 0.045, innerUp: 3, arch: 1.2),
+            return Expression(left: Brow(raise: 0.07, innerUp: 10, arch: 1.2), right: Brow(raise: 0.03, innerUp: 3, arch: 1.1),
                               gaze: CGPoint(x: -0.7, y: -0.85), followsPointer: false, lean: -3)
         case .charging:
             return Expression(left: Brow(raise: -0.06, innerUp: 0, arch: 0.45), right: Brow(raise: -0.06, innerUp: 0, arch: 0.45),
@@ -103,8 +104,10 @@ struct MascotView: View {
     var size: CGFloat = 48
     /// 0 = stuck on, 1 = peeled off the screen (rotated away and faded). Animate it when hiding/showing the bubble.
     var peel: CGFloat = 0
-    /// Set false for static renders (no timers, no breathing).
+    /// Set false for static renders (no timers, no breathing). Toggling it later pauses/resumes the clock.
     var animated = true
+    /// The extras around the note (motion lines, charge ring, the edge it peeks from). Off in the tiny card header.
+    var decorations = true
 
     @StateObject private var clock = MascotClock()
     @State private var pop: CGFloat = 0          // transient squash-and-stretch on mood changes
@@ -112,7 +115,7 @@ struct MascotView: View {
     var body: some View {
         let ex = Expression.of(mood)
         let s = size
-        let c = max(0, min(1, charge))
+        let c = decorations ? max(0, min(1, charge)) : 0
         let t = animated ? clock.t : 0
         let breath = 1 + 0.015 * sin(t * 2 * .pi / 3.4)
         let bob: CGFloat = mood == .thinking ? 0.02 * s * sin(t * 2 * .pi / 1.6) : 0
@@ -121,19 +124,22 @@ struct MascotView: View {
         let squint = ex.eyeOpen * (1 - 0.35 * c)     // the harder the hold, the tighter the squint
         let open = squint * (1 - 0.94 * (animated ? clock.blink : 0))
         let gaze = gazeVector(ex)
+        let hidden = decorations ? ex.hidden : 0
 
         ZStack {
-            motionLines(s: s).opacity(ex.motionLines)
-            chargeRing(s: s, charge: c)
+            if decorations {
+                motionLines(s: s).opacity(ex.motionLines)
+                chargeRing(s: s, charge: c)
+            }
             note(s: s, ex: ex, open: open, gaze: gaze, browTwitch: browTwitch)
                 .rotationEffect(.degrees(ex.lean + wobble))
-                .scaleEffect(x: ex.squashX * (1 + 0.11 * c) * (1 + 0.10 * pop), y: ex.squashY * (1 + 0.05 * c) * (1 - 0.10 * pop))
+                .scaleEffect(x: ex.squashX * (1 + 0.09 * c) * (1 + 0.10 * pop), y: ex.squashY * (1 + 0.04 * c) * (1 - 0.10 * pop))
                 .scaleEffect(breath)
                 .offset(x: ex.shift.width * s, y: ex.shift.height * s + bob + 0.02 * s * c)
         }
         .frame(width: s, height: s)
-        .mask(peekMask(s: s, hidden: ex.hidden))
-        .overlay(edgeShadow(s: s).opacity(ex.hidden))
+        .mask(peekMask(s: s, hidden: hidden))
+        .overlay(edgeShadow(s: s).opacity(hidden))
         .rotation3DEffect(.degrees(Double(peel) * 75), axis: (x: 0.35, y: -1, z: 0.15), anchor: .bottomLeading, perspective: 0.7)
         .scaleEffect(1 - 0.15 * peel)
         .opacity(Double(1 - peel * 0.9))
@@ -143,6 +149,7 @@ struct MascotView: View {
         .animation(.easeOut(duration: 0.12), value: lookAt)
         .onAppear { if animated { clock.begin() } }
         .onDisappear { clock.end() }
+        .onChange(of: animated) { _, now in if now { clock.begin() } else { clock.end() } }
         .onChange(of: mood) { _, _ in
             withAnimation(.spring(response: 0.18, dampingFraction: 0.5)) { pop = 1 }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
@@ -162,23 +169,65 @@ struct MascotView: View {
 
     private static let paperTop = Color(red: 1.0, green: 0.95, blue: 0.63)
     private static let paperBottom = Color(red: 0.97, green: 0.83, blue: 0.40)
+    private static let paperEdge = Color(red: 0.84, green: 0.66, blue: 0.26)
     private static let ink = Color(red: 0.12, green: 0.11, blue: 0.11)
     private static let brand = Color(red: 0.55, green: 0.3, blue: 0.95)
+    private static let gold = Color(red: 1.0, green: 0.78, blue: 0.30)
 
     private func note(s: CGFloat, ex: Expression, open: CGFloat, gaze: CGPoint, browTwitch: CGFloat) -> some View {
         let b = s * 0.80                       // body side
         let inset = (s - b) / 2
-        let curl = b * 0.26
+        let curl = b * 0.27
+        let rolled = s >= 64                   // the big soft roll needs pixels; below that a plain dog-ear reads better
         let body = CGRect(x: inset, y: inset, width: b, height: b)
         return ZStack {
-            // paper
-            NoteBody(curl: curl)
-                .fill(LinearGradient(colors: [Self.paperTop, Self.paperBottom], startPoint: UnitPoint(x: 0.1, y: 0), endPoint: UnitPoint(x: 0.9, y: 1)))
-                .overlay(NoteBody(curl: curl).fill(RadialGradient(colors: [.white.opacity(0.35), .clear], center: UnitPoint(x: 0.25, y: 0.2), startRadius: 0, endRadius: b * 0.7)))
-                .overlay(NoteBody(curl: curl).fill(LinearGradient(colors: [.clear, Color(red: 0.75, green: 0.55, blue: 0.15).opacity(0.22)], startPoint: UnitPoint(x: 0.5, y: 0.6), endPoint: .bottom)))
-                .shadow(color: .black.opacity(0.22), radius: s * 0.045, x: 0, y: s * 0.035)
-                .shadow(color: Color(red: 0.6, green: 0.45, blue: 0.1).opacity(0.18), radius: s * 0.015, y: s * 0.01)
-            // curled corner: shadow it throws on the paper, then the flap (the paper's back, lighter)
+            ZStack {
+                // a darker sheet from the pad peeking out at the right and bottom
+                NoteBody(curl: curl)
+                    .fill(Self.paperEdge)
+                    .offset(x: b * 0.012, y: b * 0.016)
+                // paper: warm gradient, lit from the top-left, a touch deeper toward the bottom
+                NoteBody(curl: curl)
+                    .fill(LinearGradient(colors: [Self.paperTop, Self.paperBottom], startPoint: UnitPoint(x: 0.1, y: 0), endPoint: UnitPoint(x: 0.9, y: 1)))
+                    .overlay(NoteBody(curl: curl).fill(RadialGradient(colors: [.white.opacity(0.35), .clear], center: UnitPoint(x: 0.25, y: 0.2), startRadius: 0, endRadius: b * 0.7)))
+                    .overlay(NoteBody(curl: curl).fill(LinearGradient(colors: [.clear, Color(red: 0.75, green: 0.55, blue: 0.15).opacity(0.22)], startPoint: UnitPoint(x: 0.5, y: 0.6), endPoint: .bottom)))
+                    // a hair of amber at the edge so the silhouette holds on a dark menu bar or a busy wallpaper
+                    .overlay(NoteBody(curl: curl).stroke(Self.paperEdge.opacity(0.35), lineWidth: min(1.5, max(0.6, s * 0.02))))
+            }
+            .compositingGroup()
+            .shadow(color: .black.opacity(0.22), radius: s * 0.045, x: 0, y: s * 0.035)
+            .shadow(color: Color(red: 0.6, green: 0.45, blue: 0.1).opacity(0.18), radius: s * 0.015, y: s * 0.01)
+            if rolled { rolledCurl(s: s, b: b, curl: curl) } else { dogEar(s: s, curl: curl) }
+            face(body: body, ex: ex, open: open, gaze: gaze, browTwitch: browTwitch)
+        }
+        .frame(width: s, height: s)
+    }
+
+    /// The corner rolled back over the face: bright along the crest, shading into the roll toward its tip, with the
+    /// shadow it throws on the paper and a thin rim of light on the curled edge. All clipped to the note.
+    private func rolledCurl(s: CGFloat, b: CGFloat, curl: CGFloat) -> some View {
+        ZStack {
+            NoteCurl(curl: curl)
+                .fill(Color.black.opacity(0.30))
+                .blur(radius: b * 0.022)
+                .offset(x: -b * 0.016, y: b * 0.03)
+            NoteCurl(curl: curl)
+                .fill(LinearGradient(stops: [.init(color: Color(red: 1.0, green: 0.985, blue: 0.86), location: 0),
+                                             .init(color: Color(red: 1.0, green: 0.93, blue: 0.62), location: 0.48),
+                                             .init(color: Color(red: 0.90, green: 0.72, blue: 0.30), location: 1)],
+                                     startPoint: UnitPoint(x: 0.88, y: 0.12), endPoint: UnitPoint(x: 0.66, y: 0.36)))
+            NoteCurl(curl: curl)   // shade tucked in under the roll, along the crease
+                .fill(LinearGradient(colors: [Color(red: 0.6, green: 0.42, blue: 0.1).opacity(0.28), .clear],
+                                     startPoint: UnitPoint(x: 0.66, y: 0.34), endPoint: UnitPoint(x: 0.75, y: 0.25)))
+            NoteCurl(curl: curl)   // a thin bright rim on the curled edge
+                .stroke(Color.white.opacity(0.55), lineWidth: max(0.5, b * 0.008))
+        }
+        .mask(NoteBody(curl: curl))
+    }
+
+    /// The small-size corner: a plain folded flap with a soft shadow, cheap and crisp at 48pt and below.
+    private func dogEar(s: CGFloat, curl: CGFloat) -> some View {
+        ZStack {
             NoteFlap(curl: curl)
                 .fill(Color.black.opacity(0.28))
                 .blur(radius: s * 0.02)
@@ -188,45 +237,51 @@ struct MascotView: View {
                 .fill(LinearGradient(colors: [Color(red: 1.0, green: 0.98, blue: 0.86), Color(red: 0.98, green: 0.90, blue: 0.58), Color(red: 0.92, green: 0.78, blue: 0.38)],
                                      startPoint: UnitPoint(x: 0.85, y: 0.15), endPoint: UnitPoint(x: 0.55, y: 0.45)))
                 .overlay(NoteFlap(curl: curl).stroke(Color(red: 0.8, green: 0.62, blue: 0.2).opacity(0.35), lineWidth: max(0.5, s * 0.006)))
-            face(body: body, ex: ex, open: open, gaze: gaze, browTwitch: browTwitch)
         }
-        .frame(width: s, height: s)
     }
 
     private func face(body: CGRect, ex: Expression, open: CGFloat, gaze: CGPoint, browTwitch: CGFloat) -> some View {
         let b = body.width
         let cx = body.midX, cy = body.midY
-        let eyeW = b * 0.135 * ex.eyeScale, eyeH = b * 0.23 * ex.eyeScale
+        let eyeW = b * 0.15 * ex.eyeScale, eyeH = b * 0.255 * ex.eyeScale
         let eyeDX = b * 0.17, eyeY = cy + b * 0.10
-        let look = CGSize(width: gaze.x * b * 0.075, height: gaze.y * b * 0.06)
+        let drift = CGSize(width: gaze.x * b * 0.02, height: gaze.y * b * 0.015)   // the eyes themselves drift a hair; the pupils do the looking
         let browY = cy - b * 0.19
         let browW = b * 0.27, browLW = b * 0.042
         return ZStack {
-            eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, look: look)
-                .position(x: cx - eyeDX + look.width, y: eyeY + look.height)
-            eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, look: look)
-                .position(x: cx + eyeDX + look.width, y: eyeY + look.height)
+            eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
+                .position(x: cx - eyeDX + drift.width, y: eyeY + drift.height)
+            eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
+                .position(x: cx + eyeDX + drift.width, y: eyeY + drift.height)
             brow(width: browW, lineWidth: browLW, arch: ex.left.arch)
                 .rotationEffect(.degrees(Double(-ex.left.innerUp)))
                 .position(x: cx - eyeDX - b * 0.02, y: browY - ex.left.raise * b - browTwitch)
-            brow(width: browW, lineWidth: browLW, arch: ex.right.arch)
+            brow(width: browW * 0.93, lineWidth: browLW, arch: ex.right.arch)   // a touch shorter and lower so it clears the curl
                 .rotationEffect(.degrees(Double(ex.right.innerUp)))
-                .position(x: cx + eyeDX + b * 0.02, y: browY - ex.right.raise * b)
+                .position(x: cx + eyeDX - b * 0.01, y: browY + b * 0.015 - ex.right.raise * b)
         }
     }
 
-    private func eye(w: CGFloat, h: CGFloat, open: CGFloat, happy: CGFloat, look: CGSize) -> some View {
-        ZStack {
-            // open eye: black ellipse with a glossy highlight
+    /// A white sclera under a black pupil. The pupil slides (and shrinks a little) toward the gaze, so a white crescent
+    /// shows on the far side when the note glances sideways, like the reference's "curious" pose.
+    private func eye(w: CGFloat, h: CGFloat, open: CGFloat, happy: CGFloat, gaze: CGPoint) -> some View {
+        let look = min(1, hypot(gaze.x, gaze.y))
+        let slide = CGSize(width: gaze.x * w * 0.30, height: gaze.y * h * 0.16)
+        return ZStack {
             ZStack {
+                Ellipse().fill(Color(white: 0.985))
                 Ellipse()
                     .fill(LinearGradient(colors: [Color(red: 0.22, green: 0.21, blue: 0.22), Self.ink, .black], startPoint: .top, endPoint: .bottom))
-                Ellipse()
-                    .fill(Color.white.opacity(0.95))
-                    .frame(width: w * 0.36, height: h * 0.22)
-                    .offset(x: w * 0.12, y: -h * 0.26)
+                    .overlay(
+                        Ellipse()
+                            .fill(Color.white.opacity(0.95))
+                            .frame(width: w * 0.36, height: h * 0.22)
+                            .offset(x: w * 0.12, y: -h * 0.26))
+                    .scaleEffect(1 - 0.14 * look)
+                    .offset(slide)
             }
             .frame(width: w, height: h)
+            .clipShape(Ellipse())
             .scaleEffect(x: 1, y: max(0.06, open), anchor: .center)
             .opacity(Double(1 - happy))
             // happy eye: ^
@@ -237,8 +292,10 @@ struct MascotView: View {
         }
     }
 
+    /// A chrome tube: soft drop shadow, dark body, a broad gloss along the top, a thin white sheen and a faint reflection underneath.
     private func brow(width: CGFloat, lineWidth: CGFloat, arch: CGFloat) -> some View {
         let h = width * 0.30 * arch
+        let tube = BrowArc(arch: arch).stroke(style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
         return ZStack {
             BrowArc(arch: arch)
                 .stroke(Color.black.opacity(0.25), style: StrokeStyle(lineWidth: lineWidth * 1.15, lineCap: .round))
@@ -247,23 +304,32 @@ struct MascotView: View {
             BrowArc(arch: arch)
                 .stroke(LinearGradient(colors: [Color(red: 0.40, green: 0.39, blue: 0.40), Color(red: 0.20, green: 0.19, blue: 0.20)], startPoint: .top, endPoint: .bottom),
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-            BrowArc(arch: arch)   // gloss
-                .stroke(Color.white.opacity(0.55), style: StrokeStyle(lineWidth: lineWidth * 0.28, lineCap: .round))
-                .offset(y: -lineWidth * 0.22)
-                .mask(BrowArc(arch: arch).stroke(style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)))
+            ZStack {
+                BrowArc(arch: arch)   // gloss
+                    .stroke(Color.white.opacity(0.55), style: StrokeStyle(lineWidth: lineWidth * 0.28, lineCap: .round))
+                    .offset(y: -lineWidth * 0.22)
+                BrowArc(arch: arch)   // sheen
+                    .stroke(Color.white.opacity(0.85), style: StrokeStyle(lineWidth: lineWidth * 0.10, lineCap: .round))
+                    .offset(y: -lineWidth * 0.34)
+                BrowArc(arch: arch)   // reflection on the underside
+                    .stroke(Color(white: 0.7).opacity(0.45), style: StrokeStyle(lineWidth: lineWidth * 0.14, lineCap: .round))
+                    .offset(y: lineWidth * 0.30)
+            }
+            .mask(tube)
         }
         .frame(width: width, height: max(h, lineWidth))
     }
 
     // MARK: extras
 
+    /// Hold-to-charge progress: a purple-and-gold ring hugging the whole note, filling clockwise from the top.
     private func chargeRing(s: CGFloat, charge: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: s * 0.08, style: .continuous)
+        Circle()
             .trim(from: 0, to: charge)
-            .stroke(AngularGradient(colors: [Self.brand, Color(red: 0.8, green: 0.5, blue: 1), Self.brand], center: .center),
-                    style: StrokeStyle(lineWidth: max(2, s * 0.045), lineCap: .round))
-            .frame(width: s * 0.98, height: s * 0.98)
-            .scaleEffect(x: -1)   // run clockwise from the curled corner
+            .stroke(AngularGradient(colors: [Self.brand, Self.gold, Color(red: 0.8, green: 0.5, blue: 1), Self.brand], center: .center),
+                    style: StrokeStyle(lineWidth: max(2, s * 0.04), lineCap: .round))
+            .rotationEffect(.degrees(-90))
+            .frame(width: s * 1.22, height: s * 1.22)
             .shadow(color: Self.brand.opacity(0.6 * charge), radius: s * 0.04)
             .opacity(charge > 0.01 ? 1 : 0)
     }
@@ -280,8 +346,9 @@ struct MascotView: View {
         .position(x: s * 0.09, y: s * 0.46)
     }
 
+    /// Wide enough to leave the charge ring alone; slides in from the left to hide the note behind an edge for `peek`.
     private func peekMask(s: CGFloat, hidden: CGFloat) -> some View {
-        Rectangle().frame(width: s * (1 - 0.27 * hidden), height: s).offset(x: s * 0.135 * hidden)
+        Rectangle().frame(width: s * (1.5 - 0.77 * hidden), height: s * 1.5).offset(x: s * 0.135 * hidden)
     }
 
     private func edgeShadow(s: CGFloat) -> some View {
@@ -310,7 +377,7 @@ private struct NoteBody: Shape {
     }
 }
 
-/// The folded-over corner: sits on the paper, bounded by the crease and a convex outer edge.
+/// The folded-over corner at small sizes: sits on the paper, bounded by the crease and a convex outer edge.
 private struct NoteFlap: Shape {
     var curl: CGFloat
     var animatableData: CGFloat { get { curl } set { curl = newValue } }
@@ -323,6 +390,27 @@ private struct NoteFlap: Shape {
         p.addQuadCurve(to: b, control: CGPoint(x: r.maxX - curl * 0.42, y: r.minY + curl * 0.42))
         p.addQuadCurve(to: tip, control: CGPoint(x: r.maxX - curl * 0.30, y: r.minY + curl * 0.95))
         p.addQuadCurve(to: a, control: CGPoint(x: r.maxX - curl * 0.95, y: r.minY + curl * 0.30))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// The corner rolled over the face at large sizes: a fat, convex roll whose tip reaches a little past the crease's end.
+private struct NoteCurl: Shape {
+    var curl: CGFloat
+    var animatableData: CGFloat { get { curl } set { curl = newValue } }
+    func path(in rect: CGRect) -> Path {
+        let r = rect.insetBy(dx: rect.width * 0.10, dy: rect.height * 0.10)
+        let c = curl
+        let a = CGPoint(x: r.maxX - c, y: r.minY), b = CGPoint(x: r.maxX, y: r.minY + c)
+        let tip = CGPoint(x: r.maxX - c * 0.96, y: r.minY + c * 1.0)
+        var p = Path()
+        p.move(to: a)
+        p.addQuadCurve(to: b, control: CGPoint(x: r.maxX - c * 0.42, y: r.minY + c * 0.42))
+        p.addCurve(to: tip, control1: CGPoint(x: r.maxX + c * 0.02, y: r.minY + c * 0.78),
+                   control2: CGPoint(x: r.maxX - c * 0.40, y: r.minY + c * 1.10))
+        p.addCurve(to: a, control1: CGPoint(x: r.maxX - c * 1.14, y: r.minY + c * 0.80),
+                   control2: CGPoint(x: r.maxX - c * 1.06, y: r.minY + c * 0.10))
         p.closeSubpath()
         return p
     }

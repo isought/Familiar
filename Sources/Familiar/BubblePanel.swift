@@ -74,9 +74,7 @@ struct BubbleView: View {
     }
 
     private var orb: some View {
-        ZStack {
-            MascotView(mood: mood, lookAt: sense.gaze, charge: charge, size: 48, peel: stuck)
-        }
+        MascotView(mood: mood, lookAt: sense.gaze, charge: charge, size: 48, peel: stuck, animated: sense.visible)
         .frame(width: 48, height: 48)
         .padding(8)
         .contentShape(Rectangle())
@@ -145,7 +143,7 @@ struct BubbleView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            MascotView(mood: state.busy ? .thinking : .idle, lookAt: sense.gaze, size: 28).frame(width: 28, height: 28)
+            MascotView(mood: state.busy ? .thinking : .idle, lookAt: sense.gaze, size: 28, animated: sense.visible, decorations: false).frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Familiar").font(.headline)
                 Text(state.contextLine).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
@@ -280,8 +278,10 @@ struct BubbleView: View {
 
 /// What the collapsed bubble senses about the world, polled at 30 Hz: where the pointer is relative to the panel
 /// (so the eyes can follow it), whether it is hovering close, and whether the computer controller is driving the mouse.
+/// While the panel is ordered out (hidden, or during control) it only tracks visibility, so the mascot can pause its clock.
 @MainActor
 final class BubbleSense: ObservableObject {
+    @Published var visible = true
     @Published var gaze: CGPoint? = nil
     @Published var pointerNear = false
     @Published var controlActive = false
@@ -300,6 +300,10 @@ final class BubbleSense: ObservableObject {
 
     private func sample() {
         guard let panel = NSApp.windows.first(where: { $0 is BubblePanel }) else { return }
+        let active = isControlActive()
+        if active != controlActive { controlActive = active }
+        if panel.isVisible != visible { visible = panel.isVisible }
+        guard visible else { return }
         let c = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
         let m = NSEvent.mouseLocation
         let dx = m.x - c.x, dy = c.y - m.y            // screen y is up; the mascot's y is down
@@ -310,7 +314,5 @@ final class BubbleSense: ObservableObject {
         if let old = gaze, abs(old.x - g.x) < 0.02, abs(old.y - g.y) < 0.02 {} else { gaze = g }
         let near = dist < 110 && dist > 20
         if near != pointerNear { pointerNear = near }
-        let active = isControlActive()
-        if active != controlActive { controlActive = active }
     }
 }

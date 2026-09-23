@@ -2,16 +2,18 @@
 
 A quiet macOS helper for non-technical people in companies full of internal tools. A familiar knows your world
 and acts on your behalf: point the wand at anything on screen and it explains what you are looking at; ask it to
-do something and it takes the mouse. It sits as a small floating wand and uses the company's own notes and scripts
-for the tool you are in.
+do something and it takes the mouse. It sits as a small floating sticky-note character whose eyes follow your
+mouse, and it uses the company's own notes and scripts for the tool you are in.
 
 ## How it works
 1. **Watcher** (Accessibility, no screenshots) polls the frontmost app, window title and browser URL.
 2. **Tool packs** in `~/.familiar/tools/<pack>/` match the current app/URL and supply docs plus scripts.
-3. **Wand**: hold the bubble until the ring fills, or press **⌃⌥Space**. The screen dims with a shimmering border, the element under
-   the wand is outlined, and a click sends a screenshot (ringed at the click) plus a zoomed crop to Claude.
+3. **Wand**: hold the note until the ring fills, or press **⌃⌥Space**. The pointer becomes a quill, the screen dims with a
+   shimmering border, the element under the quill is outlined, and a click sends a screenshot (ringed at the click) plus a
+   zoomed crop to Claude.
    The reply names what you pointed at, explains its state, and offers tappable follow-ups.
-4. **Chat**: click the bubble and type, for questions that have no single thing to point at.
+4. **Chat**: click the note and type, for questions that have no single thing to point at. The note reacts as it goes:
+   curious when you hover, thinking while it works, happy or sad when the answer lands.
 5. Claude can call the pack's scripts, `read_file` / `grep` over the docs, and `read_screen` (accessibility text).
 6. **Control** (off by default, Settings → "Allow Familiar to control the mouse and keyboard"): ask it to do something
    ("type the sum formula for me") and it drives the mouse and keyboard through Claude's computer toolset. The screen
@@ -28,6 +30,7 @@ for the tool you are in.
 ./scripts/make-dev-cert.sh                # once: local signing identity so permission grants survive rebuilds
 ./scripts/run.sh                          # builds build/Familiar.app and launches it
 .build/release/Familiar --selftest tools  # loads the packs, runs three scripts, no UI, no API
+.build/release/Familiar --render-mascot /tmp/mascot   # renders every mood, the quill cursor and the app-icon source as PNGs
 build/Familiar.app/Contents/MacOS/Familiar --ask "question" [url] [--shot] [--control]   # headless Claude call, real tool loop
 ```
 First launch creates `~/.familiar/` (or `$FAMILIAR_HOME`) with `config.json`, `tools/` (example packs copied in) and `familiar.log`.
