@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 @MainActor
 func runApp() {
@@ -94,7 +95,94 @@ func runHeadlessAsk() async {
     } catch { print("FAILED: \(error.localizedDescription)") }
 }
 
-if CommandLine.arguments.contains("--ask") {
+/// `Familiar --render-mascot <dir>`: render every mascot mood at 256pt and 48pt (@2x PNG), a charging variant, a contact sheet
+/// and the quill cursor, then exit. Used to eyeball the character without launching the app.
+@MainActor
+func runRenderMascot() {
+    let args = CommandLine.arguments
+    guard let i = args.firstIndex(of: "--render-mascot"), i + 1 < args.count else { print("usage: --render-mascot <dir>"); exit(2) }
+    let dir = URL(fileURLWithPath: args[i + 1])
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let paper = Color(red: 0.98, green: 0.975, blue: 0.96)
+
+    func save(_ cg: CGImage, _ name: String) {
+        let rep = NSBitmapImageRep(cgImage: cg)
+        guard let data = rep.representation(using: .png, properties: [:]) else { print("encode failed: \(name)"); return }
+        do { try data.write(to: dir.appendingPathComponent(name)); print("wrote \(name) \(cg.width)x\(cg.height)") }
+        catch { print("write failed: \(name): \(error)") }
+    }
+    func render<V: View>(_ v: V, _ name: String) {
+        let r = ImageRenderer(content: v)
+        r.scale = 2
+        guard let cg = r.cgImage else { print("render failed: \(name)"); return }
+        save(cg, name)
+    }
+    func mascot(_ mood: MascotMood, _ size: CGFloat, charge: CGFloat = 0, lookAt: CGPoint? = nil) -> some View {
+        MascotView(mood: mood, lookAt: lookAt, charge: charge, size: size, animated: false)
+            .padding(size * 0.08)
+            .background(paper)
+    }
+
+    for mood in MascotMood.allCases {
+        render(mascot(mood, 256), "\(mood.rawValue)-256.png")
+        render(mascot(mood, 48), "\(mood.rawValue)-48.png")
+    }
+    render(mascot(.charging, 256, charge: 0.5), "charging-0.5-256.png")
+    render(mascot(.charging, 48, charge: 0.5), "charging-0.5-48.png")
+    render(mascot(.idle, 256, lookAt: CGPoint(x: 0.9, y: -0.4)), "idle-look-256.png")
+
+    // contact sheet: every mood at 256, 48 and 24 (the card header) with a 64pt dark bubble background for the small ones
+    let sheet = VStack(spacing: 12) {
+        ForEach(MascotMood.allCases, id: \.rawValue) { mood in
+            HStack(spacing: 16) {
+                MascotView(mood: mood, charge: mood == .charging ? 0.6 : 0, size: 160, animated: false).frame(width: 176, height: 176)
+                ForEach([48, 32, 24] as [CGFloat], id: \.self) { sz in
+                    MascotView(mood: mood, charge: mood == .charging ? 0.6 : 0, size: sz, animated: false).frame(width: sz + 16, height: sz + 16)
+                }
+                ForEach([48, 32] as [CGFloat], id: \.self) { sz in
+                    MascotView(mood: mood, charge: mood == .charging ? 0.6 : 0, size: sz, animated: false).frame(width: sz + 16, height: sz + 16)
+                        .background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 12))
+                }
+                Text(mood.rawValue).font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary).frame(width: 70, alignment: .leading)
+            }
+        }
+    }.padding(16).background(paper)
+    render(sheet, "sheet.png")
+
+    // the quill cursor at 4x over a checkerboard, hotspot marked with a red cross
+    let cursor = WandCursor.cursor
+    let img = cursor.image, hot = cursor.hotSpot
+    let scale: CGFloat = 4
+    let px = Int(img.size.width * scale), py = Int(img.size.height * scale)
+    guard let ctx = CGContext(data: nil, width: px, height: py, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
+    let cell = 8
+    for y in stride(from: 0, to: py, by: cell) { for x in stride(from: 0, to: px, by: cell) {
+        ctx.setFillColor(CGColor(gray: ((x / cell + y / cell) % 2 == 0) ? 0.86 : 0.72, alpha: 1))
+        ctx.fill(CGRect(x: x, y: y, width: cell, height: cell))
+    } }
+    if let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+        ctx.interpolationQuality = .high
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: px, height: py))
+    }
+    ctx.setStrokeColor(CGColor(red: 1, green: 0, blue: 0, alpha: 0.9)); ctx.setLineWidth(1)
+    let hx = hot.x * scale, hy = CGFloat(py) - hot.y * scale   // CG context is bottom-left; hotspot is top-left based
+    ctx.move(to: CGPoint(x: hx - 6, y: hy)); ctx.addLine(to: CGPoint(x: hx + 6, y: hy))
+    ctx.move(to: CGPoint(x: hx, y: hy - 6)); ctx.addLine(to: CGPoint(x: hx, y: hy + 6)); ctx.strokePath()
+    if let out = ctx.makeImage() { save(out, "quill.png") }
+    // and at 1x/2x on white and dark, as the pointer will actually appear
+    let strip = HStack(spacing: 24) {
+        ForEach([Color.white, Color(white: 0.5), Color(white: 0.12), Color.blue], id: \.self) { bg in
+            Image(nsImage: img).interpolation(.none).frame(width: 60, height: 60).background(bg)
+        }
+    }.padding(8).background(Color(white: 0.9))
+    render(strip, "quill-1x.png")
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--render-mascot") {
+    MainActor.assumeIsolated { runRenderMascot() }
+} else if CommandLine.arguments.contains("--ask") {
     Task { @MainActor in
         await runHeadlessAsk()
         exit(0)

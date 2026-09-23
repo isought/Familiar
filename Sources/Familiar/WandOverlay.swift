@@ -308,36 +308,96 @@ enum ShimmerBorder {
 }
 
 enum WandCursor {
+    /// A quill pen: metal nib at the bottom-left (the hotspot), feather sweeping up to the top-right, a purple ink drop at the tip.
     static let cursor: NSCursor = {
-        let size = NSSize(width: 34, height: 34)
+        let size = NSSize(width: 40, height: 40)
+        let tip = CGPoint(x: 4, y: 36)
         let image = NSImage(size: size, flipped: true) { rect in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
-            ctx.setShadow(offset: CGSize(width: 0, height: 1), blur: 3, color: CGColor(gray: 0, alpha: 0.6))
-            // Stick from bottom-left to top-right.
-            ctx.setLineCap(.round)
-            ctx.setLineWidth(6); ctx.setStrokeColor(CGColor(gray: 1, alpha: 0.95))
-            ctx.move(to: CGPoint(x: 6, y: 28)); ctx.addLine(to: CGPoint(x: 22, y: 12)); ctx.strokePath()
-            ctx.setLineWidth(3.5); ctx.setStrokeColor(CGColor(red: 0.45, green: 0.25, blue: 0.1, alpha: 1))
-            ctx.move(to: CGPoint(x: 6, y: 28)); ctx.addLine(to: CGPoint(x: 22, y: 12)); ctx.strokePath()
-            ctx.setShadow(offset: .zero, blur: 0, color: nil)
-            // Star at the tip.
-            let star = CGMutablePath()
-            let c = CGPoint(x: 26, y: 8)
-            for i in 0..<10 {
-                let r: CGFloat = i % 2 == 0 ? 7 : 3
-                let a = CGFloat(i) * .pi / 5 - .pi / 2
-                let p = CGPoint(x: c.x + r * cos(a), y: c.y + r * sin(a))
-                if i == 0 { star.move(to: p) } else { star.addLine(to: p) }
+            // axis from the nib tip to the feather end, with a unit normal (n points down-right)
+            let end = CGPoint(x: 36.5, y: 3.5)
+            let dx = end.x - tip.x, dy = end.y - tip.y
+            let len = hypot(dx, dy)
+            let d = CGPoint(x: dx / len, y: dy / len), n = CGPoint(x: -d.y, y: d.x)
+            func at(_ t: CGFloat, _ w: CGFloat) -> CGPoint { CGPoint(x: tip.x + d.x * len * t + n.x * w, y: tip.y + d.y * len * t + n.y * w) }
+            func vaneWidth(_ t: CGFloat) -> CGFloat {  // leaf profile from t0 to 1
+                let u = (t - 0.34) / 0.66
+                guard u > 0, u < 1 else { return 0 }
+                return pow(sin(u * .pi), 0.8) * (u < 0.8 ? 1 : 1 - (u - 0.8) * 0.9)
             }
-            star.closeSubpath()
-            ctx.addPath(star); ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fillPath()
-            ctx.addPath(star); ctx.setLineWidth(1); ctx.setStrokeColor(CGColor(red: 0.55, green: 0.3, blue: 0.95, alpha: 1)); ctx.strokePath()
-            // Sparkles.
-            ctx.setFillColor(CGColor(red: 0.6, green: 0.35, blue: 1, alpha: 1))
-            ctx.fillEllipse(in: CGRect(x: 15, y: 4, width: 3, height: 3))
-            ctx.fillEllipse(in: CGRect(x: 30, y: 17, width: 2.5, height: 2.5))
+            // feather outline: upper vane (−n, wide) out and the lower vane (+n, narrow) back
+            let feather = CGMutablePath()
+            let steps = 28
+            feather.move(to: at(0.34, 0))
+            for i in 0...steps { let t = 0.34 + 0.66 * CGFloat(i) / CGFloat(steps); feather.addLine(to: at(t, -8.0 * vaneWidth(t))) }
+            for i in stride(from: steps, through: 0, by: -1) { let t = 0.34 + 0.66 * CGFloat(i) / CGFloat(steps); feather.addLine(to: at(t, 4.6 * vaneWidth(t))) }
+            feather.closeSubpath()
+            // shaft: a thin tapered strip from just above the nib to the feather end
+            let shaft = CGMutablePath()
+            shaft.move(to: at(0.14, -1.6)); shaft.addLine(to: at(1.0, -0.6)); shaft.addLine(to: at(1.0, 0.6)); shaft.addLine(to: at(0.14, 1.6)); shaft.closeSubpath()
+            // nib: a pointed blade
+            let nib = CGMutablePath()
+            nib.move(to: tip); nib.addLine(to: at(0.16, -3.2)); nib.addLine(to: at(0.28, -1.9)); nib.addLine(to: at(0.28, 1.9)); nib.addLine(to: at(0.16, 3.2)); nib.closeSubpath()
+
+            // silhouette: soft shadow plus a pale rim so it reads on dark and light backgrounds alike
+            ctx.saveGState()
+            ctx.setShadow(offset: CGSize(width: 1, height: 1.5), blur: 3.5, color: CGColor(gray: 0, alpha: 0.55))
+            ctx.addPath(feather); ctx.addPath(shaft); ctx.addPath(nib)
+            ctx.setFillColor(CGColor(gray: 1, alpha: 0.9)); ctx.fillPath()
+            ctx.restoreGState()
+            ctx.setLineJoin(.round)
+            ctx.addPath(feather); ctx.addPath(shaft); ctx.addPath(nib)
+            ctx.setLineWidth(2.4); ctx.setStrokeColor(CGColor(gray: 1, alpha: 0.85)); ctx.strokePath()
+
+            // feather: warm white with a shaded lower vane and a soft gradient
+            ctx.saveGState()
+            ctx.addPath(feather); ctx.clip()
+            let space = CGColorSpaceCreateDeviceRGB()
+            if let g = CGGradient(colorsSpace: space, colors: [CGColor(red: 1, green: 1, blue: 0.99, alpha: 1), CGColor(red: 0.86, green: 0.84, blue: 0.90, alpha: 1)] as CFArray, locations: [0, 1]) {
+                ctx.drawLinearGradient(g, start: at(0.7, -9), end: at(0.7, 5), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+            }
+            // barbs: fine lines slanting toward the feather end
+            ctx.setLineWidth(0.7); ctx.setStrokeColor(CGColor(red: 0.45, green: 0.42, blue: 0.55, alpha: 0.55))
+            for i in 0..<9 {
+                let t = 0.40 + 0.06 * CGFloat(i)
+                ctx.move(to: at(t, 0)); ctx.addLine(to: at(t + 0.10, -9 * vaneWidth(t + 0.05)))
+                ctx.move(to: at(t, 0)); ctx.addLine(to: at(t + 0.07, 5 * vaneWidth(t + 0.03)))
+            }
+            ctx.strokePath()
+            // notch in the upper vane, as real feathers split
+            ctx.setLineWidth(1.3); ctx.setStrokeColor(CGColor(red: 0.62, green: 0.58, blue: 0.72, alpha: 0.5))
+            ctx.move(to: at(0.66, -0.5)); ctx.addLine(to: at(0.72, -7.4)); ctx.strokePath()
+            ctx.restoreGState()
+            // feather outline
+            ctx.addPath(feather); ctx.setLineWidth(0.9); ctx.setStrokeColor(CGColor(red: 0.35, green: 0.32, blue: 0.45, alpha: 0.75)); ctx.strokePath()
+
+            // shaft: cream with a dark edge
+            ctx.addPath(shaft); ctx.setFillColor(CGColor(red: 0.93, green: 0.88, blue: 0.72, alpha: 1)); ctx.fillPath()
+            ctx.addPath(shaft); ctx.setLineWidth(0.8); ctx.setStrokeColor(CGColor(red: 0.42, green: 0.35, blue: 0.25, alpha: 0.9)); ctx.strokePath()
+
+            // nib: dark metal with a highlight along one edge and a slit down the middle
+            ctx.saveGState()
+            ctx.addPath(nib); ctx.clip()
+            if let g = CGGradient(colorsSpace: space, colors: [CGColor(gray: 0.62, alpha: 1), CGColor(gray: 0.20, alpha: 1), CGColor(gray: 0.08, alpha: 1)] as CFArray, locations: [0, 0.45, 1]) {
+                ctx.drawLinearGradient(g, start: at(0.2, -3.5), end: at(0.2, 3.5), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+            }
+            ctx.setLineWidth(0.8); ctx.setStrokeColor(CGColor(gray: 0.85, alpha: 0.9))
+            ctx.move(to: at(0.03, 0)); ctx.addLine(to: at(0.20, 0)); ctx.strokePath()
+            ctx.restoreGState()
+            ctx.addPath(nib); ctx.setLineWidth(0.8); ctx.setStrokeColor(CGColor(gray: 0.05, alpha: 1)); ctx.strokePath()
+            ctx.setFillColor(CGColor(gray: 0.05, alpha: 1)); ctx.fillEllipse(in: CGRect(x: at(0.16, 0).x - 0.9, y: at(0.16, 0).y - 0.9, width: 1.8, height: 1.8))
+
+            // ink drop at the tip, in the brand purple
+            let ink = CGPoint(x: tip.x + 1.6, y: tip.y - 0.4)
+            ctx.saveGState()
+            ctx.setShadow(offset: CGSize(width: 0, height: 1), blur: 1.5, color: CGColor(red: 0.55, green: 0.3, blue: 0.95, alpha: 0.6))
+            ctx.setFillColor(CGColor(red: 0.55, green: 0.3, blue: 0.95, alpha: 1))
+            ctx.fillEllipse(in: CGRect(x: ink.x - 2.6, y: ink.y - 2.6, width: 5.2, height: 5.2))
+            ctx.restoreGState()
+            ctx.setFillColor(CGColor(gray: 1, alpha: 0.85))
+            ctx.fillEllipse(in: CGRect(x: ink.x - 1.7, y: ink.y - 1.9, width: 1.6, height: 1.3))
             return true
         }
-        return NSCursor(image: image, hotSpot: NSPoint(x: 26, y: 8))
+        return NSCursor(image: image, hotSpot: NSPoint(x: tip.x, y: tip.y))
     }()
 }
