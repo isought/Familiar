@@ -29,10 +29,11 @@ struct Config: Codable {
     }
     static var file: URL { dir.appendingPathComponent("config.json") }
 
+    /// An explicit key in config.json wins (a deliberate dev override), then the Keychain (what Settings saves), then the environment.
     var resolvedApiKey: String? {
-        if let k = Secrets.get("ANTHROPIC_API_KEY") { return k }
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
+        if let k = Secrets.get("ANTHROPIC_API_KEY") { return k }
         if let env = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"], !env.isEmpty { return env }
         return nil
     }

@@ -26,7 +26,7 @@ final class SettingsModel: ObservableObject {
     var toolsDir = ""
 
     func load(config: Config, packs: [ToolPack]) {
-        apiKey = Secrets.get("ANTHROPIC_API_KEY") ?? config.apiKey
+        apiKey = config.apiKey.isEmpty ? (Secrets.get("ANTHROPIC_API_KEY") ?? "") : config.apiKey
         model = config.model
         effort = config.effort
         apiBaseURL = config.apiBaseURL
