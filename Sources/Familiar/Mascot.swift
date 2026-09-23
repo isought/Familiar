@@ -117,25 +117,25 @@ private struct Expression {
         let P = 0.36   // apex toward the left end of every brow
         switch mood {
         case .idle:
-            return Expression(left: Brow(raise: 0.06, innerUp: -14, arch: 0.75, peak: P), right: Brow(raise: 0.0, innerUp: 18, arch: 0.7, peak: P), lean: 3)
+            return Expression(left: Brow(raise: 0.02, innerUp: -10, arch: 0.75, peak: P), right: Brow(raise: 0.01, innerUp: 14, arch: 0.7, peak: P), lean: 3)
         case .curious:
-            return Expression(left: Brow(raise: 0.09, innerUp: -12, arch: 0.85, peak: P), right: Brow(raise: 0.0, innerUp: 20, arch: 0.6, peak: 0.4),
+            return Expression(left: Brow(raise: 0.055, innerUp: -9, arch: 0.85, peak: P), right: Brow(raise: 0.01, innerUp: 16, arch: 0.6, peak: 0.4),
                               gaze: CGPoint(x: 0.8, y: 0.25), lean: 5)
         case .happy:
-            return Expression(left: Brow(raise: 0.07, innerUp: -12, arch: 0.8, peak: P), right: Brow(raise: 0.02, innerUp: 16, arch: 0.75, peak: P),
+            return Expression(left: Brow(raise: 0.05, innerUp: -9, arch: 0.8, peak: P), right: Brow(raise: 0.035, innerUp: 13, arch: 0.75, peak: P),
                               happy: 1, lean: -5, shift: CGSize(width: 0, height: -0.02))
         case .thinking:
-            return Expression(left: Brow(raise: 0.10, innerUp: -10, arch: 0.8, peak: P), right: Brow(raise: 0.06, innerUp: 16, arch: 0.75, peak: P),
+            return Expression(left: Brow(raise: 0.075, innerUp: -8, arch: 0.8, peak: P), right: Brow(raise: 0.06, innerUp: 13, arch: 0.75, peak: P),
                               gaze: CGPoint(x: -0.7, y: -0.85), followsPointer: false, lean: -3)
         case .charging:
-            return Expression(left: Brow(raise: 0.03, innerUp: -10, arch: 0.6, peak: P), right: Brow(raise: 0.0, innerUp: 14, arch: 0.55, peak: P),
+            return Expression(left: Brow(raise: 0.015, innerUp: -8, arch: 0.6, peak: P), right: Brow(raise: 0.005, innerUp: 12, arch: 0.55, peak: P),
                               eyeOpen: 0.55, gaze: CGPoint(x: 0, y: 0.15), followsPointer: false)
         case .onIt:
-            return Expression(left: Brow(raise: 0.05, innerUp: -6, arch: 0.6, peak: P), right: Brow(raise: 0.0, innerUp: 10, arch: 0.55, peak: P),
+            return Expression(left: Brow(raise: 0.03, innerUp: -5, arch: 0.6, peak: P), right: Brow(raise: 0.01, innerUp: 9, arch: 0.55, peak: P),
                               eyeOpen: 0.85, gaze: CGPoint(x: 0.6, y: 0), followsPointer: false, lean: 7,
                               shift: CGSize(width: 0.04, height: 0), squashX: 1.03, squashY: 0.97, motionLines: 1)
         case .peek:
-            return Expression(left: Brow(raise: 0.08, innerUp: -12, arch: 0.8, peak: P), right: Brow(raise: 0.0, innerUp: 18, arch: 0.6, peak: 0.4),
+            return Expression(left: Brow(raise: 0.05, innerUp: -9, arch: 0.8, peak: P), right: Brow(raise: 0.01, innerUp: 15, arch: 0.6, peak: 0.4),
                               gaze: CGPoint(x: 0.85, y: 0.2), followsPointer: false, lean: -6,
                               shift: CGSize(width: -0.07, height: 0.02), hidden: 1)
         case .sad:
@@ -369,7 +369,7 @@ struct MascotView: View {
         let rightScale: CGFloat = v1 ? 0.80 : innocent ? 0.95 : 0.93        // v1 shortened the right brow to dodge the curl
         let leftDX: CGFloat = v1 ? 0.02 : innocent ? 0.045 : 0.02            // outward push of the left brow
         let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.045 : 0.01
-        let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.06 : 0.015
+        let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.045 : 0.015
         let cock: CGFloat = style == .innocent ? 1 : 0     // v3: the face is cocked like the reference (right eye lower)
         return ZStack {
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
