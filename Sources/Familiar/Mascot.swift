@@ -5,7 +5,7 @@ import SwiftUI
 /// Two brow personalities. `sharp` is the original merge; `innocent` keeps both brows high and arched so curiosity
 /// reads as wide-eyed rather than skeptical (a lowered brow is what makes a face look suspicious).
 enum MascotStyle: String, CaseIterable {
-    case sharp, innocent, innocentV1, innocentV2
+    case sharp, innocent, innocentV1, innocentV3
     nonisolated(unsafe) static var current: MascotStyle = .innocent
     var isInnocentFamily: Bool { self != .sharp }
 }
@@ -77,7 +77,7 @@ private struct Expression {
         switch MascotStyle.current {
         case .innocent: return innocent(mood)
         case .innocentV1: return innocentV1(mood)
-        case .innocentV2: return innocentV2(mood)
+        case .innocentV3: return innocentV3(mood)
         case .sharp: break
         }
         switch mood {
@@ -110,10 +110,9 @@ private struct Expression {
         }
     }
 
-    /// Innocent brows, v3, traced from the reference: both brows are the SAME stroke, not mirror images. Each peaks near
-    /// its left end and its tail droops down to the right, the whole pair tilted clockwise; the right brow sits lower,
-    /// almost on its eye. Together with the lower right eye the face is cocked, which is what reads as sweetly dim.
-    static func innocent(_ mood: MascotMood) -> Expression {
+    /// Innocent brows, v3 (experiment, traced from the reference): both brows the SAME stroke, drooping to the right,
+    /// the right one lower, with a cocked eye line. Kept in the picker; v2 is the default.
+    static func innocentV3(_ mood: MascotMood) -> Expression {
         let P = 0.36   // apex toward the left end of every brow
         switch mood {
         case .idle:
@@ -145,8 +144,8 @@ private struct Expression {
         }
     }
 
-    /// Innocent brows, v2 (tagged mascot-v2): long shallow arcs, same size at rest. Kept for comparison.
-    static func innocentV2(_ mood: MascotMood) -> Expression {
+    /// Innocent brows, v2 (tagged mascot-v2), the default: long shallow arcs, same size at rest, set wide apart.
+    static func innocent(_ mood: MascotMood) -> Expression {
         let L = 0.44, R = 0.56
         switch mood {
         case .idle:
@@ -372,7 +371,7 @@ struct MascotView: View {
         let leftDX: CGFloat = v1 ? 0.02 : innocent ? 0.045 : 0.02            // outward push of the left brow
         let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.045 : 0.01
         let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.045 : 0.015
-        let cock: CGFloat = style == .innocent ? 1 : 0     // v3: the face is cocked like the reference (right eye lower)
+        let cock: CGFloat = style == .innocentV3 ? 1 : 0   // v3 only: the face is cocked like the reference (right eye lower)
         // Pointer proximity: both brows drift up a little as the mouse approaches, the one on the pointer's side a bit more.
         let side = max(-1, min(1, gaze.x * 3))
         let liftL = proximity * b * (0.025 + 0.02 * max(0, -side))

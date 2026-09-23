@@ -128,8 +128,8 @@ struct SettingsView: View {
                 Toggle("Allow Familiar to control the mouse and keyboard when asked", isOn: $model.allowControl)
                 Picker("Character brows", selection: $model.mascotStyle) {
                     Text("Innocent").tag("innocent")
-                    Text("Innocent v2").tag("innocentV2")
                     Text("Innocent v1").tag("innocentV1")
+                    Text("Innocent v3 (experiment)").tag("innocentV3")
                     Text("Sharp").tag("sharp")
                 }
             }
