@@ -242,7 +242,7 @@ struct BubbleView: View {
             }
         case .wand:
             HStack { Spacer(minLength: 40)
-                Label(m.text, systemImage: "wand.and.stars")
+                Label(m.text, systemImage: "pencil.tip")
                     .padding(10).background(Color.purple.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
                     .foregroundStyle(.white)
             }
