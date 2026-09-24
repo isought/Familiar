@@ -40,6 +40,21 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    Headless: `--record-synthetic <dir>` (a fake recording from the current screen) and
    `--summarize-recording <dir> ["purpose"] [--tools-root <dir>] [--keep]` (prints the draft JSON; keeps into a temp folder by default).
 
+## Try it on another Mac (5 minutes)
+```bash
+xcode-select --install                      # Command Line Tools, if `swift --version` fails
+curl -LsSf https://astral.sh/uv/install.sh | sh   # uv, gets bundled into the app for pack scripts
+git clone https://github.com/isought/Familiar.git && cd Familiar
+./scripts/make-dev-cert.sh                  # local signing identity so permission grants survive rebuilds
+./scripts/run.sh                            # builds build/Familiar.app and launches it
+```
+Then, once:
+1. macOS asks for **Accessibility** and **Screen Recording**. Grant both (System Settings → Privacy & Security), then quit and relaunch Familiar from the menu bar.
+2. Right-click the note → **Settings…** → paste an Anthropic API key → **Save**.
+3. Menu bar → **Watch Me**, do a short task in the app you want it to learn, then **Stop Watching** (or ⌃⌥Space). Answer "what were you doing?" or skip it, read the draft, **Keep it**. It becomes a tool pack under `~/.familiar/tools/`.
+
+No packs are needed to start: watching creates them. Nothing leaves the machine except the write-up request you trigger.
+
 ## Requirements
 - macOS 14+, Xcode Command Line Tools (Swift 5.9+). No Xcode needed.
 - `uv` on the build machine (gets bundled into the app; scripts declare deps inline, PEP 723).
