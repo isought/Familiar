@@ -192,8 +192,19 @@ struct BubbleView: View {
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.padStatic) private var padStatic
-    @State private var ledger = RevealLedger()
+    @StateObject private var ledger = RevealLedger()
     private var dark: Bool { scheme == .dark }
+    private var padAnimated: Bool { sense.visible && !padStatic }
+
+    /// The character looking over the newest note: reading while busy, on it while the ink goes down, then the same
+    /// brief happy/sad the orb shows; curious over the empty pad; sad while the last word on the pad is an error.
+    private var peekMood: MascotMood {
+        if state.busy { return .thinking }
+        if ledger.isRevealing { return .onIt }
+        if let r = reaction { return r }
+        if state.transcript.isEmpty { return .curious }
+        return state.transcript.last?.role == .error ? .sad : .idle
+    }
 
     private var card: some View {
         ledger.seed(state.transcript)
@@ -215,12 +226,15 @@ struct BubbleView: View {
         .padding(8)
         .onAppear { inputFocused = true }
         .onDisappear { ledger.reset() }
+        .onChange(of: state.busy) { was, now in   // the orb is not on screen while the pad is open, so the pad reacts
+            guard was, !now else { return }
+            react(state.transcript.last?.role == .error ? .sad : .happy)
+        }
     }
 
-    /// The pad's binding strip: the mascot, the title in its own hand, and the controls.
+    /// The pad's binding strip: the title in the character's own hand, and the controls.
     private var header: some View {
         HStack(spacing: 8) {
-            MascotView(mood: state.busy ? .thinking : .idle, lookAt: sense.gaze, size: 28, animated: sense.visible && !padStatic, decorations: false).frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 0) {
                 Text("Familiar").font(HandFont.font(size: 17)).foregroundStyle(Pad.deskInk(dark))
                 Text(state.contextLine).font(.caption).foregroundStyle(Pad.deskInkSoft(dark)).lineLimit(1).truncationMode(.middle)
@@ -259,7 +273,7 @@ struct BubbleView: View {
     /// The notes, oldest at the top, newest at the bottom and on top of the pile.
     private var transcript: some View {
         let notes = Note.group(state.transcript)
-        let tabsOn = state.busy ? nil : notes.last { $0.answers.contains { $0.role == .assistant } }?.id   // follow-ups stick to the last real answer
+        let tabsOn = state.busy ? nil : notes.last { $0.hasAnswer }?.id   // follow-ups stick to the last real answer
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -268,18 +282,20 @@ struct BubbleView: View {
                         let latest = i == notes.count - 1
                         StickyNoteView(note: n, index: i, isLatest: latest, busy: state.busy && latest, status: state.status,
                                        suggestions: n.id == tabsOn ? state.suggestions : [], ledger: ledger,
+                                       peek: latest ? peekMood : nil, animated: padAnimated,
                                        onSuggest: { state.askSuggestion($0) })
                             .id(n.id)
                     }
-                    if state.busy, notes.last?.answers.isEmpty == false || notes.isEmpty {
+                    if state.busy, notes.last?.hasAnswer == true || notes.isEmpty {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
                             Text(state.status).font(.caption).foregroundStyle(Pad.deskInkSoft(dark))
                         }.padding(.horizontal, 8).id("busy")
                     }
                 }
-                .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 12)
+                .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 12)
             }
+            .defaultScrollAnchor(.bottom)
             .onChange(of: state.transcript.count) { _, _ in
                 withAnimation { proxy.scrollTo(Note.id(containing: state.transcript.last?.id, in: Note.group(state.transcript)), anchor: .bottom) }
             }
@@ -288,28 +304,31 @@ struct BubbleView: View {
         }
     }
 
+    /// The empty pad: a blank ruled sheet with the character looking over it, waiting.
     private var welcomeNote: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Hello!").font(HandFont.font(size: 17)).foregroundStyle(Pad.ink)
-            InkLine(wobble: 0.6).stroke(Pad.ink.opacity(0.22), lineWidth: 1).frame(height: 3)
-            Text("Point the pen at anything on screen and I'll tell you what it is and what you can do about it.")
-            Text("Or just write to me below.").foregroundStyle(Pad.inkSoft)
+        ZStack(alignment: .topTrailing) {
+            Peeker(mood: peekMood, busy: false, animated: padAnimated)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("What are we looking at?").font(HandFont.font(size: 18)).foregroundStyle(Pad.ink).padding(.trailing, 34)
+                InkLine(wobble: 0.6).stroke(Pad.ink.opacity(0.22), lineWidth: 1).frame(height: 3)
+                Text("Hold me to pick up the pen, then point it at anything on screen and I'll tell you what it is and what you can do about it.")
+                Text("Or just write to me below.").foregroundStyle(Pad.inkSoft)
+            }
+            .font(Pad.body).foregroundStyle(Pad.ink).lineSpacing(Pad.lineSpacing)
+            .padding(EdgeInsets(top: 16, leading: 16, bottom: 20, trailing: 16))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(NoteSheetView(curl: 24, dark: dark, ruled: true))
+            .rotationEffect(.degrees(-Pad.tilt), anchor: .top)
+            .padding(.top, Peeker.headroom)
+            .environment(\.colorScheme, .light)
         }
-        .font(Pad.body).foregroundStyle(Pad.ink).lineSpacing(3)
-        .padding(EdgeInsets(top: 16, leading: 16, bottom: 20, trailing: 16))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(NoteSheetView(curl: 24, dark: dark))
-        .overlay(alignment: .topLeading) { Tape().offset(x: 22, y: -6) }
-        .padding(.top, 6)
-        .rotationEffect(.degrees(-1.2))
-        .environment(\.colorScheme, .light)
     }
 
     /// A lined strip of paper to write on, the pen to pick up, and a nib to send.
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                TextField("Write to me…", text: $state.question, axis: .vertical)
+                TextField("", text: $state.question, prompt: Text("Write to me…").foregroundStyle(Pad.ink.opacity(0.42)), axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(Pad.body).foregroundStyle(Pad.ink)
                     .lineLimit(1...4)
@@ -321,10 +340,11 @@ struct BubbleView: View {
             Button { state.startWand() } label: { Image(systemName: "pencil.and.outline").font(.system(size: 17, weight: .medium)).foregroundStyle(Pad.penInk) }
                 .buttonStyle(.plain).disabled(state.busy).help("Pick up the pen (⌃⌥Space)")
                 .opacity(state.busy ? 0.4 : 1)
-            Button { state.ask() } label: {
+            Button { state.ask() } label: {   // the nib: ink on paper by day, a paper disc on the dark desk by night
                 ZStack {
-                    Circle().fill(Pad.ink).frame(width: 26, height: 26)
-                    Image(systemName: "pencil.tip").font(.system(size: 14, weight: .semibold)).foregroundStyle(Pad.paperTop)
+                    Circle().fill(dark ? Pad.paperBottom : Pad.ink).frame(width: 26, height: 26)
+                        .shadow(color: .black.opacity(dark ? 0.35 : 0), radius: 2, y: 1)
+                    Image(systemName: "pencil.tip").font(.system(size: 14, weight: .semibold)).foregroundStyle(dark ? Pad.ink : Pad.paperTop)
                 }
             }
             .buttonStyle(.plain)

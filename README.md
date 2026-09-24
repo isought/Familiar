@@ -14,6 +14,8 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    The reply names what you pointed at, explains its state, and offers tappable follow-ups.
 4. **Chat**: double-click the note and type, for questions that have no single thing to point at. A single click just pokes it. The note reacts as it goes:
    curious when you hover, thinking while it works, happy or sad when the answer lands.
+   The chat is a pad of sticky notes: each question is a note with the answer written on it (inked in line by line as it
+   arrives), follow-ups are paper tabs under the note, and the character peeks over the newest one.
 5. Claude can call the pack's scripts, `read_file` / `grep` over the docs, and `read_screen` (accessibility text).
 6. **Control** (off by default, Settings → "Allow Familiar to control the mouse and keyboard"): ask it to do something
    ("type the sum formula for me") and it drives the mouse and keyboard through Claude's computer toolset. The screen
