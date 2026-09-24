@@ -61,6 +61,10 @@ struct BubbleView: View {
 
     @State private var charge: CGFloat = 0        // 0…1 ring fill while holding
     @State private var charging = false
+    @State private var pressOrigin: CGPoint?      // where the current press started (global coords)
+    @State private var moving = false             // the press turned into a drag
+    @State private var cast = false               // the ring filled and the pen fired during this press
+    @State private var chargeTimer: Timer?
     @State private var reaction: MascotMood?      // brief happy/sad after an answer
     @State private var stuck: CGFloat = 1         // 1 = peeled away; animates to 0 as the note sticks on at launch
     @StateObject private var sense = BubbleSense()
@@ -85,35 +89,68 @@ struct BubbleView: View {
             guard was, !now else { return }
             react(state.transcript.last?.role == .error ? .sad : .happy)
         }
+        // One press handler for click / hold-to-pick-up-the-pen / drag, so the ring and the trigger share a single timer:
+        // when the ring is full the pen fires, whether or not the mouse has been released yet.
         .gesture(
-            DragGesture(minimumDistance: 4, coordinateSpace: .global)
-                .onChanged { _ in state.onDragBubble?(.moved) }
-                .onEnded { _ in state.onDragBubble?(.ended) }
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { v in
+                    if pressOrigin == nil { beginPress(at: v.location) }
+                    guard !cast, let o = pressOrigin else { return }
+                    if !moving, hypot(v.location.x - o.x, v.location.y - o.y) > 10 { moving = true; cancelCharge() }
+                    if moving { state.onDragBubble?(.moved) }
+                }
+                .onEnded { _ in
+                    let wasMoving = moving, wasCast = cast
+                    endPress()
+                    if wasMoving { state.onDragBubble?(.ended) }
+                    else if !wasCast { state.expanded = true }      // released before the ring filled: a click
+                }
         )
-        .onTapGesture { state.expanded = true }
-        .onLongPressGesture(minimumDuration: state.config.wandHoldSeconds, maximumDistance: 8) {
-            // charged: cast
-            charging = false
-            withAnimation(.easeOut(duration: 0.2)) { charge = 0 }
-            if state.busy { state.expanded = true } else { state.startWand() }
-        } onPressingChanged: { pressing in
-            charging = pressing
-            if pressing {
-                charge = 0
-                withAnimation(.linear(duration: state.config.wandHoldSeconds)) { charge = 1 }
-            } else {
-                withAnimation(.easeOut(duration: 0.15)) { charge = 0 }
-            }
-        }
         .contextMenu {
             Button("Open chat") { state.expanded = true }
-            Button("Point the wand") { state.startWand() }
+            Button("Point the pen") { state.startWand() }
             Divider()
             Button("Settings…") { state.onOpenSettings?() }
             Button("Hide bubble") { state.onHideBubble?() }
             Button("Quit Familiar") { NSApp.terminate(nil) }
         }
-        .help("Click: chat  ·  Hold: charge the wand  ·  ⌃⌥Space: wand")
+        .help("Click: chat  ·  Hold: pick up the pen  ·  ⌃⌥Space: pen")
+    }
+
+    private func beginPress(at p: CGPoint) {
+        pressOrigin = p
+        moving = false
+        cast = false
+        charging = true
+        charge = 0
+        let hold = state.config.wandHoldSeconds
+        withAnimation(.linear(duration: hold)) { charge = 1 }
+        chargeTimer?.invalidate()
+        let t = Timer(timeInterval: hold, repeats: false) { _ in
+            guard pressOrigin != nil, !moving, !cast else { return }
+            cast = true
+            charging = false
+            withAnimation(.easeOut(duration: 0.2)) { charge = 0 }
+            if state.busy { state.expanded = true } else { state.startWand() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        chargeTimer = t
+    }
+
+    private func cancelCharge() {
+        chargeTimer?.invalidate()
+        chargeTimer = nil
+        charging = false
+        withAnimation(.easeOut(duration: 0.15)) { charge = 0 }
+    }
+
+    private func endPress() {
+        chargeTimer?.invalidate()
+        chargeTimer = nil
+        pressOrigin = nil
+        moving = false
+        if charging { charging = false; withAnimation(.easeOut(duration: 0.15)) { charge = 0 } }
+        cast = false
     }
 
     private func react(_ m: MascotMood) {
@@ -175,7 +212,7 @@ struct BubbleView: View {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if state.transcript.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Point the wand at anything on screen and I'll tell you what it is and what you can do about it.")
+                            Text("Point the pen at anything on screen and I'll tell you what it is and what you can do about it.")
                             Text("Or just type a question below.").foregroundStyle(.secondary)
                         }.font(.callout).padding(.top, 8)
                     }
@@ -250,8 +287,8 @@ struct BubbleView: View {
                 .lineLimit(1...4)
                 .focused($inputFocused)
                 .onSubmit { state.ask() }
-            Button { state.startWand() } label: { Image(systemName: "wand.and.stars").font(.title3) }
-                .buttonStyle(.borderless).disabled(state.busy).help("Point the wand (⌃⌥Space)")
+            Button { state.startWand() } label: { Image(systemName: "pencil.tip").font(.title3) }
+                .buttonStyle(.borderless).disabled(state.busy).help("Pick up the pen (⌃⌥Space)")
             Button { state.ask() } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
                 .buttonStyle(.borderless)
                 .disabled(state.busy || state.question.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -269,7 +306,7 @@ struct BubbleView: View {
                 Text(state.status)
             }
             Spacer()
-            Text("⌃⌥Space wand")
+            Text("⌃⌥Space pen")
         }
         .font(.caption2).foregroundStyle(.secondary)
         .padding(.horizontal, 12).padding(.bottom, 8)

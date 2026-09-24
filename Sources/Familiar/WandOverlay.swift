@@ -253,7 +253,7 @@ final class WandView: NSView {
         root.addSublayer(labelPill)
 
         let (hint, _) = ShimmerBorder.captionPill(bounds: bounds, scale: scale, width: 440,
-                                                  text: "Point the wand at what you need help with  ·  Esc to cancel")
+                                                  text: "Point the pen at what you need help with  ·  Esc to cancel")
         root.addSublayer(hint)
     }
 }

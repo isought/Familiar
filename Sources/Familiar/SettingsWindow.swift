@@ -116,9 +116,9 @@ struct SettingsView: View {
                 }
             }
             Section("Behaviour") {
-                TextField("Wand hotkey", text: $model.hotkey, prompt: Text("control+option+space"))
+                TextField("Pen hotkey", text: $model.hotkey, prompt: Text("control+option+space"))
                 HStack {
-                    Text("Hold to charge the wand")
+                    Text("Hold to pick up the pen")
                     Slider(value: $model.wandHoldSeconds, in: 0.3...2.0, step: 0.1)
                     Text(String(format: "%.1fs", model.wandHoldSeconds)).monospacedDigit().frame(width: 36)
                 }

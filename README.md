@@ -1,14 +1,14 @@
 # Familiar
 
 A quiet macOS helper for non-technical people in companies full of internal tools. A familiar knows your world
-and acts on your behalf: point the wand at anything on screen and it explains what you are looking at; ask it to
+and acts on your behalf: point the pen at anything on screen and it explains what you are looking at; ask it to
 do something and it takes the mouse. It sits as a small floating sticky-note character whose eyes follow your
 mouse, and it uses the company's own notes and scripts for the tool you are in.
 
 ## How it works
 1. **Watcher** (Accessibility, no screenshots) polls the frontmost app, window title and browser URL.
 2. **Tool packs** in `~/.familiar/tools/<pack>/` match the current app/URL and supply docs plus scripts.
-3. **Wand**: hold the note until the ring fills, or press **⌃⌥Space**. The pointer becomes a quill, the screen dims with a
+3. **Pen**: hold the note until the ring fills, or press **⌃⌥Space**. The pointer becomes a quill, the screen dims with a
    shimmering border, the element under the quill is outlined, and a click sends a screenshot (ringed at the click) plus a
    zoomed crop to Claude.
    The reply names what you pointed at, explains its state, and offers tappable follow-ups.
@@ -100,9 +100,9 @@ The docs were generated from the app's repo and use its real button labels.
 | toolsDir | "" | override tool packs folder |
 | docsStuffLimitChars | 24000 | how much doc text to paste before switching to read_file |
 | uvPath | "" | override the uv binary |
-| wandHoldSeconds | 0.8 | how long to hold the bubble to charge the wand |
+| wandHoldSeconds | 0.8 | how long to hold the bubble to pick up the pen |
 | mascotStyle | innocent | character brows: `innocent` (v2, the default), `innocentV1`, `innocentV3` (experiment), or `sharp` (the original merge) |
-| hotkey | control+option+space | wand hotkey, e.g. `cmd+shift+k` |
+| hotkey | control+option+space | pen hotkey, e.g. `cmd+shift+k` |
 | allowControl | false | let Familiar move the mouse and type when asked |
 | env | {} | non-secret variables handed to every script |
 | bubbleX / bubbleY | | remembered bubble position |

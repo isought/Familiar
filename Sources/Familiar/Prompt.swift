@@ -97,7 +97,7 @@ enum Prompt {
     }
 
     static func wandInstruction(target: WandTarget, ctx: ScreenContext?) -> String {
-        var s = "## The user pointed the wand at something on screen\n"
+        var s = "## The user pointed the pen at something on screen\n"
         if let e = target.element { s += "Accessibility says it is: \(e.label)\n" }
         if let t = target.windowTitle, !t.isEmpty { s += "Window: “\(t)”\(target.windowOwner.map { " (\($0))" } ?? "")\n" }
         s += "The spot is marked with a violet ring on the full screenshot. The second image is a zoomed crop around it.\n\n"

@@ -112,14 +112,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let img = NSImage(systemSymbolName: "wand.and.stars", accessibilityDescription: "Familiar") {
+        if let img = NSImage(systemSymbolName: "pencil.tip", accessibilityDescription: "Familiar") {
             img.isTemplate = true
             statusItem.button?.image = img
         }
         let menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
-        menu.addItem(NSMenuItem(title: "Point the Wand   ⌃⌥Space", action: #selector(menuWand), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Point the Pen   ⌃⌥Space", action: #selector(menuWand), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open Chat", action: #selector(openChat), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Show Bubble", action: #selector(menuShowBubble), keyEquivalent: ""))
         hideMenuItem = NSMenuItem(title: "Hide Bubble", action: #selector(menuHideBubble), keyEquivalent: "")
