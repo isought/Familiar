@@ -56,6 +56,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         assistant.onOpenSettings = { [weak self] in self?.openSettings() }
+        if let w = config.cardWidth, let h = config.cardHeight, w >= 340, h >= 400 {
+            BubblePanel.expandedSize = NSSize(width: w, height: h)
+        }
+        assistant.cardSize = BubblePanel.expandedSize
+        assistant.onResizeCard = { [weak self] size, done in
+            guard let self else { return }
+            BubblePanel.expandedSize = size
+            self.assistant.cardSize = size
+            if self.assistant.expanded { self.panel.resizeKeepingTopLeft(to: size) }
+            if done { self.config.cardWidth = size.width; self.config.cardHeight = size.height; self.config.save() }
+        }
+        assistant.onToggleLarge = { [weak self] in
+            guard let self else { return }
+            let large = BubblePanel.largeExpandedSize
+            let target = self.assistant.cardSize.height >= large.height - 1 ? BubblePanel.defaultExpandedSize : large
+            self.assistant.onResizeCard?(target, true)
+        }
         assistant.onPoke = { [weak self] in
             guard let self, self.config.pokeHintsShown < 3 else { return }
             self.config.pokeHintsShown += 1

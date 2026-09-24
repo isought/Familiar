@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -17,6 +18,7 @@ final class Assistant: ObservableObject {
     @Published var status = ""
     @Published var contextLine = "Watching…"
     @Published var suggestions: [String] = []
+    @Published var cardSize = NSSize(width: 400, height: 540)
 
     var config: Config
     let watcher: ContextWatcher
@@ -27,6 +29,8 @@ final class Assistant: ObservableObject {
     var onDragBubble: ((DragPhase) -> Void)?   // the app moves the panel using the global mouse position
     var onOpenSettings: (() -> Void)?
     var onPoke: (() -> Void)?             // single click on the note: reaction only, plus a first-time hint
+    var onResizeCard: ((NSSize, Bool) -> Void)?   // new size, and whether the drag ended (persist)
+    var onToggleLarge: (() -> Void)?
 
     private var client: ClaudeClient?
     private var apiMessages: [[String: Any]] = []

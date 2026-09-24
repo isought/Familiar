@@ -4,7 +4,9 @@ import SwiftUI
 /// Floating, non-activating panel that stays above everything and follows across Spaces.
 final class BubblePanel: NSPanel {
     static let collapsedSize = NSSize(width: 84, height: 84)
-    static let expandedSize = NSSize(width: 400, height: 540)
+    static let defaultExpandedSize = NSSize(width: 400, height: 540)
+    static let largeExpandedSize = NSSize(width: 560, height: 760)
+    nonisolated(unsafe) static var expandedSize = NSSize(width: 400, height: 540)   // current card size (remembered)
 
     init(hideFromScreenShare: Bool) {
         super.init(contentRect: NSRect(origin: .zero, size: BubblePanel.collapsedSize),
@@ -24,6 +26,17 @@ final class BubblePanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// Resize keeping the top-left corner where it is (used by the corner grip).
+    func resizeKeepingTopLeft(to size: NSSize) {
+        var f = frame
+        f.origin.y = f.maxY - size.height
+        f.size = size
+        if let vis = (screen ?? NSScreen.main)?.visibleFrame {
+            f.origin.y = max(f.origin.y, vis.minY)
+        }
+        setFrame(f, display: true)
+    }
 
     func resize(to size: NSSize, animate: Bool) {
         var f = frame
@@ -187,7 +200,7 @@ struct BubbleView: View {
             inputRow
             footer
         }
-        .frame(width: BubblePanel.expandedSize.width - 16, height: BubblePanel.expandedSize.height - 16)
+        .frame(width: state.cardSize.width - 16, height: state.cardSize.height - 16)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.97), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.12)))
         .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
@@ -205,6 +218,8 @@ struct BubbleView: View {
             Spacer()
             Button { state.clearConversation() } label: { Image(systemName: "trash") }
                 .buttonStyle(.borderless).help("Clear conversation").disabled(state.transcript.isEmpty)
+            Button { state.onToggleLarge?() } label: { Image(systemName: state.cardSize.height >= BubblePanel.largeExpandedSize.height - 1 ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
+                .buttonStyle(.borderless).help("Large / normal size")
             Button { state.expanded = false } label: { Image(systemName: "chevron.down") }
                 .buttonStyle(.borderless).help("Collapse")
             Menu {
@@ -314,6 +329,25 @@ struct BubbleView: View {
         .padding(.horizontal, 12).padding(.vertical, 10)
     }
 
+    @State private var gripStart: CGSize?
+
+    private var resizeGrip: some View {
+        Image(systemName: "line.3.horizontal.decrease").rotationEffect(.degrees(-45))
+            .font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
+            .frame(width: 18, height: 18).contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { v in
+                        if gripStart == nil { gripStart = CGSize(width: state.cardSize.width, height: state.cardSize.height) }
+                        let w = max(340, min(1400, gripStart!.width + v.translation.width))
+                        let h = max(400, min(1400, gripStart!.height + v.translation.height))
+                        state.onResizeCard?(NSSize(width: w, height: h), false)
+                    }
+                    .onEnded { _ in gripStart = nil; state.onResizeCard?(state.cardSize, true) }
+            )
+            .help("Drag to resize")
+    }
+
     private var footer: some View {
         HStack {
             if !state.hasApiKey {
@@ -324,9 +358,10 @@ struct BubbleView: View {
             }
             Spacer()
             Text("⌃⌥Space pen")
+            resizeGrip
         }
         .font(.caption2).foregroundStyle(.secondary)
-        .padding(.horizontal, 12).padding(.bottom, 8)
+        .padding(.leading, 12).padding(.trailing, 6).padding(.bottom, 6)
     }
 }
 

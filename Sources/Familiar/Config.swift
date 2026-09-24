@@ -24,6 +24,8 @@ struct Config: Codable {
     var env: [String: String] = [:]          // non-secret variables handed to every script (secrets go to the Keychain)
     var bubbleX: Double? = nil               // remembered bubble position (bottom-left, screen points)
     var bubbleY: Double? = nil
+    var cardWidth: Double? = nil              // remembered chat card size
+    var cardHeight: Double? = nil
     var pokeHintsShown: Int = 0               // the "double-click to chat" callout shows on the first few pokes
     var secretsStore: String = "file"         // "file" (~/.familiar/secrets.json, for dev builds) or "keychain" (Developer ID builds)
 
@@ -74,6 +76,8 @@ struct Config: Codable {
         env = try c.decodeIfPresent([String: String].self, forKey: .env) ?? d.env
         bubbleX = try c.decodeIfPresent(Double.self, forKey: .bubbleX)
         bubbleY = try c.decodeIfPresent(Double.self, forKey: .bubbleY)
+        cardWidth = try c.decodeIfPresent(Double.self, forKey: .cardWidth)
+        cardHeight = try c.decodeIfPresent(Double.self, forKey: .cardHeight)
         pokeHintsShown = try c.decodeIfPresent(Int.self, forKey: .pokeHintsShown) ?? 0
         secretsStore = try c.decodeIfPresent(String.self, forKey: .secretsStore) ?? d.secretsStore
     }
