@@ -35,7 +35,7 @@ build/Familiar.app/Contents/MacOS/Familiar --ask "question" [url] [--shot] [--co
 ```
 First launch creates `~/.familiar/` (or `$FAMILIAR_HOME`) with `config.json`, `tools/` (example packs copied in) and `familiar.log`.
 Right-click the bubble → **Settings…** to enter the Claude API key, pack secrets, the hotkey, hold time and start-at-login.
-Secrets go to the macOS Keychain, never into `config.json`.
+Secrets never go into `config.json`: dev builds keep them owner-only in `~/.familiar/secrets.json` (a self-signed app is re-identified by macOS on every rebuild, so the Keychain would prompt each time); set `secretsStore` to `keychain` for Developer ID builds.
 
 ## Permissions
 Both are user-consent only; MDM cannot pre-grant them. The menu bar menu shows their status and opens the right pane.

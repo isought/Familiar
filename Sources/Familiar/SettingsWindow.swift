@@ -146,7 +146,9 @@ struct SettingsView: View {
                     Spacer()
                     Button("Save", action: onSave).keyboardShortcut(.defaultAction)
                 }
-                Text("Secrets are stored in your macOS Keychain and handed to pack scripts only as environment variables.")
+                Text(Secrets.store == .file
+                     ? "Secrets are stored owner-only in ~/.familiar/secrets.json (dev build) and handed to pack scripts only as environment variables."
+                     : "Secrets are stored in your macOS Keychain and handed to pack scripts only as environment variables.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }

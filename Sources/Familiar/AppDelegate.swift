@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Log.info("Familiar launching (bundle: \(Bundle.main.bundleIdentifier ?? "none"), config: \(Config.file.path))")
         seedToolsIfMissing()
         MascotStyle.current = MascotStyle(rawValue: config.mascotStyle) ?? .innocent
+        Secrets.store = Secrets.Store(rawValue: config.secretsStore) ?? .file
         runner = ScriptRunner(config: config)
         registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
         assistant = Assistant(config: config, watcher: watcher, registry: registry)
@@ -85,7 +86,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupWatcher()
         setupWand()
         requestPermissionsOnFirstRun()
-        Task { await registry.reload() }
+        Task {
+            await registry.reload()
+            Secrets.migrateKeychainToFile(keys: ["ANTHROPIC_API_KEY"] + registry.packs.flatMap(\.requires))
+            if !assistant.hasApiKey { assistant.reconfigure(config) }   // pick up a migrated key
+        }
 
         if !assistant.hasApiKey {
             Log.info("no API key found; set \"apiKey\" in \(Config.file.path) or export ANTHROPIC_API_KEY")
