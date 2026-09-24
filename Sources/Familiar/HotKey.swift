@@ -32,6 +32,23 @@ final class HotKey {
         return (UInt32(code), mods)
     }
 
+    /// "control+option+space" -> "⌃⌥Space", for captions.
+    static func display(_ spec: String) -> String {
+        let parts = spec.lowercased().split(whereSeparator: { $0 == "+" || $0 == " " || $0 == "-" }).map(String.init)
+        guard let key = parts.last else { return spec }
+        var s = ""
+        for m in parts.dropLast() {
+            switch m {
+            case "control", "ctrl", "^": s += "⌃"
+            case "option", "alt", "opt", "⌥": s += "⌥"
+            case "shift", "⇧": s += "⇧"
+            case "command", "cmd", "⌘": s += "⌘"
+            default: break
+            }
+        }
+        return s + (key.count == 1 ? key.uppercased() : key.capitalized)
+    }
+
     private static var registry: [UInt32: HotKey] = [:]
     private static var handlerInstalled = false
 

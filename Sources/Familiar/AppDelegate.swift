@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var screenPermItem: NSMenuItem!
     private var axPermItem: NSMenuItem!
     private var toolsMenuItem: NSMenuItem!
+    private var watchMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.info("Familiar launching (bundle: \(Bundle.main.bundleIdentifier ?? "none"), config: \(Config.file.path))")
@@ -171,6 +172,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         menu.autoenablesItems = false
         menu.addItem(NSMenuItem(title: "Point the Pen   ⌃⌥Space", action: #selector(menuWand), keyEquivalent: ""))
+        watchMenuItem = NSMenuItem(title: "Watch Me", action: #selector(menuWatch), keyEquivalent: "")
+        menu.addItem(watchMenuItem)
         menu.addItem(NSMenuItem(title: "Open Chat", action: #selector(openChat), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Show Bubble", action: #selector(menuShowBubble), keyEquivalent: ""))
         hideMenuItem = NSMenuItem(title: "Hide Bubble", action: #selector(menuHideBubble), keyEquivalent: "")
@@ -201,12 +204,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let (code, mods) = HotKey.parse(spec) else { Log.info("hotkey: cannot parse \"\(spec)\""); return }
         hotKey = HotKey(keyCode: code, modifiers: mods) { [weak self] in
             guard let self else { return }
-            if self.wand.isActive { self.wand.cancel() } else { self.startWand() }
+            if self.assistant.watching { self.assistant.stopWatching() }
+            else if self.wand.isActive { self.wand.cancel() }
+            else { self.startWand() }
         }
     }
 
     private func setupWatcher() {
-        watcher.onChange = { [weak self] ctx in self?.assistant.contextLine = ctx.summaryLine }
+        watcher.onChange = { [weak self] ctx in
+            guard let self, !self.assistant.watching else { return }   // the line reads "Watching…" while recording
+            self.assistant.contextLine = ctx.summaryLine
+        }
         if config.watcherEnabled { watcher.start(interval: config.watcherIntervalSeconds) } else { assistant.contextLine = "Watcher off" }
     }
 
@@ -219,6 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func startWand() {
+        guard !assistant.watching else { assistant.startWand(); return }   // no-op with a status line
         guard !assistant.busy else { assistant.expanded = true; return }
         assistant.expanded = false
         wand.activate()
@@ -250,6 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         watcherMenuItem.title = watcher.isRunning ? "Watcher: On" : "Watcher: Off"
+        watchMenuItem.title = assistant.watching ? "Stop Watching   ⌃⌥Space" : "Watch Me"
         hideMenuItem.isEnabled = panel.isVisible
         let scripts = registry.packs.reduce(0) { $0 + $1.scripts.count }
         let missing = registry.missingRequirements(for: registry.packs)
@@ -261,6 +271,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func menuWand() { startWand() }
+    @objc private func menuWatch() {
+        if assistant.watching { assistant.stopWatching(); if !panel.isVisible { showBubble() } }
+        else { assistant.startWatching() }
+    }
     @objc private func openChat() {
         if !panel.isVisible { showBubble() }
         assistant.expanded = true

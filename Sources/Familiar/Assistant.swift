@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 struct ChatMessage: Identifiable {
-    enum Role { case user, wand, assistant, error }
+    enum Role { case user, wand, assistant, error, draft }   // draft: a note Familiar starts itself (a watched workflow's title)
     let id = UUID()
     let role: Role
     let text: String
@@ -19,6 +19,8 @@ final class Assistant: ObservableObject {
     @Published var contextLine = "Watching…"
     @Published var suggestions: [String] = []
     @Published var cardSize = NSSize(width: 400, height: 540)
+    @Published var watching = false
+    @Published var pendingDraft: PackDraft?
 
     var config: Config
     let watcher: ContextWatcher
@@ -35,6 +37,15 @@ final class Assistant: ObservableObject {
     private var client: ClaudeClient?
     private var apiMessages: [[String: Any]] = []
     private var lastCapture: (at: Date, scene: ScreenContext?)?
+    private(set) lazy var recorder = WatchRecorder(config: config, watcher: watcher)
+    private var pendingRecording: Recording?     // stopped, waiting for a purpose, being written up, or under review
+    private var awaitingPurpose = false
+    private var draftFailed = false
+
+    static let continueTab = "Continue without a description"
+    static let keepTab = "Keep it"
+    static let discardTab = "Discard"
+    static let retryTab = "Try again"
 
     init(config: Config, watcher: ContextWatcher, registry: ToolRegistry) {
         self.config = config
@@ -51,16 +62,170 @@ final class Assistant: ObservableObject {
         suggestions.removeAll()
         status = ""
         lastCapture = nil
+        pendingDraft = nil          // the recording folder stays on disk
+        pendingRecording = nil
+        awaitingPurpose = false
+        draftFailed = false
     }
 
     func startWand() {
         guard !busy else { return }
+        guard !watching else { status = "Watching — stop watching before picking up the pen."; return }
         onStartWand?()
     }
 
     func askSuggestion(_ s: String) {
+        if let rec = pendingRecording {
+            if awaitingPurpose, s == Self.continueTab { awaitingPurpose = false; summarize(rec, purpose: nil); return }
+            if pendingDraft != nil || draftFailed {
+                if s == Self.keepTab { Task { await keep() }; return }
+                if s == Self.discardTab { discard(); return }
+                if s == Self.retryTab { summarize(rec, purpose: rec.meta.purpose); return }
+            }
+        }
         question = s
         ask()
+    }
+
+    // MARK: watch me
+
+    func toggleWatching() { if watching { stopWatching() } else { startWatching() } }
+
+    /// Starts recording: the pad closes, the pen and control are off until the recording stops.
+    func startWatching() {
+        guard !busy, !watching else { return }
+        guard Permissions.screenRecordingGranted else {
+            expanded = true
+            transcript.append(ChatMessage(role: .error, text: ScreenCaptureError.notPermitted.localizedDescription))
+            return
+        }
+        recorder.config = config
+        recorder.hotkeyLabel = HotKey.display(config.hotkey.isEmpty ? "control+option+space" : config.hotkey)
+        do { try recorder.start() } catch {
+            expanded = true
+            transcript.append(ChatMessage(role: .error, text: "Could not start recording: \(error.localizedDescription)"))
+            return
+        }
+        pendingDraft = nil; pendingRecording = nil; awaitingPurpose = false; draftFailed = false
+        watching = true
+        expanded = false
+        status = ""
+        contextLine = "Watching…"
+    }
+
+    /// Stops the recorder and asks, on the pad, what the user was doing.
+    func stopWatching() {
+        guard watching else { return }
+        let rec = recorder.stop(purpose: nil)
+        watching = false
+        contextLine = watcher.current?.summaryLine ?? (watcher.isRunning ? "Watching…" : "Watcher off")
+        expanded = true
+        let seen = rec.events.filter { $0.kind != "scene" }
+        guard !seen.isEmpty else {
+            try? FileManager.default.removeItem(at: rec.dir)
+            transcript.append(ChatMessage(role: .assistant, text: "I didn't see you do anything, so there is nothing to write up."))
+            suggestions = []
+            return
+        }
+        pendingRecording = rec
+        awaitingPurpose = true
+        transcript.append(ChatMessage(role: .assistant, text: "Got it — \(rec.meta.clicks) click\(rec.meta.clicks == 1 ? "" : "s"). What were you doing? Write one line below, or press Continue."))
+        suggestions = [Self.continueTab]
+    }
+
+    /// Asks Claude to write the recording up, then puts the draft on the pad for review.
+    func summarize(_ rec: Recording, purpose: String?) {
+        guard !busy else { return }
+        var rec = rec
+        if let purpose, !purpose.isEmpty { rec.meta.purpose = purpose; try? rec.saveMeta() }
+        pendingRecording = rec
+        pendingDraft = nil
+        draftFailed = false
+        busy = true
+        suggestions = []
+        status = "Writing it up…"
+        guard let client else {
+            transcript.append(ChatMessage(role: .error, text: "No API key. Add it in Familiar Settings, then press Try again."))
+            draftFailed = true; busy = false; status = ""
+            suggestions = [Self.retryTab, Self.discardTab]
+            return
+        }
+        let config = self.config
+        let key = client.apiKey
+        Task {
+            let started = Date()
+            do {
+                let draft = try await WatchSummarizer.summarize(rec, purpose: purpose, config: config, apiKey: key,
+                                                                onStatus: { [weak self] s in Task { @MainActor in self?.status = s == "Thinking…" ? "Writing it up…" : s } })
+                pendingDraft = draft
+                transcript.append(ChatMessage(role: .draft, text: draft.parsed ? draft.workflowTitle : "Could not write this up"))
+                transcript.append(ChatMessage(role: .assistant, text: Self.draftBody(draft, root: registry.root)))
+                suggestions = draft.parsed ? [Self.keepTab, Self.discardTab] : [Self.discardTab]
+                if !draft.parsed { draftFailed = true; suggestions = [Self.retryTab, Self.discardTab] }
+                status = String(format: "draft in %.0fs · confidence %.0f%%", Date().timeIntervalSince(started), draft.confidence * 100)
+            } catch {
+                transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
+                draftFailed = true
+                suggestions = [Self.retryTab, Self.discardTab]
+                status = ""
+            }
+            busy = false
+        }
+    }
+
+    /// Writes the pack files and reloads the tools.
+    func keep() async {
+        guard let draft = pendingDraft, draft.parsed, !busy else { return }
+        busy = true
+        status = "Saving…"
+        do {
+            let files = try PackWriter.write(draft, root: registry.root)
+            await registry.reload()
+            let rel = files.map { $0.path.replacingOccurrences(of: registry.root.path + "/", with: "") }
+            transcript.append(ChatMessage(role: .assistant, text: "Saved into \(registry.root.path)/\(draft.packDir)/:\n" + rel.map { "- \($0)" }.joined(separator: "\n") + "\nIt will be used whenever you are on \(draft.matchURLs.first ?? draft.packName)."))
+            pendingDraft = nil
+            pendingRecording = nil
+            suggestions = []
+            status = ""
+        } catch {
+            transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
+            suggestions = [Self.keepTab, Self.discardTab]
+        }
+        busy = false
+    }
+
+    /// Deletes the recording folder and forgets the draft.
+    func discard() {
+        if let rec = pendingRecording { try? FileManager.default.removeItem(at: rec.dir) }
+        pendingDraft = nil
+        pendingRecording = nil
+        awaitingPurpose = false
+        draftFailed = false
+        suggestions = []
+        status = ""
+        transcript.append(ChatMessage(role: .assistant, text: "Discarded. The recording was deleted and nothing was saved."))
+    }
+
+    /// The draft as it reads on a note: the steps, a short Screens section, the caveats, and where Keep would put it.
+    static func draftBody(_ d: PackDraft, root: URL) -> String {
+        guard d.parsed else {
+            return "I couldn't turn this into a pack entry. Here is what came back:\n\n" + d.raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var s = flatten(d.workflowMarkdown)
+        let screens = flatten(d.screensMarkdown)
+        if !screens.isEmpty { s += "\n\n**Screens**\n" + (screens.count > 1400 ? String(screens.prefix(1400)) + "…" : screens) }
+        if !d.caveats.isEmpty { s += "\n\n" + d.caveats.map { "_\($0)_" }.joined(separator: "\n") }
+        s += "\n\nKeep it → \(root.lastPathComponent)/\(d.packDir)/docs/workflows/\(d.workflowSlug).md"
+        return s
+    }
+
+    /// The pad renders inline Markdown line by line, so headings become bold lines.
+    private static func flatten(_ md: String) -> String {
+        md.components(separatedBy: "\n").map { line -> String in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            guard t.hasPrefix("#") else { return line }
+            return "**" + t.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces) + "**"
+        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Typed question. Always attaches a fresh screenshot as context (the chat card itself is excluded from the capture),
@@ -70,6 +235,11 @@ final class Assistant: ObservableObject {
         guard !q.isEmpty, !busy else { return }
         question = ""
         transcript.append(ChatMessage(role: .user, text: q))
+        if awaitingPurpose, let rec = pendingRecording {   // the line after "what were you doing?" is the purpose
+            awaitingPurpose = false
+            summarize(rec, purpose: q)
+            return
+        }
         let ctx = watcher.current ?? watcher.sample()
 
         Task {
@@ -186,6 +356,7 @@ final class Assistant: ObservableObject {
     func reconfigure(_ newConfig: Config) {
         config = newConfig
         client = newConfig.resolvedApiKey.map { ClaudeClient(config: newConfig, apiKey: $0) }
+        recorder.config = newConfig
         objectWillChange.send()
     }
 
@@ -225,7 +396,7 @@ final class Assistant: ObservableObject {
         let tools = toolDefinitions(ctx)
         let registry = self.registry
         let control = self.control
-        let controlAllowed = config.allowControl && control != nil
+        let controlAllowed = config.allowControl && control != nil && !watching
         control?.reset()
         client.maxToolRounds = controlAllowed ? 40 : 8
         client.shouldStop = { [weak control] in control?.stopped ?? false }

@@ -28,6 +28,10 @@ struct Config: Codable {
     var cardHeight: Double? = nil
     var pokeHintsShown: Int = 0               // the "double-click to chat" callout shows on the first few pokes
     var secretsStore: String = "file"         // "file" (~/.familiar/secrets.json, for dev builds) or "keychain" (Developer ID builds)
+    var watchMaxImages: Int = 60              // Watch me: most images sent to Claude when writing a recording up
+    var watchCropWidth: Int = 900             // Watch me: crop around each click, in screen points
+    var watchCropHeight: Int = 560
+    var recordingsDir: String = ""            // empty = ~/.familiar/recordings
 
     static var dir: URL {
         if let h = ProcessInfo.processInfo.environment["FAMILIAR_HOME"], !h.isEmpty { return URL(fileURLWithPath: (h as NSString).expandingTildeInPath) }
@@ -46,6 +50,10 @@ struct Config: Codable {
 
     var resolvedToolsDir: URL {
         toolsDir.isEmpty ? Config.dir.appendingPathComponent("tools") : URL(fileURLWithPath: (toolsDir as NSString).expandingTildeInPath)
+    }
+
+    var resolvedRecordingsDir: URL {
+        recordingsDir.isEmpty ? Config.dir.appendingPathComponent("recordings") : URL(fileURLWithPath: (recordingsDir as NSString).expandingTildeInPath)
     }
 
     init() {}
@@ -80,6 +88,10 @@ struct Config: Codable {
         cardHeight = try c.decodeIfPresent(Double.self, forKey: .cardHeight)
         pokeHintsShown = try c.decodeIfPresent(Int.self, forKey: .pokeHintsShown) ?? 0
         secretsStore = try c.decodeIfPresent(String.self, forKey: .secretsStore) ?? d.secretsStore
+        watchMaxImages = try c.decodeIfPresent(Int.self, forKey: .watchMaxImages) ?? d.watchMaxImages
+        watchCropWidth = try c.decodeIfPresent(Int.self, forKey: .watchCropWidth) ?? d.watchCropWidth
+        watchCropHeight = try c.decodeIfPresent(Int.self, forKey: .watchCropHeight) ?? d.watchCropHeight
+        recordingsDir = try c.decodeIfPresent(String.self, forKey: .recordingsDir) ?? d.recordingsDir
     }
 
     /// One-time move of the pre-rename home folder (`~/.sidekick`) to `~/.familiar`.

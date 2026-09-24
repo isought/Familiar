@@ -22,6 +22,17 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    gets the shimmer border with a caption of each step; moving the mouse or pressing Esc stops it instantly; it asks
    before Send / Submit / Delete / Pay. `find_on_screen` gives it exact coordinates for labelled controls via Accessibility.
 
+7. **Watch me**: menu bar → **Watch Me** (or the eye on the pad). Do the task the way you normally do, then press ⌃⌥Space or
+   **Stop Watching**. Familiar records clicks (with the real labels of what you clicked, via Accessibility), a crop around each
+   click, a full frame whenever the screen changes, and text typed into named fields (never password fields), into
+   `~/.familiar/recordings/<stamp>/`. It asks what you were doing, writes the recording up through Claude and puts a draft on
+   the pad: numbered steps with the real button and field names, the screens seen, and caveats. **Keep it** writes a tool
+   pack (`SKILL.md`, `docs/screens.md`, `docs/workflows/<task>.md`, `docs/glossary.md`) into `~/.familiar/tools/<site>/`
+   without touching existing files (new workflows get `-2`, `-3`; screens are added only when new); **Discard** deletes the
+   recording. The pen and control are off while it watches. Headless:
+   `--record-synthetic <dir>` (a fake recording from the current screen) and
+   `--summarize-recording <dir> ["purpose"] [--tools-root <dir>] [--keep]` (prints the draft JSON; keeps into a temp folder by default).
+
 ## Requirements
 - macOS 14+, Xcode Command Line Tools (Swift 5.9+). No Xcode needed.
 - `uv` on the build machine (gets bundled into the app; scripts declare deps inline, PEP 723).
@@ -110,6 +121,9 @@ The docs were generated from the app's repo and use its real button labels.
 | bubbleX / bubbleY | | remembered bubble position |
 | watcherEnabled / watcherIntervalSeconds | true / 2 | context polling |
 | maxImageLongEdge | 1568 | screenshot downscale (pixels) |
+| watchMaxImages | 60 | Watch me: most images sent when writing a recording up |
+| watchCropWidth / watchCropHeight | 900 / 560 | Watch me: crop around each click (screen points) |
+| recordingsDir | "" | override the recordings folder (default `~/.familiar/recordings`) |
 
 ## Dev notes
 - macOS binds permission grants to the app's code signature. Ad-hoc builds change every time, so run
@@ -122,6 +136,7 @@ The docs were generated from the app's repo and use its real button labels.
 3. Wrap as a .pkg; IT pushes it via MDM with a PPPC profile that pre-approves Accessibility.
    Screen Recording cannot be pre-approved: the user clicks one prompt on first launch, once per install.
 - Layout, `Sources/Familiar/`: `WandOverlay` (overlay, hit test, cursor), `ScreenCapture` (ScreenCaptureKit, annotate, crop),
+  `WatchRecorder` + `WatchSummarizer` (Watch me: passive recording, write-up, pack writer),
   `ContextWatcher` (Accessibility), `ToolRegistry` + `ScriptRunner` + `BuiltinTools` (packs), `ClaudeClient` (raw HTTP, tool loop),
   `Assistant` (flows, history), `BubblePanel` (NSPanel + SwiftUI), `AppDelegate` (menu bar, hotkey).
 - Python helpers in `Resources/py/`: `introspect.py` (ast-only schema extraction), `run_tool.py` (executes `run(**args)`).
