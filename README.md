@@ -152,11 +152,15 @@ The docs were generated from the app's repo and use its real button labels.
   `scripts/make-dev-cert.sh` once; the build script signs with the `Familiar Dev` identity it creates and grants persist.
   For other people's Macs this is replaced by an Apple Developer ID plus notarization (see Distribution below).
 
-## Distribution (needs an Apple Developer account)
-1. Sign with `Developer ID Application: <name>` and the hardened runtime.
-2. `xcrun notarytool submit --wait`, then `xcrun stapler staple`.
-3. Wrap as a .pkg; IT pushes it via MDM with a PPPC profile that pre-approves Accessibility.
-   Screen Recording cannot be pre-approved: the user clicks one prompt on first launch, once per install.
+## Distribution (Apple Developer account)
+One-time: install a **Developer ID Application** certificate (Keychain Access → Certificate Assistant → Request a
+Certificate From a Certificate Authority, upload the request on the developer portal, install the .cer), and store a
+notarization credential: `xcrun notarytool store-credentials familiar-notary --apple-id EMAIL --team-id TEAMID --password APP_SPECIFIC_PASSWORD`.
+Then `./scripts/release.sh` signs with the hardened runtime, notarizes, staples, and writes `dist/Familiar-<version>.dmg`
+and `.pkg` (signed too if a **Developer ID Installer** certificate exists). `scripts/build.sh` picks the Developer ID
+automatically when present; Developer ID builds keep secrets in the Keychain (`secretsStore: auto`).
+IT can push the .pkg via MDM with a PPPC profile that pre-approves Accessibility; Screen Recording cannot be
+pre-approved, so the user clicks one prompt on first launch, once per install.
 - Layout, `Sources/Familiar/`: `WandOverlay` (overlay, hit test, cursor), `ScreenCapture` (ScreenCaptureKit, annotate, crop),
   `WatchRecorder` + `WatchSummarizer` (Watch me: passive recording, write-up, pack writer),
   `ContextWatcher` (Accessibility), `ToolRegistry` + `ScriptRunner` + `BuiltinTools` (packs), `ClaudeClient` (raw HTTP, tool loop),

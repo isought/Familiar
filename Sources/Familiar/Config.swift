@@ -27,7 +27,7 @@ struct Config: Codable {
     var cardWidth: Double? = nil              // remembered chat card size
     var cardHeight: Double? = nil
     var pokeHintsShown: Int = 0               // the "double-click to chat" callout shows on the first few pokes
-    var secretsStore: String = "file"         // "file" (~/.familiar/secrets.json, for dev builds) or "keychain" (Developer ID builds)
+    var secretsStore: String = "auto"         // "auto": Keychain for Developer ID builds, file for dev builds; or "file" / "keychain"
     var watchMaxImages: Int = 60              // Watch me: most images sent to Claude when writing a recording up
     var watchCropWidth: Int = 900             // Watch me: crop around each click, in screen points
     var watchCropHeight: Int = 560

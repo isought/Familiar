@@ -31,10 +31,19 @@ else
 fi
 
 IDENTITY="${FAMILIAR_SIGN_IDENTITY:-}"
-if [ -z "$IDENTITY" ] && security find-identity -v -p codesigning 2>/dev/null | grep -q "Familiar Dev"; then
-  IDENTITY="Familiar Dev"
-elif [ -z "$IDENTITY" ] && security find-identity -v -p codesigning 2>/dev/null | grep -q "Sidekick Dev"; then
-  IDENTITY="Sidekick Dev"   # identity created before the rename still works
+IDS="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+if [ -z "$IDENTITY" ]; then
+  DEVID="$(echo "$IDS" | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')"
+  if [ -n "$DEVID" ]; then IDENTITY="$DEVID"
+  elif echo "$IDS" | grep -q "Familiar Dev"; then IDENTITY="Familiar Dev"
+  elif echo "$IDS" | grep -q "Sidekick Dev"; then IDENTITY="Sidekick Dev"
+  fi
 fi
-codesign --force --deep --sign "${IDENTITY:--}" "$APP"
+if [[ "$IDENTITY" == Developer\ ID* ]]; then
+  # Notarizable: hardened runtime + secure timestamp, nested executables signed first.
+  [ -x "$RES/bin/uv" ] && codesign --force --options runtime --timestamp --sign "$IDENTITY" "$RES/bin/uv"
+  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+else
+  codesign --force --deep --sign "${IDENTITY:--}" "$APP"
+fi
 echo "built $APP (signed: ${IDENTITY:-ad-hoc}, uv: ${UV:-none})"

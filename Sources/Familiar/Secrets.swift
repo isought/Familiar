@@ -8,7 +8,7 @@ import Security
 enum Secrets {
     enum Store: String { case file, keychain }
     nonisolated(unsafe) static var store: Store = .file
-    static let service = "com.familiar.app"
+    static let service = "com.isought.familiar"
     static var fileURL: URL { Config.dir.appendingPathComponent("secrets.json") }
 
     private static func loadFile() -> [String: String] {
@@ -30,20 +30,24 @@ enum Secrets {
         guard store == .file, loadFile().isEmpty else { return }
         var d: [String: String] = [:]
         for k in keys {
-            if let v = read(k, service: service) ?? read(k, service: legacyService) { d[k] = v }
+            if let v = read(k, service: service) ?? legacyServices.lazy.compactMap({ read(k, service: $0) }).first { d[k] = v }
         }
         if !d.isEmpty, saveFile(d) { Log.info("secrets: migrated \(d.keys.sorted()) from the Keychain to \(fileURL.path)") }
     }
 
-    private static let legacyService = "com.sidekick.app"   // pre-rename entries are copied over on first read
+    private static let legacyServices = ["com.familiar.app", "com.sidekick.app"]   // pre-rename entries are copied over on first read
 
     static func get(_ key: String) -> String? {
         if store == .file { let v = loadFile()[key]?.trimmingCharacters(in: .whitespacesAndNewlines); return (v?.isEmpty ?? true) ? nil : v }
         if let v = read(key, service: service) { return v }
-        if let old = read(key, service: legacyService) {
-            if set(key, old) { SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: legacyService, kSecAttrAccount as String: key] as CFDictionary) }
-            return old
+        for legacy in legacyServices {
+            if let old = read(key, service: legacy) {
+                if set(key, old) { SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: legacy, kSecAttrAccount as String: key] as CFDictionary) }
+                return old
+            }
         }
+        // A dev build may have left the value in the file store; adopt it into the Keychain.
+        if let v = loadFile()[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty, set(key, v) { return v }
         return nil
     }
 

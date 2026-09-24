@@ -33,7 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Log.info("Familiar launching (bundle: \(Bundle.main.bundleIdentifier ?? "none"), config: \(Config.file.path))")
         seedToolsIfMissing()
         MascotStyle.current = MascotStyle(rawValue: config.mascotStyle) ?? .innocent
-        Secrets.store = Secrets.Store(rawValue: config.secretsStore) ?? .file
+        Secrets.store = Secrets.Store(rawValue: config.secretsStore) ?? (Signing.isDeveloperID ? .keychain : .file)
+        Log.info("signing: \(Signing.description); secrets: \(Secrets.store.rawValue)")
         runner = ScriptRunner(config: config)
         registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
         assistant = Assistant(config: config, watcher: watcher, registry: registry)
