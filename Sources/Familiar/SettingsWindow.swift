@@ -11,6 +11,7 @@ final class SettingsModel: ObservableObject {
     @Published var hotkey = ""
     @Published var wandHoldSeconds = 0.8
     @Published var attachScreenshotOnText = true
+    @Published var screenshotMode = "auto"
     @Published var hideFromScreenShare = false
     @Published var startAtLogin = false
     @Published var allowControl = false
@@ -34,6 +35,7 @@ final class SettingsModel: ObservableObject {
         hotkey = config.hotkey
         wandHoldSeconds = config.wandHoldSeconds
         attachScreenshotOnText = config.attachScreenshotOnText
+        screenshotMode = config.screenshotMode
         hideFromScreenShare = config.hideFromScreenShare
         startAtLogin = SMAppService.mainApp.status == .enabled
         allowControl = config.allowControl
@@ -64,7 +66,8 @@ final class SettingsModel: ObservableObject {
         c.apiBaseURL = apiBaseURL.trimmingCharacters(in: .whitespaces)
         c.hotkey = hotkey.trimmingCharacters(in: .whitespaces)
         c.wandHoldSeconds = max(0.3, min(3, wandHoldSeconds))
-        c.attachScreenshotOnText = attachScreenshotOnText
+        c.attachScreenshotOnText = screenshotMode != "never"
+        c.screenshotMode = screenshotMode
         c.hideFromScreenShare = hideFromScreenShare
         c.allowControl = allowControl
         c.mascotStyle = mascotStyle
@@ -122,7 +125,11 @@ struct SettingsView: View {
                     Slider(value: $model.wandHoldSeconds, in: 0.3...2.0, step: 0.1)
                     Text(String(format: "%.1fs", model.wandHoldSeconds)).monospacedDigit().frame(width: 36)
                 }
-                Toggle("Attach a screenshot to typed questions", isOn: $model.attachScreenshotOnText)
+                Picker("Screenshot with typed questions", selection: $model.screenshotMode) {
+                    Text("Auto (when the question is about the screen)").tag("auto")
+                    Text("Always").tag("always")
+                    Text("Never").tag("never")
+                }
                 Toggle("Hide the bubble from screenshots and screen shares", isOn: $model.hideFromScreenShare)
                 Toggle("Start Familiar at login", isOn: $model.startAtLogin)
                 Toggle("Allow Familiar to control the mouse and keyboard when asked", isOn: $model.allowControl)

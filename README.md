@@ -94,7 +94,7 @@ The docs were generated from the app's repo and use its real button labels.
 | model | claude-opus-5 | model id |
 | effort | medium | low / medium / high / xhigh / max |
 | maxTokens | 4096 | answer length cap |
-| attachScreenshotOnText | true | typed questions always attach a fresh screenshot |
+| screenshotMode | auto | `auto`: attach a screenshot when the question sounds screen-related, otherwise the model may call `look_at_screen`; `always`; `never` |
 | screenshotReuseSeconds | 0 | if > 0, quick follow-ups on the same screen reuse the last screenshot within this window |
 | hideFromScreenShare | false | true makes the bubble invisible in screenshots, screen shares and recordings |
 | toolsDir | "" | override tool packs folder |

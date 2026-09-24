@@ -86,6 +86,14 @@ func runHeadlessAsk() async {
         let reply = try await client.converse(system: system, tools: tools, messages: &messages, executor: { name, input, toolset in
             if toolset == "computer" { return await control.perform(name, input) }
             if name == "find_on_screen" { return control.find(input["query"] as? String ?? "") }
+            if name == "look_at_screen" {
+                do {
+                    let raw = try await ScreenCapture.captureDisplay()
+                    guard let shot = ScreenCapture.encode(ScreenCapture.downscale(raw.image, maxLongEdge: config.maxImageLongEdge)) else { return .text("encode failed", isError: true) }
+                    print("  [look_at_screen \(shot.width)x\(shot.height)]")
+                    return .blocks([["type": "image", "source": ["type": "base64", "media_type": shot.mediaType, "data": shot.data.base64EncodedString()]]])
+                } catch { return .text(error.localizedDescription, isError: true) }
+            }
             if BuiltinTools.names.contains(name) { return BuiltinTools.execute(name, input, root: registry.root) }
             guard let s = registry.script(named: name) else { return .text("unknown tool", isError: true) }
             do { return .text(try await runner.run(s, args: input, context: ctx)) } catch { return .text(error.localizedDescription, isError: true) }

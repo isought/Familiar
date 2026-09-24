@@ -10,7 +10,8 @@ struct Config: Codable {
     var watcherEnabled: Bool = true
     var watcherIntervalSeconds: Double = 2
     var maxImageLongEdge: Int = 1568
-    var attachScreenshotOnText: Bool = true
+    var attachScreenshotOnText: Bool = true   // legacy; false maps to screenshotMode "never"
+    var screenshotMode: String = "auto"      // "auto": attach when the question sounds screen-related, else the model may look; "always"; "never"
     var screenshotReuseSeconds: Double = 0   // >0: reuse the last screenshot for follow-ups on the same screen within this window
     var hideFromScreenShare: Bool = false    // true = bubble invisible in screenshots, screen shares and recordings
     var toolsDir: String = ""                // empty = ~/.familiar/tools
@@ -59,6 +60,7 @@ struct Config: Codable {
         watcherIntervalSeconds = try c.decodeIfPresent(Double.self, forKey: .watcherIntervalSeconds) ?? d.watcherIntervalSeconds
         maxImageLongEdge = try c.decodeIfPresent(Int.self, forKey: .maxImageLongEdge) ?? d.maxImageLongEdge
         attachScreenshotOnText = try c.decodeIfPresent(Bool.self, forKey: .attachScreenshotOnText) ?? d.attachScreenshotOnText
+        screenshotMode = try c.decodeIfPresent(String.self, forKey: .screenshotMode) ?? (attachScreenshotOnText ? d.screenshotMode : "never")
         screenshotReuseSeconds = try c.decodeIfPresent(Double.self, forKey: .screenshotReuseSeconds) ?? d.screenshotReuseSeconds
         hideFromScreenShare = try c.decodeIfPresent(Bool.self, forKey: .hideFromScreenShare) ?? d.hideFromScreenShare
         toolsDir = try c.decodeIfPresent(String.self, forKey: .toolsDir) ?? d.toolsDir

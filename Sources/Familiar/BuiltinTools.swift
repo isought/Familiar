@@ -4,7 +4,7 @@ import Foundation
 
 /// Tools implemented natively: file access over the tools folder, and reading the current window's text.
 enum BuiltinTools {
-    static let names: Set<String> = ["read_file", "grep", "read_screen"]
+    static let names: Set<String> = ["read_file", "grep", "read_screen", "look_at_screen"]
 
     static var definitions: [[String: Any]] {
         [
@@ -17,6 +17,9 @@ enum BuiltinTools {
                 "pattern": ["type": "string", "description": "Regular expression"],
                 "path": ["type": "string", "description": "Optional sub-folder to limit the search, e.g. \"expenses\""],
              ], "required": ["pattern"]]],
+            ["name": "look_at_screen",
+             "description": "Take a fresh screenshot of the display the user is working on and return it. Use only when the question is about what is on screen and no current screenshot was provided.",
+             "input_schema": ["type": "object", "properties": [:]]],
             ["name": "read_screen",
              "description": "Return the text content of the user's current window via Accessibility (labels, values, buttons, links). Use it to read small text, dropdown values or error messages precisely.",
              "input_schema": ["type": "object", "properties": [:]]],
@@ -48,6 +51,8 @@ enum BuiltinTools {
                 if hits.count >= 60 { hits.append("…(more matches omitted)"); break }
             }
             return .text(hits.isEmpty ? "No matches." : hits.joined(separator: "\n"))
+        case "look_at_screen":
+            return .text("look_at_screen must be handled by the caller.", isError: true)   // async capture; see Assistant
         case "read_screen":
             let text = ScreenText.dumpFrontmostWindow()
             return .text(text.isEmpty ? "Nothing readable (is Accessibility permission granted?)" : text)

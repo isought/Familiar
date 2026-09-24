@@ -70,7 +70,14 @@ final class Assistant: ObservableObject {
 
         Task {
             var content: [[String: Any]] = []
-            if config.attachScreenshotOnText, needsFreshCapture(for: ctx) {
+            let attach: Bool
+            switch config.screenshotMode {
+            case "always": attach = true
+            case "never": attach = false
+            default: attach = Self.soundsScreenRelated(q)
+            }
+            Log.info("ask: screenshot \(attach ? "attached" : "skipped") (mode \(config.screenshotMode))")
+            if attach, needsFreshCapture(for: ctx) {
                 status = "Capturing screen…"
                 do {
                     let raw = try await ScreenCapture.captureDisplay()
@@ -123,6 +130,31 @@ final class Assistant: ObservableObject {
     }
 
     // MARK: internals
+
+    /// Cheap intent guess for typed questions: deictic words and UI nouns mean "about the screen".
+    static func soundsScreenRelated(_ q: String) -> Bool {
+        let t = " " + q.lowercased().replacingOccurrences(of: "[^a-z0-9' ]", with: " ", options: .regularExpression) + " "
+        if t.split(separator: " ").count <= 3 { return true }   // "why?", "and this?", "what now" refer to the screen
+        let cues = [" this ", " that ", " these ", " those ", " here ", " it ", " its ", " screen", " page", " button", " field",
+                    " form", " tab ", " menu", " dialog", " popup", " error", " message", " window", " greyed", " grayed",
+                    " disabled", " highlighted", " selected", " why is", " why can't", " why cant", " why does", " what does",
+                    " what is this", " what's this", " where is", " where's", " which one", " on my screen", " in front of me",
+                    " cell", " column", " row ", " sheet", " formula", " dropdown", " checkbox", " link", " icon"]
+        return cues.contains { t.contains($0) }
+    }
+
+    /// Fresh screenshot for the look_at_screen tool.
+    private func lookAtScreen(_ ctx: ScreenContext?) async -> ToolResult {
+        do {
+            let raw = try await ScreenCapture.captureDisplay()
+            guard let shot = ScreenCapture.encode(ScreenCapture.downscale(raw.image, maxLongEdge: config.maxImageLongEdge)) else {
+                return .text("Could not encode the screenshot.", isError: true)
+            }
+            lastCapture = (Date(), ctx)
+            Log.info("look_at_screen: \(shot.width)x\(shot.height) \(shot.sizeKB)KB")
+            return .blocks([imageBlock(shot)])
+        } catch { return .text(error.localizedDescription, isError: true) }
+    }
 
     private func needsFreshCapture(for ctx: ScreenContext?) -> Bool {
         guard config.screenshotReuseSeconds > 0, let last = lastCapture else { return true }
@@ -193,7 +225,7 @@ final class Assistant: ObservableObject {
         control?.reset()
         client.maxToolRounds = controlAllowed ? 40 : 8
         client.shouldStop = { [weak control] in control?.stopped ?? false }
-        let executor: ToolExecutor = { name, input, toolset in
+        let executor: ToolExecutor = { [weak self] name, input, toolset in
             if toolset == "computer" {
                 guard controlAllowed, let control else { return .text("Computer control is off. The user can enable it in Familiar Settings.", isError: true) }
                 return await control.perform(name, input)
@@ -201,6 +233,10 @@ final class Assistant: ObservableObject {
             if name == "find_on_screen" {
                 guard controlAllowed, let control else { return .text("Computer control is off.", isError: true) }
                 return control.find(input["query"] as? String ?? "")
+            }
+            if name == "look_at_screen" {
+                guard let self else { return .text("unavailable", isError: true) }
+                return await self.lookAtScreen(ctx)
             }
             if BuiltinTools.names.contains(name) {
                 return BuiltinTools.execute(name, input, root: registry.root)
