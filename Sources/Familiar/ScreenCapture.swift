@@ -113,6 +113,9 @@ enum ScreenCapture {
         return nil
     }
 
+    /// JPEG bytes at the given quality (for images kept on disk, e.g. Watch me recordings).
+    static func jpeg(_ image: CGImage, quality: Double = 0.8) -> Data? { encode(image, type: .jpeg, quality: quality) }
+
     private static func context(_ w: Int, _ h: Int) -> CGContext? {
         CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)

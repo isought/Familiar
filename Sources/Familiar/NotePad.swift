@@ -79,7 +79,7 @@ struct Note: Identifiable {
         var out: [Note] = []
         for m in transcript {
             switch m.role {
-            case .user, .wand:
+            case .user, .wand, .draft, .learned:
                 out.append(Note(id: m.id, heading: m, answers: []))
             case .assistant:
                 if let i = out.indices.last, !out[i].hasAnswer { out[i].answers.append(m) }
@@ -175,6 +175,9 @@ struct StickyNoteView: View {
         VStack(alignment: .leading, spacing: 6) {
             if m.role == .wand {
                 Label("You pointed at", systemImage: "pencil.tip")
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(Pad.penInk)
+            } else if m.role == .draft || m.role == .learned {
+                Label(m.role == .draft ? "Learned by watching · draft" : "Learned by watching", systemImage: "eye")
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(Pad.penInk)
             }
             Text(m.text).font(HandFont.font(size: 18)).foregroundStyle(Pad.ink).textSelection(.enabled)

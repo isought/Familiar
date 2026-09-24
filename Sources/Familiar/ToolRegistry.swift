@@ -112,10 +112,11 @@ final class ToolRegistry {
         let docsDir = pack.dir.appendingPathComponent("docs")
         guard let e = FileManager.default.enumerator(at: docsDir, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
         var out: [DocFile] = []
+        let base = docsDir.resolvingSymlinksInPath().path + "/"   // the enumerator may hand back resolved paths (/private/tmp vs /tmp)
         for case let url as URL in e {
             guard ["md", "markdown", "txt"].contains(url.pathExtension.lowercased()),
                   let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            let rel = url.path.replacingOccurrences(of: root.path + "/", with: "")
+            let rel = pack.dirName + "/docs/" + url.resolvingSymlinksInPath().path.replacingOccurrences(of: base, with: "")
             out.append(DocFile(relPath: rel, text: text))
         }
         return out.sorted { $0.relPath < $1.relPath }

@@ -8,6 +8,8 @@ struct AXElementInfo {
     var value: String?
     var description: String?
     var frame: NSRect?     // AppKit global coords
+    var subrole: String? = nil       // AXSecureTextField marks a password field
+    var placeholder: String? = nil
 
     /// e.g. `button “Submit”` or `text field “Cost Center” = “”`
     var label: String {
@@ -25,6 +27,7 @@ struct WandTarget {
     let element: AXElementInfo?
     let windowOwner: String?
     let windowTitle: String?
+    var ownerBundleID: String? = nil
 
     var shortLabel: String {
         if let e = element {
@@ -115,14 +118,17 @@ final class WandController {
                                      title: AX.string(el, kAXTitleAttribute),
                                      value: AX.string(el, kAXValueAttribute),
                                      description: AX.string(el, kAXDescriptionAttribute),
-                                     frame: Self.frame(of: el, primaryMaxY: primaryMaxY))
+                                     frame: Self.frame(of: el, primaryMaxY: primaryMaxY),
+                                     subrole: AX.string(el, kAXSubroleAttribute),
+                                     placeholder: AX.string(el, kAXPlaceholderValueAttribute))
                 if (info?.title ?? "").isEmpty, (info?.description ?? "").isEmpty,
                    let parent = AX.element(el, kAXParentAttribute), let pt = AX.string(parent, kAXTitleAttribute), !pt.isEmpty {
                     info?.description = pt
                 }
             }
         }
-        return WandTarget(screenPoint: point, element: info, windowOwner: owner, windowTitle: title)
+        let bundle = ownerPID.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
+        return WandTarget(screenPoint: point, element: info, windowOwner: owner, windowTitle: title, ownerBundleID: bundle)
     }
 
     private static func frame(of el: AXUIElement, primaryMaxY: CGFloat) -> NSRect? {

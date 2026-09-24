@@ -85,6 +85,7 @@ struct BubbleView: View {
     private var mood: MascotMood {
         if charging { return .charging }
         if sense.controlActive { return .onIt }
+        if state.watching { return .curious }
         if state.busy { return .thinking }
         if let r = reaction { return r }
         return sense.pointerNear ? .curious : .idle
@@ -122,6 +123,7 @@ struct BubbleView: View {
         .contextMenu {
             Button("Open chat") { state.expanded = true }
             Button("Point the pen") { state.startWand() }
+            Button(state.watching ? "Stop watching" : "Watch me") { state.toggleWatching() }
             Divider()
             Button("Settings…") { state.onOpenSettings?() }
             Button("Hide bubble") { state.onHideBubble?() }
@@ -160,7 +162,9 @@ struct BubbleView: View {
             cast = true
             charging = false
             withAnimation(.easeOut(duration: 0.2)) { charge = 0 }
-            if state.busy { state.expanded = true } else { state.startWand() }
+            MainActor.assumeIsolated {   // the pad says why the pen is off while busy or watching
+                if state.busy || state.watching { state.expanded = true } else { state.startWand() }
+            }
         }
         RunLoop.main.add(t, forMode: .common)
         chargeTimer = t
@@ -199,6 +203,7 @@ struct BubbleView: View {
     /// The character looking over the newest note: reading while busy, on it while the ink goes down, then the same
     /// brief happy/sad the orb shows; curious over the empty pad; sad while the last word on the pad is an error.
     private var peekMood: MascotMood {
+        if state.watching { return .curious }
         if state.busy { return .thinking }
         if ledger.isRevealing { return .onIt }
         if let r = reaction { return r }
@@ -240,6 +245,8 @@ struct BubbleView: View {
                 Text(state.contextLine).font(.caption).foregroundStyle(Pad.deskInkSoft(dark)).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
+            Button { state.toggleWatching() } label: { Image(systemName: state.watching ? "eye.fill" : "eye") }
+                .buttonStyle(.borderless).help(state.watching ? "Stop watching" : "Watch me do something, then write it up as a tool pack").disabled(state.busy)
             Button { state.clearConversation() } label: { Image(systemName: "trash") }
                 .buttonStyle(.borderless).help("Clear the pad").disabled(state.transcript.isEmpty)
             Button { state.onToggleLarge?() } label: { Image(systemName: state.cardSize.height >= BubblePanel.largeExpandedSize.height - 1 ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
@@ -391,7 +398,7 @@ struct BubbleView: View {
                 Text(state.status)
             }
             Spacer()
-            Text("⌃⌥Space pen")
+            Text(state.watching ? "⌃⌥Space stop watching" : "⌃⌥Space pen")
             resizeGrip
         }
         .font(.caption2).foregroundStyle(Pad.deskInkSoft(dark))
