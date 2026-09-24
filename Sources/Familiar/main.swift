@@ -208,8 +208,90 @@ func runRenderMascot() {
     exit(0)
 }
 
+/// `Familiar --render-card <dir>`: render the expanded chat card (the sticky-note pad) with a sample conversation at the
+/// default 400x540 and the large 560x760, @2x, plus a dark-appearance variant of the default size, then exit.
+/// Files: pad-400.png, pad-560.png, pad-400-dark.png. Used to eyeball the pad without launching the app.
+@MainActor
+func runRenderCard() {
+    let args = CommandLine.arguments
+    guard let i = args.firstIndex(of: "--render-card"), i + 1 < args.count else { print("usage: --render-card <dir>"); exit(2) }
+    let dir = URL(fileURLWithPath: args[i + 1])
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+    var config = Config()
+    config.apiKey = "render-only"   // so the footer shows the status line instead of the no-key button; nothing is sent
+    let state = Assistant(config: config, watcher: ContextWatcher(),
+                          registry: ToolRegistry(root: FileManager.default.temporaryDirectory, runner: ScriptRunner(config: config)))
+    state.expanded = true
+    state.contextLine = "Google Chrome · New Report - Concur"
+    state.transcript = [
+        ChatMessage(role: .wand, text: "Cost Center (dropdown, empty)"),
+        ChatMessage(role: .assistant, text: """
+            That's the **Cost Center** field: it tells Finance which team's budget pays for this report. It's required, so the form won't submit while it's empty.
+            To fill it:
+            1. Click the dropdown and start typing your team name — the list filters as you type.
+            2. Pick the entry that ends in your department code (yours is usually 4310).
+            3. If you don't see your team, choose "Other" and add a line in Comments.
+            If this report is for a client project, use the project's cost center instead of your own.
+            """),
+        ChatMessage(role: .user, text: "how do I split this across two cost centers"),
+        ChatMessage(role: .assistant, text: """
+            You can't split at the report level, but you can per line item.
+            Open an expense line, click **Allocate** (bottom of the line editor), then add a second row and set a percentage or an amount for each cost center. The two rows must add up to 100%.
+            Do that for every line you want shared; the rest stays on the report's default cost center.
+            """),
+        ChatMessage(role: .error, text: "Waxwing API rejected the request (401). Check the API key in Settings and try again."),
+    ]
+    state.suggestions = ["Why is it required?", "Fill it for me", "Show my reports"]
+    state.busy = false
+    state.status = "3,652 in · 312 out · 2 tool calls · 6.1s"
+
+    // ImageRenderer only draws pure SwiftUI; the card's ScrollView, TextField, buttons and Menu are AppKit-backed and come
+    // out as placeholders. So the card is hosted in an off-screen window and its view tree is drawn into a 2x bitmap.
+    func render(_ size: NSSize, dark: Bool, _ name: String) {
+        state.cardSize = size
+        let view = BubbleView(state: state)
+            .environment(\.padStatic, true)
+            .environment(\.colorScheme, dark ? .dark : .light)
+            .frame(width: size.width, height: size.height)
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.contentView = hosting
+        hosting.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))   // let SwiftUI lay the lazy stack out and scroll to the newest note
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2), bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { print("rep failed: \(name)"); return }
+        rep.size = size   // points; twice as many pixels = @2x
+        hosting.cacheDisplay(in: hosting.bounds, to: rep)
+        guard let cg = rep.cgImage else { print("render failed: \(name)"); return }
+        guard let data = rep.representation(using: .png, properties: [:]) else { print("encode failed: \(name)"); return }
+        do { try data.write(to: dir.appendingPathComponent(name)); print("wrote \(name) \(cg.width)x\(cg.height)") }
+        catch { print("write failed: \(name): \(error)") }
+    }
+    print("heading font: \(HandFont.family ?? "system rounded")")
+    render(BubblePanel.defaultExpandedSize, dark: false, "pad-400.png")
+    render(BubblePanel.largeExpandedSize, dark: false, "pad-560.png")
+    render(BubblePanel.defaultExpandedSize, dark: true, "pad-400-dark.png")
+    if args.contains("--states") {   // extra checks: the empty pad, and a pick being written up
+        let full = state.transcript, sugg = state.suggestions
+        state.transcript = []; state.suggestions = []; state.status = ""
+        render(BubblePanel.defaultExpandedSize, dark: false, "pad-400-empty.png")
+        state.transcript = Array(full.prefix(3)); state.busy = true; state.status = "Reading the page…"
+        render(BubblePanel.defaultExpandedSize, dark: false, "pad-400-busy.png")
+        state.transcript = full; state.suggestions = sugg; state.busy = false
+    }
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--render-mascot") {
     MainActor.assumeIsolated { runRenderMascot() }
+} else if CommandLine.arguments.contains("--render-card") {
+    MainActor.assumeIsolated { runRenderCard() }
 } else if CommandLine.arguments.contains("--ask") {
     Task { @MainActor in
         await runHeadlessAsk()

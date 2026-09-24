@@ -188,36 +188,46 @@ struct BubbleView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + d) { if reaction == m { reaction = nil } }
     }
 
-    // MARK: expanded card
+    // MARK: expanded card = the pad
+
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.padStatic) private var padStatic
+    @State private var ledger = RevealLedger()
+    private var dark: Bool { scheme == .dark }
 
     private var card: some View {
-        VStack(spacing: 0) {
+        ledger.seed(state.transcript)
+        return VStack(spacing: 0) {
             header
-            Divider()
             transcript
-            Divider()
-            if !state.suggestions.isEmpty { suggestionRow }
             inputRow
             footer
         }
         .frame(width: state.cardSize.width - 16, height: state.cardSize.height - 16)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.97), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.12)))
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Pad.desk(dark))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(RadialGradient(colors: [.clear, .black.opacity(dark ? 0.35 : 0.10)], center: UnitPoint(x: 0.5, y: 0.35), startRadius: 120, endRadius: 620)))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(dark ? Color.white.opacity(0.10) : Color(red: 0.45, green: 0.36, blue: 0.24).opacity(0.35)))
         .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
         .padding(8)
         .onAppear { inputFocused = true }
+        .onDisappear { ledger.reset() }
     }
 
+    /// The pad's binding strip: the mascot, the title in its own hand, and the controls.
     private var header: some View {
         HStack(spacing: 8) {
-            MascotView(mood: state.busy ? .thinking : .idle, lookAt: sense.gaze, size: 28, animated: sense.visible, decorations: false).frame(width: 28, height: 28)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Familiar").font(.headline)
-                Text(state.contextLine).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            MascotView(mood: state.busy ? .thinking : .idle, lookAt: sense.gaze, size: 28, animated: sense.visible && !padStatic, decorations: false).frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Familiar").font(HandFont.font(size: 17)).foregroundStyle(Pad.deskInk(dark))
+                Text(state.contextLine).font(.caption).foregroundStyle(Pad.deskInkSoft(dark)).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
             Button { state.clearConversation() } label: { Image(systemName: "trash") }
-                .buttonStyle(.borderless).help("Clear conversation").disabled(state.transcript.isEmpty)
+                .buttonStyle(.borderless).help("Clear the pad").disabled(state.transcript.isEmpty)
             Button { state.onToggleLarge?() } label: { Image(systemName: state.cardSize.height >= BubblePanel.largeExpandedSize.height - 1 ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
                 .buttonStyle(.borderless).help("Large / normal size")
             Button { state.expanded = false } label: { Image(systemName: "chevron.down") }
@@ -229,7 +239,15 @@ struct BubbleView: View {
             } label: { Image(systemName: "ellipsis.circle") }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("More")
         }
+        .foregroundStyle(Pad.deskInk(dark).opacity(0.8))
         .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(alignment: .bottom) {
+            ZStack(alignment: .bottom) {
+                Pad.binding(dark)
+                Rectangle().fill(Pad.bindingEdge(dark)).frame(height: 1)
+                Rectangle().fill(Color.white.opacity(dark ? 0.04 : 0.35)).frame(height: 1).padding(.bottom, 1)
+            }
+        }
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 4, coordinateSpace: .global)
@@ -238,102 +256,98 @@ struct BubbleView: View {
         )
     }
 
+    /// The notes, oldest at the top, newest at the bottom and on top of the pile.
     private var transcript: some View {
-        ScrollViewReader { proxy in
+        let notes = Note.group(state.transcript)
+        let tabsOn = state.busy ? nil : notes.last { $0.answers.contains { $0.role == .assistant } }?.id   // follow-ups stick to the last real answer
+        return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if state.transcript.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Point the pen at anything on screen and I'll tell you what it is and what you can do about it.")
-                            Text("Or just type a question below.").foregroundStyle(.secondary)
-                        }.font(.callout).padding(.top, 8)
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if notes.isEmpty { welcomeNote }
+                    ForEach(Array(notes.enumerated()), id: \.element.id) { i, n in
+                        let latest = i == notes.count - 1
+                        StickyNoteView(note: n, index: i, isLatest: latest, busy: state.busy && latest, status: state.status,
+                                       suggestions: n.id == tabsOn ? state.suggestions : [], ledger: ledger,
+                                       onSuggest: { state.askSuggestion($0) })
+                            .id(n.id)
                     }
-                    ForEach(state.transcript) { m in messageRow(m).id(m.id) }
-                    if state.busy {
+                    if state.busy, notes.last?.answers.isEmpty == false || notes.isEmpty {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
-                            Text(state.status).font(.caption).foregroundStyle(.secondary)
-                        }.id("busy")
+                            Text(state.status).font(.caption).foregroundStyle(Pad.deskInkSoft(dark))
+                        }.padding(.horizontal, 8).id("busy")
                     }
                 }
-                .padding(12)
+                .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 12)
             }
-            .onChange(of: state.transcript.count) { _, _ in withAnimation { proxy.scrollTo(state.transcript.last?.id, anchor: .bottom) } }
+            .onChange(of: state.transcript.count) { _, _ in
+                withAnimation { proxy.scrollTo(Note.id(containing: state.transcript.last?.id, in: Note.group(state.transcript)), anchor: .bottom) }
+            }
             .onChange(of: state.busy) { _, busy in if busy { withAnimation { proxy.scrollTo("busy", anchor: .bottom) } } }
+            .onAppear { proxy.scrollTo(notes.last?.id, anchor: .bottom) }   // the pad opens on the newest note
         }
     }
 
-    @ViewBuilder
-    private func messageRow(_ m: ChatMessage) -> some View {
-        switch m.role {
-        case .user:
-            HStack { Spacer(minLength: 40)
-                Text(m.text).textSelection(.enabled)
-                    .padding(10).background(Color.accentColor.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
-                    .foregroundStyle(.white)
-            }
-        case .wand:
-            HStack { Spacer(minLength: 40)
-                Label(m.text, systemImage: "pencil.tip")
-                    .padding(10).background(Color.purple.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
-                    .foregroundStyle(.white)
-            }
-        case .assistant:
-            HStack(alignment: .top) {
-                rendered(m.text).textSelection(.enabled)
-                    .padding(10).background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
-                Spacer(minLength: 20)
-            }
-        case .error:
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                Text(m.text).font(.callout).textSelection(.enabled)
-            }
+    private var welcomeNote: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Hello!").font(HandFont.font(size: 17)).foregroundStyle(Pad.ink)
+            InkLine(wobble: 0.6).stroke(Pad.ink.opacity(0.22), lineWidth: 1).frame(height: 3)
+            Text("Point the pen at anything on screen and I'll tell you what it is and what you can do about it.")
+            Text("Or just write to me below.").foregroundStyle(Pad.inkSoft)
         }
+        .font(Pad.body).foregroundStyle(Pad.ink).lineSpacing(3)
+        .padding(EdgeInsets(top: 16, leading: 16, bottom: 20, trailing: 16))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(NoteSheetView(curl: 24, dark: dark))
+        .overlay(alignment: .topLeading) { Tape().offset(x: 22, y: -6) }
+        .padding(.top, 6)
+        .rotationEffect(.degrees(-1.2))
+        .environment(\.colorScheme, .light)
     }
 
-    private func rendered(_ text: String) -> Text {
-        let lines = text.components(separatedBy: "\n").map { line -> Text in
-            if let a = try? AttributedString(markdown: line, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) { return Text(a) }
-            return Text(line)
-        }
-        return lines.dropFirst().reduce(lines.first ?? Text("")) { $0 + Text("\n") + $1 }
-    }
-
-    private var suggestionRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(state.suggestions, id: \.self) { s in
-                    Button(s) { state.askSuggestion(s) }
-                        .buttonStyle(.bordered).controlSize(.small).disabled(state.busy)
+    /// A lined strip of paper to write on, the pen to pick up, and a nib to send.
+    private var inputRow: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                TextField("Write to me…", text: $state.question, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(Pad.body).foregroundStyle(Pad.ink)
+                    .lineLimit(1...4)
+                    .focused($inputFocused)
+                    .onSubmit { state.ask() }
+                InkLine(wobble: 0.5).stroke(Pad.ink.opacity(0.30), lineWidth: 1).frame(height: 3)
+            }
+            .padding(.bottom, 1)
+            Button { state.startWand() } label: { Image(systemName: "pencil.and.outline").font(.system(size: 17, weight: .medium)).foregroundStyle(Pad.penInk) }
+                .buttonStyle(.plain).disabled(state.busy).help("Pick up the pen (⌃⌥Space)")
+                .opacity(state.busy ? 0.4 : 1)
+            Button { state.ask() } label: {
+                ZStack {
+                    Circle().fill(Pad.ink).frame(width: 26, height: 26)
+                    Image(systemName: "pencil.tip").font(.system(size: 14, weight: .semibold)).foregroundStyle(Pad.paperTop)
                 }
             }
-            .padding(.horizontal, 12).padding(.top, 8)
+            .buttonStyle(.plain)
+            .disabled(state.busy || state.question.trimmingCharacters(in: .whitespaces).isEmpty)
+            .opacity(state.busy || state.question.trimmingCharacters(in: .whitespaces).isEmpty ? 0.35 : 1)
+            .keyboardShortcut(.return, modifiers: .command)
+            .help("Send (⌘↩)")
         }
-    }
-
-    private var inputRow: some View {
-        HStack(spacing: 8) {
-            TextField("Ask about your screen…", text: $state.question, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...4)
-                .focused($inputFocused)
-                .onSubmit { state.ask() }
-            Button { state.startWand() } label: { Image(systemName: "pencil.tip").font(.title3) }
-                .buttonStyle(.borderless).disabled(state.busy).help("Pick up the pen (⌃⌥Space)")
-            Button { state.ask() } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
-                .buttonStyle(.borderless)
-                .disabled(state.busy || state.question.trimmingCharacters(in: .whitespaces).isEmpty)
-                .keyboardShortcut(.return, modifiers: .command)
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background {
+            RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Pad.fieldPaper)
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Pad.tabEdge.opacity(0.5), lineWidth: 0.7))
+                .shadow(color: .black.opacity(dark ? 0.4 : 0.14), radius: 3, y: 1.5)
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 8)
+        .environment(\.colorScheme, .light)   // the strip is paper: light controls on it in both appearances
     }
 
     @State private var gripStart: CGSize?
 
     private var resizeGrip: some View {
         Image(systemName: "line.3.horizontal.decrease").rotationEffect(.degrees(-45))
-            .font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
+            .font(.system(size: 10, weight: .bold)).foregroundStyle(Pad.deskInk(dark).opacity(0.4))
             .frame(width: 18, height: 18).contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
@@ -360,8 +374,8 @@ struct BubbleView: View {
             Text("⌃⌥Space pen")
             resizeGrip
         }
-        .font(.caption2).foregroundStyle(.secondary)
-        .padding(.leading, 12).padding(.trailing, 6).padding(.bottom, 6)
+        .font(.caption2).foregroundStyle(Pad.deskInkSoft(dark))
+        .padding(.leading, 14).padding(.trailing, 6).padding(.bottom, 6)
     }
 }
 
