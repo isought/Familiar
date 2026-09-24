@@ -12,7 +12,7 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    shimmering border, the element under the quill is outlined, and a click sends a screenshot (ringed at the click) plus a
    zoomed crop to Claude.
    The reply names what you pointed at, explains its state, and offers tappable follow-ups.
-4. **Chat**: click the note and type, for questions that have no single thing to point at. The note reacts as it goes:
+4. **Chat**: double-click the note and type, for questions that have no single thing to point at. A single click just pokes it. The note reacts as it goes:
    curious when you hover, thinking while it works, happy or sad when the answer lands.
 5. Claude can call the pack's scripts, `read_file` / `grep` over the docs, and `read_screen` (accessibility text).
 6. **Control** (off by default, Settings → "Allow Familiar to control the mouse and keyboard"): ask it to do something

@@ -55,6 +55,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         assistant.onOpenSettings = { [weak self] in self?.openSettings() }
+        assistant.onPoke = { [weak self] in
+            guard let self, self.config.pokeHintsShown < 3 else { return }
+            self.config.pokeHintsShown += 1
+            self.config.save()
+            self.hideHint.show(under: self.panel.frame, title: "Double-click to chat", subtitle: "Hold the note to pick up the pen", seconds: 2.5) { [weak self] in
+                self?.assistant.expanded = true
+            }
+        }
         runner.extraEnv = config.env
         control.maxLongEdge = config.maxImageLongEdge
         control.onCaption = { [weak self] c in self?.assistant.status = c }

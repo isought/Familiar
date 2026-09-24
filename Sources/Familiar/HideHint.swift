@@ -8,8 +8,13 @@ final class HideHint {
     private var dismissWork: DispatchWorkItem?
 
     func show(under anchor: NSRect, onRestore: @escaping () -> Void) {
+        show(under: anchor, title: "Familiar is up here now", subtitle: "Click the pen icon to bring it back", seconds: 4.5, onTap: onRestore)
+    }
+
+    /// Generic callout with an arrow pointing up at `anchor`.
+    func show(under anchor: NSRect, title: String, subtitle: String, seconds: Double, onTap: @escaping () -> Void) {
         dismiss(animated: false)
-        let width: CGFloat = 250, height: CGFloat = 64
+        let width: CGFloat = max(250, CGFloat(max(title.count, subtitle.count)) * 7 + 60), height: CGFloat = 64
         let rect = NSRect(x: anchor.midX - width / 2, y: anchor.minY - height, width: width, height: height)
         let p = NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.level = .popUpMenu
@@ -20,8 +25,8 @@ final class HideHint {
         p.hidesOnDeactivate = false
         p.isReleasedWhenClosed = false
         p.alphaValue = 0
-        p.contentView = NSHostingView(rootView: HideHintView(arrowX: width / 2) { [weak self] in
-            onRestore()
+        p.contentView = NSHostingView(rootView: HideHintView(arrowX: width / 2, title: title, subtitle: subtitle) { [weak self] in
+            onTap()
             self?.dismiss(animated: true)
         })
         p.orderFrontRegardless()
@@ -30,7 +35,7 @@ final class HideHint {
 
         let work = DispatchWorkItem { [weak self] in self?.dismiss(animated: true) }
         dismissWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
     func dismiss(animated: Bool) {
@@ -48,16 +53,18 @@ final class HideHint {
 
 private struct HideHintView: View {
     let arrowX: CGFloat
+    let title: String
+    let subtitle: String
     let onTap: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             Triangle().fill(Color(nsColor: .windowBackgroundColor)).frame(width: 16, height: 8)
             HStack(spacing: 8) {
-                Image(systemName: "wand.and.stars").foregroundStyle(.tint)
+                Image(systemName: "pencil.tip").foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Familiar is up here now").font(.callout.weight(.semibold))
-                    Text("Click the wand icon to bring it back").font(.caption).foregroundStyle(.secondary)
+                    Text(title).font(.callout.weight(.semibold))
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 10)

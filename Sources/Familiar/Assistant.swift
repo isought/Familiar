@@ -26,6 +26,7 @@ final class Assistant: ObservableObject {
     enum DragPhase { case moved, ended }
     var onDragBubble: ((DragPhase) -> Void)?   // the app moves the panel using the global mouse position
     var onOpenSettings: (() -> Void)?
+    var onPoke: (() -> Void)?             // single click on the note: reaction only, plus a first-time hint
 
     private var client: ClaudeClient?
     private var apiMessages: [[String: Any]] = []

@@ -23,6 +23,7 @@ struct Config: Codable {
     var env: [String: String] = [:]          // non-secret variables handed to every script (secrets go to the Keychain)
     var bubbleX: Double? = nil               // remembered bubble position (bottom-left, screen points)
     var bubbleY: Double? = nil
+    var pokeHintsShown: Int = 0               // the "double-click to chat" callout shows on the first few pokes
 
     static var dir: URL {
         if let h = ProcessInfo.processInfo.environment["FAMILIAR_HOME"], !h.isEmpty { return URL(fileURLWithPath: (h as NSString).expandingTildeInPath) }
@@ -70,6 +71,7 @@ struct Config: Codable {
         env = try c.decodeIfPresent([String: String].self, forKey: .env) ?? d.env
         bubbleX = try c.decodeIfPresent(Double.self, forKey: .bubbleX)
         bubbleY = try c.decodeIfPresent(Double.self, forKey: .bubbleY)
+        pokeHintsShown = try c.decodeIfPresent(Int.self, forKey: .pokeHintsShown) ?? 0
     }
 
     /// One-time move of the pre-rename home folder (`~/.sidekick`) to `~/.familiar`.

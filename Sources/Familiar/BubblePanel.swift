@@ -103,7 +103,7 @@ struct BubbleView: View {
                     let wasMoving = moving, wasCast = cast
                     endPress()
                     if wasMoving { state.onDragBubble?(.ended) }
-                    else if !wasCast { state.expanded = true }      // released before the ring filled: a click
+                    else if !wasCast { click() }                       // released before the ring filled: a click
                 }
         )
         .contextMenu {
@@ -114,7 +114,23 @@ struct BubbleView: View {
             Button("Hide bubble") { state.onHideBubble?() }
             Button("Quit Familiar") { NSApp.terminate(nil) }
         }
-        .help("Click: chat  ·  Hold: pick up the pen  ·  ⌃⌥Space: pen")
+        .help("Double-click: chat  ·  Hold: pick up the pen  ·  ⌃⌥Space: pen")
+    }
+
+    @State private var lastClick: Date?
+
+    /// Single click = a poke (the note reacts, nothing opens). Double click = chat.
+    private func click() {
+        let now = Date()
+        if let last = lastClick, now.timeIntervalSince(last) < NSEvent.doubleClickInterval {
+            lastClick = nil
+            reaction = nil
+            state.expanded = true
+            return
+        }
+        lastClick = now
+        react(.happy, for: 0.9)
+        state.onPoke?()
     }
 
     private func beginPress(at p: CGPoint) {
@@ -153,9 +169,10 @@ struct BubbleView: View {
         cast = false
     }
 
-    private func react(_ m: MascotMood) {
+    private func react(_ m: MascotMood, for seconds: Double? = nil) {
         reaction = m
-        DispatchQueue.main.asyncAfter(deadline: .now() + (m == .sad ? 2.2 : 1.5)) { if reaction == m { reaction = nil } }
+        let d = seconds ?? (m == .sad ? 2.2 : 1.5)
+        DispatchQueue.main.asyncAfter(deadline: .now() + d) { if reaction == m { reaction = nil } }
     }
 
     // MARK: expanded card
