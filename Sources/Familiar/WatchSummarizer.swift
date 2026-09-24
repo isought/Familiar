@@ -28,13 +28,19 @@ struct PackDraft {
 
 /// Builds one request from a recording (instructions, the event log, then captioned images), asks Claude, parses the draft.
 enum WatchSummarizer {
+    static let maxImagesAllowed = 100            // the Messages API's per-request image limit
+    static let imageByteBudget = 20_000_000      // base64 bytes for all images; the request limit is 32 MB
+
     static func summarize(_ rec: Recording, purpose: String?, config: Config, apiKey: String,
                           onStatus: @escaping (String) -> Void) async throws -> PackDraft {
         let client = ClaudeClient(config: config, apiKey: apiKey)
         client.effort = "high"
         client.maxTokens = max(config.maxTokens, 8192)
         client.maxToolRounds = 0
-        let content = buildContent(rec, purpose: purpose, maxImages: config.watchMaxImages)
+        let picks = selectImages(rec, max: config.watchMaxImages)
+        let mb = Double(picks.reduce(0) { $0 + $1.bytes }) / 1_000_000
+        onStatus(String(format: "Sending %d image%@, %.1f MB…", picks.count, picks.count == 1 ? "" : "s", mb))
+        let content = buildContent(rec, purpose: purpose, picks: picks)
         var messages: [[String: Any]] = [["role": "user", "content": content]]
         let reply = try await client.converse(system: Prompt.watchSystem, tools: [], messages: &messages,
                                               executor: { _, _, _ in .text("No tools in this mode.", isError: true) }, onStatus: onStatus)
@@ -44,14 +50,18 @@ enum WatchSummarizer {
 
     // MARK: request
 
-    static func buildContent(_ rec: Recording, purpose: String?, maxImages: Int) -> [[String: Any]] {
+    static func buildContent(_ rec: Recording, purpose: String?, picks: [ImagePick]) -> [[String: Any]] {
         var content: [[String: Any]] = [["type": "text", "text": eventLog(rec, purpose: purpose)]]
-        for pick in selectImages(rec, max: maxImages) {
+        for pick in picks {
             guard let data = try? Data(contentsOf: rec.dir.appendingPathComponent(pick.file)) else { continue }
             content.append(["type": "text", "text": pick.caption])
             content.append(["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": data.base64EncodedString()]])
         }
         return content
+    }
+
+    static func buildContent(_ rec: Recording, purpose: String?, maxImages: Int) -> [[String: Any]] {
+        buildContent(rec, purpose: purpose, picks: selectImages(rec, max: maxImages))
     }
 
     static func eventLog(_ rec: Recording, purpose: String?) -> String {
@@ -75,7 +85,7 @@ enum WatchSummarizer {
         case "click": what = "click on \(e.elementLabel)"
         case "scene": what = "screen changed"
         case "typed":
-            if e.role == "password field" { what = "typed into a password field (not recorded)" }
+            if e.value == WatchEvent.notRecorded { what = "typed into a \(e.role ?? "field") (text not recorded)" }
             else { what = "typed into \(e.label ?? e.role ?? "a field"): “\(e.text ?? "")”" }
         case "note": what = "note from the user: \(e.text ?? "")"
         default: what = e.kind
@@ -90,40 +100,53 @@ enum WatchSummarizer {
         return String(s.prefix(120))
     }
 
-    struct ImagePick { let file: String; let caption: String; let order: (Int, Int) }
+    struct ImagePick { let file: String; let caption: String; let order: (Int, Int); let bytes: Int }
 
-    /// Oldest first, at most `max`: scene-change frames first, then click crops (dropping repeats of the same label in a
-    /// row), then the periodic full frames; each tier thinned evenly when it does not fit.
-    static func selectImages(_ rec: Recording, max: Int) -> [ImagePick] {
+    /// Oldest first, at most `max` (never more than the API allows) and within `byteBudget` once base64-encoded:
+    /// scene-change frames first, then click crops (dropping repeats of the same label in a row), then the periodic
+    /// full frames; each tier thinned evenly when it does not fit, the lowest tier thinned first when the bytes do not.
+    static func selectImages(_ rec: Recording, max: Int, byteBudget: Int = imageByteBudget) -> [ImagePick] {
         struct C { let pick: ImagePick; let tier: Int }
+        let fm = FileManager.default
+        func size(_ f: String) -> Int? {
+            (try? fm.attributesOfItem(atPath: rec.dir.appendingPathComponent(f).path))?[.size] as? Int
+        }
         var cands: [C] = []
         var prevKey: String?
         var firstFull = true
         for e in rec.events {
             let place = e.url.map(shortURL) ?? e.title.map { "“\($0)”" } ?? e.app ?? ""
-            if let f = e.full {
+            if let f = e.full, let bytes = size(f) {
                 let cap = e.kind == "scene" ? "[\(e.index)] the screen at \(mmss(e.t)) — \(place)" : "[\(e.index)] the whole screen after that click at \(mmss(e.t)) — \(place)"
-                cands.append(C(pick: ImagePick(file: f, caption: cap, order: (e.index, 1)), tier: (e.kind == "scene" || firstFull) ? 0 : 2))
+                cands.append(C(pick: ImagePick(file: f, caption: cap, order: (e.index, 1), bytes: bytes), tier: (e.kind == "scene" || firstFull) ? 0 : 2))
                 firstFull = false
             }
-            if let c = e.crop {
+            if let c = e.crop, let bytes = size(c) {
                 let key = e.elementLabel
                 if e.kind == "click", let p = prevKey, p == key, e.label?.isEmpty == false {
                     // same control clicked again in a row: one crop is enough
                 } else {
-                    cands.append(C(pick: ImagePick(file: c, caption: "[\(e.index)] click on \(e.elementLabel) at \(mmss(e.t)) — \(place)", order: (e.index, 0)), tier: 1))
+                    cands.append(C(pick: ImagePick(file: c, caption: "[\(e.index)] click on \(e.elementLabel) at \(mmss(e.t)) — \(place)", order: (e.index, 0), bytes: bytes), tier: 1))
                 }
             }
             if e.kind == "click" { prevKey = e.elementLabel }
         }
-        var chosen: [ImagePick] = []
-        var budget = Swift.max(0, max)
+        var chosen: [[ImagePick]] = [[], [], []]
+        var budget = Swift.min(Swift.max(0, max), maxImagesAllowed)
         for tier in 0...2 {
             let t = cands.filter { $0.tier == tier }.map(\.pick)
-            if t.count <= budget { chosen += t; budget -= t.count }
-            else { chosen += thin(t, to: budget); budget = 0; break }
+            if t.count <= budget { chosen[tier] = t; budget -= t.count }
+            else { chosen[tier] = thin(t, to: budget); budget = 0; break }
         }
-        return chosen.sorted { $0.order.0 != $1.order.0 ? $0.order.0 < $1.order.0 : $0.order.1 < $1.order.1 }
+        func encoded() -> Int { chosen.joined().reduce(0) { $0 + ($1.bytes * 4 + 2) / 3 } }
+        let before = chosen.joined().count
+        while encoded() > byteBudget, let tier = (0...2).reversed().first(where: { !chosen[$0].isEmpty }) {
+            let n = chosen[tier].count
+            chosen[tier] = n == 1 ? [] : thin(chosen[tier], to: n * 2 / 3)
+        }
+        let after = chosen.joined().count
+        if after < before { Log.info("watch: \(before - after) images dropped to stay under \(byteBudget / 1_000_000) MB") }
+        return chosen.joined().sorted { $0.order.0 != $1.order.0 ? $0.order.0 < $1.order.0 : $0.order.1 < $1.order.1 }
     }
 
     static func thin<T>(_ items: [T], to n: Int) -> [T] {
@@ -132,6 +155,20 @@ enum WatchSummarizer {
     }
 
     // MARK: reply
+
+    /// Hosts everyone passes through on the way to a tool; never a match rule on their own.
+    static let genericHosts = [
+        "accounts.google.com", "mail.google.com", "calendar.google.com", "okta.com", "microsoftonline.com", "login.microsoft.com",
+        "login.live.com", "auth0.com", "onelogin.com", "duosecurity.com", "appleid.apple.com", "icloud.com", "slack.com",
+        "linkedin.com", "twitter.com", "x.com", "facebook.com", "youtube.com", "chatgpt.com", "claude.ai",
+    ]
+    static let genericHostPrefixes = ["sso.", "auth.", "login.", "accounts.", "id.", "idp."]
+
+    static func isGenericHost(_ h: String) -> Bool {
+        let host = h.lowercased().split(separator: ":").first.map(String.init) ?? h.lowercased()
+        if genericHostPrefixes.contains(where: { host.hasPrefix($0) }) { return true }
+        return genericHosts.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
 
     static func parse(_ text: String, recording: Recording) -> PackDraft {
         var d = PackDraft()
@@ -147,33 +184,52 @@ enum WatchSummarizer {
         guard !d.workflowTitle.isEmpty, !d.workflowMarkdown.isEmpty else { return d }
         d.json = obj
         d.parsed = true
+        // Hosts seen in more than one event and not a login/mail detour: a pack should match the tool, not the trip there.
+        var seen: [String: Int] = [:]
+        for e in recording.events { if let h = WatchRecorder.host(of: e.url) { seen[h, default: 0] += 1 } }
+        let ownHosts = recording.meta.hosts.filter { !isGenericHost($0) && (seen[$0] ?? 0) > 1 }
         d.packDir = PackWriter.slug(str("pack_dir"))
-        if d.packDir.isEmpty { d.packDir = PackWriter.slug(recording.meta.hosts.first ?? str("pack_name")) }
+        if d.packDir.isEmpty { d.packDir = PackWriter.slug(ownHosts.first ?? str("pack_name")) }
         if d.packDir.isEmpty { d.packDir = "watched" }
         d.packName = str("pack_name").isEmpty ? d.packDir : str("pack_name")
         d.packDescription = str("pack_description")
-        d.matchURLs = list("match_urls").isEmpty ? recording.meta.hosts : list("match_urls")
+        d.matchURLs = list("match_urls").filter { !isGenericHost($0) }
+        if d.matchURLs.isEmpty { d.matchURLs = ownHosts }
         d.matchTitles = list("match_titles")
         d.matchBundles = list("match_bundles").filter { !ContextWatcher.browserBundles.contains($0) }
+        d.caveats = list("caveats")
+        if d.matchURLs.isEmpty, d.matchTitles.isEmpty, d.matchBundles.isEmpty {
+            // Never an empty match: the registry would treat the pack as global and stuff its docs into every prompt.
+            d.matchBundles = recording.meta.bundles.filter { !ContextWatcher.browserBundles.contains($0) }
+            if d.matchBundles.isEmpty, let t = recording.meta.titles.first(where: { !$0.isEmpty }) { d.matchTitles = [String(t.prefix(60))] }
+            if d.matchBundles.isEmpty, d.matchTitles.isEmpty {
+                d.matchTitles = [d.packName]
+                d.caveats.append("could not tell where this applies; the match rule in SKILL.md is a guess from the pack name")
+            }
+        }
         d.workflowSlug = PackWriter.slug(str("workflow_slug"))
         if d.workflowSlug.isEmpty { d.workflowSlug = PackWriter.slug(d.workflowTitle) }
         if d.workflowSlug.isEmpty { d.workflowSlug = "workflow" }
         d.screensMarkdown = str("screens_markdown")
         d.glossaryMarkdown = str("glossary_markdown")
-        d.caveats = list("caveats")
         d.confidence = (obj["confidence"] as? NSNumber)?.doubleValue ?? 0
         return d
     }
 
+    /// The object inside the ```json fence, tolerating a fenced block inside one of its markdown strings; then the
+    /// outermost braces as a fallback.
     static func extractJSON(_ text: String) -> [String: Any]? {
-        var body: Substring?
-        if let open = text.range(of: "```json"), let close = text.range(of: "```", range: open.upperBound..<text.endIndex) {
-            body = text[open.upperBound..<close.lowerBound]
-        } else if let a = text.firstIndex(of: "{"), let b = text.lastIndex(of: "}"), a < b {
-            body = text[a...b]
+        var bodies: [Substring] = []
+        if let open = text.range(of: "```json") {
+            let rest = open.upperBound..<text.endIndex
+            if let last = text.range(of: "```", options: .backwards, range: rest) { bodies.append(text[open.upperBound..<last.lowerBound]) }
+            if let first = text.range(of: "```", range: rest) { bodies.append(text[open.upperBound..<first.lowerBound]) }
         }
-        guard let body, let data = String(body).data(using: .utf8) else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        if let a = text.firstIndex(of: "{"), let b = text.lastIndex(of: "}"), a < b { bodies.append(text[a...b]) }
+        for body in bodies {
+            if let data = String(body).data(using: .utf8), let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] { return obj }
+        }
+        return nil
     }
 }
 
@@ -197,6 +253,9 @@ enum PackWriter {
     @discardableResult
     static func write(_ d: PackDraft, root: URL, date: Date = Date()) throws -> [URL] {
         guard d.parsed else { throw ClaudeError(message: "The draft could not be parsed, so there is nothing to save.") }
+        guard !(d.matchURLs.isEmpty && d.matchTitles.isEmpty && d.matchBundles.isEmpty) else {
+            throw ClaudeError(message: "The draft has no match rule (no host, title or app), so it would apply everywhere. Not saved.")
+        }
         let fm = FileManager.default
         let when = day.string(from: date)
         let packDir = root.appendingPathComponent(d.packDir)

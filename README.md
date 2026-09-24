@@ -24,13 +24,20 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
 
 7. **Watch me**: menu bar → **Watch Me** (or the eye on the pad). Do the task the way you normally do, then press ⌃⌥Space or
    **Stop Watching**. Familiar records clicks (with the real labels of what you clicked, via Accessibility), a crop around each
-   click, a full frame whenever the screen changes, and text typed into named fields (never password fields), into
-   `~/.familiar/recordings/<stamp>/`. It asks what you were doing, writes the recording up through Claude and puts a draft on
-   the pad: numbered steps with the real button and field names, the screens seen, and caveats. **Keep it** writes a tool
-   pack (`SKILL.md`, `docs/screens.md`, `docs/workflows/<task>.md`, `docs/glossary.md`) into `~/.familiar/tools/<site>/`
-   without touching existing files (new workflows get `-2`, `-3`; screens are added only when new); **Discard** deletes the
-   recording. The pen and control are off while it watches. Headless:
-   `--record-synthetic <dir>` (a fake recording from the current screen) and
+   click, a full frame whenever the screen changes, and text typed into named form fields, into
+   `~/.familiar/recordings/<stamp>/` (folder 0700, files 0600). It asks what you were doing, writes the recording up through
+   Claude and puts a draft on the pad: numbered steps with the real button and field names, the screens seen, the caveats and
+   the match rule (which hosts, titles or apps the pack will apply to). **Keep it** writes a tool pack (`SKILL.md`,
+   `docs/screens.md`, `docs/workflows/<task>.md`, `docs/glossary.md`) into `~/.familiar/tools/<site>/` without touching
+   existing files (new workflows get `-2`, `-3`; screens are added only when new); **Discard** throws the draft away. Either
+   way the recording folder is deleted, as it is when you clear the pad or quit; anything left behind by a crash is swept
+   after 7 days. The pen and control are off while it watches.
+   What is never written down: anything typed in a password field or a field named like one (password, PIN, OTP, token, key…),
+   anything typed in a terminal (Terminal, iTerm2, Warp, kitty, Alacritty, WezTerm, Ghostty…), anything typed outside a form
+   field (editors, chat composers), and anything typed when Accessibility cannot say which field has focus — the log then
+   says only that something was typed. A click never stores the value of a secure field, a text area or a terminal. Without
+   Accessibility, keystrokes are not listened for at all. The write-up sends at most `watchMaxImages` images and 20 MB.
+   Headless: `--record-synthetic <dir>` (a fake recording from the current screen) and
    `--summarize-recording <dir> ["purpose"] [--tools-root <dir>] [--keep]` (prints the draft JSON; keeps into a temp folder by default).
 
 ## Requirements

@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 struct ChatMessage: Identifiable {
-    enum Role { case user, wand, assistant, error, draft }   // draft: a note Familiar starts itself (a watched workflow's title)
+    enum Role { case user, wand, assistant, error, draft, learned }   // draft/learned: a note Familiar starts itself (a watched workflow's title), before and after Keep
     let id = UUID()
     let role: Role
     let text: String
@@ -26,6 +26,7 @@ final class Assistant: ObservableObject {
     let watcher: ContextWatcher
     let registry: ToolRegistry
     var onStartWand: (() -> Void)?
+    var onCancelWand: (() -> Void)?       // the app drops an active pen before a recording starts
     var onHideBubble: (() -> Void)?
     enum DragPhase { case moved, ended }
     var onDragBubble: ((DragPhase) -> Void)?   // the app moves the panel using the global mouse position
@@ -41,11 +42,15 @@ final class Assistant: ObservableObject {
     private var pendingRecording: Recording?     // stopped, waiting for a purpose, being written up, or under review
     private var awaitingPurpose = false
     private var draftFailed = false
+    private var stopping = false                 // recorder.stop is draining its last capture
+    private var deferredPurposePrompt: Recording?   // stopped while a question was in flight: ask once the reply lands
+    private var purposeMessageID: UUID?          // the typed purpose line, folded into the draft note when it arrives
 
-    static let continueTab = "Continue without a description"
+    static let continueTab = "Skip the description"
     static let keepTab = "Keep it"
     static let discardTab = "Discard"
     static let retryTab = "Try again"
+    static let reservedTabs = [continueTab, keepTab, discardTab, retryTab]
 
     init(config: Config, watcher: ContextWatcher, registry: ToolRegistry) {
         self.config = config
@@ -62,10 +67,13 @@ final class Assistant: ObservableObject {
         suggestions.removeAll()
         status = ""
         lastCapture = nil
-        pendingDraft = nil          // the recording folder stays on disk
+        // A cleared pad forgets the recording too: nothing was kept, so nothing stays on disk.
+        if let rec = pendingRecording { try? FileManager.default.removeItem(at: rec.dir) }
+        pendingDraft = nil
         pendingRecording = nil
         awaitingPurpose = false
         draftFailed = false
+        purposeMessageID = nil
     }
 
     func startWand() {
@@ -75,50 +83,96 @@ final class Assistant: ObservableObject {
     }
 
     func askSuggestion(_ s: String) {
-        if let rec = pendingRecording {
-            if awaitingPurpose, s == Self.continueTab { awaitingPurpose = false; summarize(rec, purpose: nil); return }
-            if pendingDraft != nil || draftFailed {
-                if s == Self.keepTab { Task { await keep() }; return }
-                if s == Self.discardTab { discard(); return }
-                if s == Self.retryTab { summarize(rec, purpose: rec.meta.purpose); return }
-            }
+        if awaitingPurpose {
+            if s == Self.continueTab, let rec = pendingRecording { awaitingPurpose = false; summarize(rec, purpose: nil); return }
+            if s == Self.discardTab { discard(); return }
         }
+        if pendingDraft != nil || draftFailed {
+            if s == Self.keepTab { Task { await keep() }; return }
+            if s == Self.discardTab { discard(); return }
+            if s == Self.retryTab, let rec = pendingRecording { summarize(rec, purpose: rec.meta.purpose); return }
+        }
+        if Self.reservedTabs.contains(s) { suggestions = reviewTabs([]); return }   // a stale tab: never a question for Claude
         question = s
         ask()
+    }
+
+    /// The tabs a note should carry given what is pending, on top of Claude's own follow-ups.
+    private func reviewTabs(_ sugg: [String]) -> [String] {
+        if awaitingPurpose { return [Self.continueTab, Self.discardTab] }
+        if pendingDraft != nil { return sugg + [Self.keepTab, Self.discardTab] }
+        if draftFailed { return sugg + [Self.retryTab, Self.discardTab] }
+        return sugg
     }
 
     // MARK: watch me
 
     func toggleWatching() { if watching { stopWatching() } else { startWatching() } }
 
+    private func recordingLine(_ clicks: Int) -> String {
+        "Recording — \(clicks) click\(clicks == 1 ? "" : "s") · \(recorder.hotkeyLabel) to stop"
+    }
+
     /// Starts recording: the pad closes, the pen and control are off until the recording stops.
     func startWatching() {
-        guard !busy, !watching else { return }
+        guard !busy, !watching, !stopping else { return }
+        if pendingRecording != nil || pendingDraft != nil {
+            expanded = true
+            transcript.append(ChatMessage(role: .error, text: "Keep or discard the draft on the pad first."))
+            suggestions = reviewTabs([])
+            return
+        }
         guard Permissions.screenRecordingGranted else {
             expanded = true
             transcript.append(ChatMessage(role: .error, text: ScreenCaptureError.notPermitted.localizedDescription))
             return
         }
+        onCancelWand?()
+        var warned = false
+        if !Permissions.accessibilityGranted {
+            Permissions.requestAccessibility()
+            transcript.append(ChatMessage(role: .error, text: "Without Accessibility I can't see what you click or type, so this will be screenshots only. Grant it in the menu bar (Accessibility: not granted) for a useful write-up."))
+            warned = true
+        }
         recorder.config = config
         recorder.hotkeyLabel = HotKey.display(config.hotkey.isEmpty ? "control+option+space" : config.hotkey)
+        recorder.onClickCount = { [weak self] n in guard let self else { return }; self.contextLine = self.recordingLine(n) }
         do { try recorder.start() } catch {
             expanded = true
             transcript.append(ChatMessage(role: .error, text: "Could not start recording: \(error.localizedDescription)"))
             return
         }
         pendingDraft = nil; pendingRecording = nil; awaitingPurpose = false; draftFailed = false
+        suggestions = []
         watching = true
-        expanded = false
+        expanded = warned            // the warning stays in view; otherwise the pad gets out of the way
         status = ""
-        contextLine = "Watching…"
+        contextLine = recordingLine(0)
     }
 
-    /// Stops the recorder and asks, on the pad, what the user was doing.
+    /// Stops the recorder (waiting up to 2 s for the last click's screenshot), then asks on the pad what the user was doing.
     func stopWatching() {
-        guard watching else { return }
-        let rec = recorder.stop(purpose: nil)
+        guard watching, !stopping else { return }
+        stopping = true
+        Task {
+            let rec = await recorder.stop(purpose: nil)
+            stopping = false
+            watching = false
+            contextLine = watcher.current?.summaryLine ?? (watcher.isRunning ? "Watching…" : "Watcher off")
+            if busy { deferredPurposePrompt = rec } else { promptForPurpose(rec) }
+        }
+    }
+
+    /// Quit mid-recording or mid-review: nothing is kept, nothing is left behind.
+    func abortWatching() {
+        recorder.abandon()
+        if let rec = pendingRecording { try? FileManager.default.removeItem(at: rec.dir) }
+        pendingRecording = nil
+        pendingDraft = nil
         watching = false
-        contextLine = watcher.current?.summaryLine ?? (watcher.isRunning ? "Watching…" : "Watcher off")
+    }
+
+    private func promptForPurpose(_ rec: Recording) {
         expanded = true
         let seen = rec.events.filter { $0.kind != "scene" }
         guard !seen.isEmpty else {
@@ -129,8 +183,8 @@ final class Assistant: ObservableObject {
         }
         pendingRecording = rec
         awaitingPurpose = true
-        transcript.append(ChatMessage(role: .assistant, text: "Got it — \(rec.meta.clicks) click\(rec.meta.clicks == 1 ? "" : "s"). What were you doing? Write one line below, or press Continue."))
-        suggestions = [Self.continueTab]
+        transcript.append(ChatMessage(role: .assistant, text: "Got it — \(rec.meta.clicks) click\(rec.meta.clicks == 1 ? "" : "s"). What were you doing? Write one line below, or use a tab."))
+        suggestions = reviewTabs([])
     }
 
     /// Asks Claude to write the recording up, then puts the draft on the pad for review.
@@ -147,49 +201,63 @@ final class Assistant: ObservableObject {
         guard let client else {
             transcript.append(ChatMessage(role: .error, text: "No API key. Add it in Familiar Settings, then press Try again."))
             draftFailed = true; busy = false; status = ""
-            suggestions = [Self.retryTab, Self.discardTab]
+            suggestions = reviewTabs([])
             return
         }
         let config = self.config
         let key = client.apiKey
         Task {
             let started = Date()
+            var result: Result<PackDraft, Error>
             do {
-                let draft = try await WatchSummarizer.summarize(rec, purpose: purpose, config: config, apiKey: key,
-                                                                onStatus: { [weak self] s in Task { @MainActor in self?.status = s == "Thinking…" ? "Writing it up…" : s } })
+                result = .success(try await WatchSummarizer.summarize(rec, purpose: purpose, config: config, apiKey: key,
+                                                                      onStatus: { [weak self] s in Task { @MainActor in self?.status = s == "Thinking…" ? "Writing it up…" : s } }))
+            } catch { result = .failure(error) }
+            busy = false
+            guard pendingRecording?.dir == rec.dir else { status = ""; return }   // the pad was cleared meanwhile: the recording is gone
+            switch result {
+            case .success(let draft):
                 pendingDraft = draft
+                if let id = purposeMessageID { transcript.removeAll { $0.id == id } }   // the line lives on inside the draft note
+                purposeMessageID = nil
                 transcript.append(ChatMessage(role: .draft, text: draft.parsed ? draft.workflowTitle : "Could not write this up"))
-                transcript.append(ChatMessage(role: .assistant, text: Self.draftBody(draft, root: registry.root)))
-                suggestions = draft.parsed ? [Self.keepTab, Self.discardTab] : [Self.discardTab]
-                if !draft.parsed { draftFailed = true; suggestions = [Self.retryTab, Self.discardTab] }
+                transcript.append(ChatMessage(role: .assistant, text: Self.draftBody(draft, purpose: rec.meta.purpose, root: registry.root)))
+                if !draft.parsed { draftFailed = true }
+                suggestions = reviewTabs([])
                 status = String(format: "draft in %.0fs · confidence %.0f%%", Date().timeIntervalSince(started), draft.confidence * 100)
-            } catch {
+            case .failure(let error):
                 transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
                 draftFailed = true
-                suggestions = [Self.retryTab, Self.discardTab]
+                suggestions = reviewTabs([])
                 status = ""
             }
-            busy = false
         }
     }
 
-    /// Writes the pack files and reloads the tools.
+    /// Writes the pack files, reloads the tools, and deletes the recording: the pack is the product.
     func keep() async {
-        guard let draft = pendingDraft, draft.parsed, !busy else { return }
+        guard let draft = pendingDraft, draft.parsed, !busy, let rec = pendingRecording else { return }
         busy = true
         status = "Saving…"
         do {
             let files = try PackWriter.write(draft, root: registry.root)
             await registry.reload()
-            let rel = files.map { $0.path.replacingOccurrences(of: registry.root.path + "/", with: "") }
-            transcript.append(ChatMessage(role: .assistant, text: "Saved into \(registry.root.path)/\(draft.packDir)/:\n" + rel.map { "- \($0)" }.joined(separator: "\n") + "\nIt will be used whenever you are on \(draft.matchURLs.first ?? draft.packName)."))
+            try? FileManager.default.removeItem(at: rec.dir)
+            let packRoot = registry.root.appendingPathComponent(draft.packDir).path + "/"
+            let rel = files.map { $0.path.replacingOccurrences(of: packRoot, with: "") }
+            let whereText = draft.matchURLs.first ?? draft.matchTitles.first.map { "“\($0)”" } ?? draft.matchBundles.first ?? draft.packName
+            if let i = transcript.lastIndex(where: { $0.role == .draft }) {
+                transcript[i] = ChatMessage(role: .learned, text: transcript[i].text)
+            }
+            transcript.append(ChatMessage(role: .assistant, text: "Kept as \(draft.packName). I'll use it whenever you're on \(whereText). The recording itself is deleted.\n" + rel.map { "- \($0)" }.joined(separator: "\n")))
             pendingDraft = nil
             pendingRecording = nil
+            draftFailed = false
             suggestions = []
             status = ""
         } catch {
             transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
-            suggestions = [Self.keepTab, Self.discardTab]
+            suggestions = reviewTabs([])
         }
         busy = false
     }
@@ -201,21 +269,27 @@ final class Assistant: ObservableObject {
         pendingRecording = nil
         awaitingPurpose = false
         draftFailed = false
+        purposeMessageID = nil
         suggestions = []
         status = ""
         transcript.append(ChatMessage(role: .assistant, text: "Discarded. The recording was deleted and nothing was saved."))
     }
 
-    /// The draft as it reads on a note: the steps, a short Screens section, the caveats, and where Keep would put it.
-    static func draftBody(_ d: PackDraft, root: URL) -> String {
+    /// The draft as it reads on a note: what the user said, the steps, a short Screens section, the caveats, where
+    /// the pack would apply, and where Keep would put it.
+    static func draftBody(_ d: PackDraft, purpose: String? = nil, root: URL) -> String {
+        var s = ""
+        if let purpose, !purpose.isEmpty { s += "_You said: “\(purpose)”_\n\n" }
         guard d.parsed else {
-            return "I couldn't turn this into a pack entry. Here is what came back:\n\n" + d.raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return s + "I couldn't turn this into a pack entry. Here is what came back:\n\n" + d.raw.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        var s = flatten(d.workflowMarkdown)
+        s += flatten(d.workflowMarkdown)
         let screens = flatten(d.screensMarkdown)
         if !screens.isEmpty { s += "\n\n**Screens**\n" + (screens.count > 1400 ? String(screens.prefix(1400)) + "…" : screens) }
         if !d.caveats.isEmpty { s += "\n\n" + d.caveats.map { "_\($0)_" }.joined(separator: "\n") }
-        s += "\n\nKeep it → \(root.lastPathComponent)/\(d.packDir)/docs/workflows/\(d.workflowSlug).md"
+        let matches = d.matchURLs + d.matchTitles.map { "“\($0)”" } + d.matchBundles
+        s += "\n\nMatches: " + (matches.isEmpty ? "nothing (would not be saved)" : matches.joined(separator: ", "))
+        s += "\nKeep it → \(root.lastPathComponent)/\(d.packDir)/docs/workflows/\(d.workflowSlug).md"
         return s
     }
 
@@ -234,10 +308,17 @@ final class Assistant: ObservableObject {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !busy else { return }
         question = ""
-        transcript.append(ChatMessage(role: .user, text: q))
+        let m = ChatMessage(role: .user, text: q)
+        transcript.append(m)
         if awaitingPurpose, let rec = pendingRecording {   // the line after "what were you doing?" is the purpose
             awaitingPurpose = false
+            purposeMessageID = m.id
             summarize(rec, purpose: q)
+            return
+        }
+        if pendingDraft != nil || draftFailed {
+            transcript.append(ChatMessage(role: .error, text: "Keep or discard the draft above first."))
+            suggestions = reviewTabs([])
             return
         }
         let ctx = watcher.current ?? watcher.sample()
@@ -432,17 +513,19 @@ final class Assistant: ObservableObject {
             apiMessages = messages
             let (text, sugg) = Self.splitSuggestions(reply.text)
             transcript.append(ChatMessage(role: .assistant, text: text))
-            suggestions = sugg
+            suggestions = reviewTabs(sugg)
             let secs = String(format: "%.1f", Date().timeIntervalSince(started))
             status = "\(reply.inputTokens) in · \(reply.outputTokens) out · \(reply.toolCalls) tool call\(reply.toolCalls == 1 ? "" : "s") · \(secs)s"
             Log.info("reply: \(reply.outputTokens) out, \(reply.inputTokens) in (cache read \(reply.cacheRead)), \(reply.toolCalls) tool calls, \(secs)s")
         } catch {
             apiMessages.removeLast()   // drop the failed user turn so the history stays consistent
             transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
+            suggestions = reviewTabs([])
             status = ""
             Log.info("error: \(error.localizedDescription)")
         }
         busy = false
+        if let rec = deferredPurposePrompt { deferredPurposePrompt = nil; promptForPurpose(rec) }
     }
 
     /// Replace images in earlier user turns with a placeholder, and drop stale cache breakpoints.

@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
         assistant = Assistant(config: config, watcher: watcher, registry: registry)
         assistant.onStartWand = { [weak self] in self?.startWand() }
+        assistant.onCancelWand = { [weak self] in if self?.wand.isActive == true { self?.wand.cancel() } }
         assistant.onHideBubble = { [weak self] in self?.hideBubbleWithHint() }
         assistant.onDragBubble = { [weak self] phase in
             guard let self else { return }
@@ -204,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let (code, mods) = HotKey.parse(spec) else { Log.info("hotkey: cannot parse \"\(spec)\""); return }
         hotKey = HotKey(keyCode: code, modifiers: mods) { [weak self] in
             guard let self else { return }
-            if self.assistant.watching { self.assistant.stopWatching() }
+            if self.assistant.watching { self.stopWatchingAndShow() }
             else if self.wand.isActive { self.wand.cancel() }
             else { self.startWand() }
         }
@@ -272,8 +273,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func menuWand() { startWand() }
     @objc private func menuWatch() {
-        if assistant.watching { assistant.stopWatching(); if !panel.isVisible { showBubble() } }
-        else { assistant.startWatching() }
+        if assistant.watching { stopWatchingAndShow() } else { assistant.startWatching() }
+    }
+
+    /// The pad comes back for the "what were you doing?" note even when the bubble was hidden in the menu bar.
+    private func stopWatchingAndShow() {
+        assistant.stopWatching()
+        if !panel.isVisible { showBubble() }
+    }
+
+    /// Quitting mid-recording leaves nothing behind: the unfinished recording and any draft still under review go.
+    func applicationWillTerminate(_ notification: Notification) {
+        assistant.abortWatching()
     }
     @objc private func openChat() {
         if !panel.isVisible { showBubble() }

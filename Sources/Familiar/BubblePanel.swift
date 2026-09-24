@@ -162,7 +162,9 @@ struct BubbleView: View {
             cast = true
             charging = false
             withAnimation(.easeOut(duration: 0.2)) { charge = 0 }
-            if state.busy { state.expanded = true } else { state.startWand() }
+            MainActor.assumeIsolated {   // the pad says why the pen is off while busy or watching
+                if state.busy || state.watching { state.expanded = true } else { state.startWand() }
+            }
         }
         RunLoop.main.add(t, forMode: .common)
         chargeTimer = t

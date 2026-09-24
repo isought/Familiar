@@ -68,7 +68,7 @@ enum Prompt {
     - pack_dir: kebab-case slug for the site or app (e.g. "concur", "waxwing", "jira"); reuse an obvious existing name when the hostname suggests one.
     - pack_name: short human name of the tool.
     - pack_description: one line saying what the tool is for.
-    - match_urls: hostnames observed (from the recording), as given.
+    - match_urls: only the hostnames that belong to this tool, as given in the recording. Leave out sign-in / SSO hosts, mail, and other sites visited on the way. May be empty.
     - match_titles: distinctive window-title words for the tool (short, no page-specific parts). May be empty.
     - match_bundles: bundle identifiers observed for native apps (not browsers). May be empty.
     - workflow_slug: kebab-case slug for this task (e.g. "create-expense-report").
