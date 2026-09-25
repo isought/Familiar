@@ -84,7 +84,7 @@ struct Note: Identifiable {
             case .assistant:
                 if let i = out.indices.last, !out[i].hasAnswer { out[i].answers.append(m) }
                 else { out.append(Note(id: m.id, heading: nil, answers: [m])) }
-            case .error:
+            case .error, .note:
                 if let i = out.indices.last { out[i].answers.append(m) }
                 else { out.append(Note(id: m.id, heading: nil, answers: [m])) }
             }
@@ -199,6 +199,26 @@ struct StickyNoteView: View {
             .padding(.leading, 10)
             .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 1).fill(Pad.redInk).frame(width: 2.5).padding(.vertical, 2) }
             .padding(.top, 2)
+        case .note:
+            // a smaller sticker on the note: what someone stuck on this control, in their name
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: m.warning ? "exclamationmark.triangle.fill" : "note.text")
+                        .font(.system(size: 11)).foregroundStyle(m.warning ? Pad.redInk : Pad.penInk).padding(.top, 3)
+                    Text(m.text).font(HandFont.font(size: 14)).foregroundStyle(Pad.ink).textSelection(.enabled)
+                }
+                if let meta = m.meta {
+                    Text("— " + meta).font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft).padding(.leading, 17)
+                }
+            }
+            .padding(EdgeInsets(top: 7, leading: 9, bottom: 7, trailing: 10))
+            .background(
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(m.warning ? Color(red: 1.0, green: 0.86, blue: 0.52) : Pad.paperDeep)
+                    .shadow(color: .black.opacity(0.18), radius: 2, y: 1.5)
+            )
+            .rotationEffect(.degrees(-0.8))
+            .padding(.vertical, 3)
         default:
             RevealingText(message: m, ledger: ledger)
         }

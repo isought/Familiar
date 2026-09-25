@@ -3,10 +3,12 @@ import Foundation
 import SwiftUI
 
 struct ChatMessage: Identifiable {
-    enum Role { case user, wand, assistant, error, draft, learned }   // draft/learned: a note Familiar starts itself (a watched workflow's title), before and after Keep
+    enum Role { case user, wand, assistant, error, draft, learned, note }   // draft/learned: a note Familiar starts itself (a watched workflow's title), before and after Keep; note: a sticky note someone left on the control
     let id = UUID()
     let role: Role
     let text: String
+    var meta: String? = nil        // note: who left it and when
+    var warning = false            // note: a warning rather than a tip
 }
 
 @MainActor
@@ -351,11 +353,13 @@ final class Assistant: ObservableObject {
         }
     }
 
-    /// Wand pick: full screenshot with a ring at the click, plus a zoomed crop, then a short identify-and-offer reply.
+    /// Wand pick: full screenshot with a ring at the click (or the ink stroke, for a circled region), plus a zoomed crop,
+    /// then a short identify-and-offer reply. Notes stuck on the target go on the pad first, and into the prompt.
     func wandPick(_ target: WandTarget) {
         guard !busy else { return }
         expanded = true
         transcript.append(ChatMessage(role: .wand, text: target.shortLabel))
+        for n in target.notes { transcript.append(ChatMessage(role: .note, text: n.text, meta: n.byline, warning: n.isWarning)) }
         let ctx = watcher.sample() ?? watcher.current
 
         Task {
@@ -363,25 +367,65 @@ final class Assistant: ObservableObject {
             var content: [[String: Any]] = []
             do {
                 let raw = try await ScreenCapture.captureDisplay(containing: target.screenPoint)
-                let p = raw.imagePoint(target.screenPoint)
                 let full = ScreenCapture.downscale(raw.image, maxLongEdge: config.maxImageLongEdge)
                 let f = CGFloat(full.width) / CGFloat(raw.image.width)
-                let annotated = ScreenCapture.annotate(full, ringAt: CGPoint(x: p.x * f, y: p.y * f))
-                if let shot = ScreenCapture.encode(annotated) { content.append(imageBlock(shot)) }
-                let cropSize = CGSize(width: 900 * raw.pixelsPerPoint / 2, height: 560 * raw.pixelsPerPoint / 2)
-                if let cropped = ScreenCapture.crop(raw.image, around: p, size: cropSize), let shot = ScreenCapture.encode(cropped) {
-                    content.append(imageBlock(shot))
+                if let stroke = target.stroke, let region = target.region {
+                    let pts = stroke.map { raw.imagePoint($0) }
+                    let annotated = ScreenCapture.annotate(full, stroke: pts.map { CGPoint(x: $0.x * f, y: $0.y * f) })
+                    if let shot = ScreenCapture.encode(annotated) { content.append(imageBlock(shot)) }
+                    let tl = raw.imagePoint(NSPoint(x: region.minX, y: region.maxY))
+                    let rect = CGRect(x: tl.x, y: tl.y, width: region.width * raw.pixelsPerPoint, height: region.height * raw.pixelsPerPoint)
+                    let pad = max(40 * raw.pixelsPerPoint, CGFloat(min(raw.image.width, raw.image.height)) * 0.04)
+                    if let cropped = ScreenCapture.crop(raw.image, around: rect, padding: pad, maxLongEdge: 1568), let shot = ScreenCapture.encode(cropped) {
+                        content.append(imageBlock(shot))
+                    }
+                    Log.info("wand: images \(content.count), region \(Int(rect.width))x\(Int(rect.height))px")
+                } else {
+                    let p = raw.imagePoint(target.screenPoint)
+                    let annotated = ScreenCapture.annotate(full, ringAt: CGPoint(x: p.x * f, y: p.y * f))
+                    if let shot = ScreenCapture.encode(annotated) { content.append(imageBlock(shot)) }
+                    let cropSize = CGSize(width: 900 * raw.pixelsPerPoint / 2, height: 560 * raw.pixelsPerPoint / 2)
+                    if let cropped = ScreenCapture.crop(raw.image, around: p, size: cropSize), let shot = ScreenCapture.encode(cropped) {
+                        content.append(imageBlock(shot))
+                    }
+                    Log.info("wand: images \(content.count), point \(Int(p.x)),\(Int(p.y))")
                 }
                 lastCapture = (Date(), ctx)
-                Log.info("wand: images \(content.count), point \(Int(p.x)),\(Int(p.y))")
             } catch {
                 transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
                 Log.info("wand: capture failed: \(error.localizedDescription)")
             }
-            let text = Prompt.context(ctx, recent: watcher.history) + packsSection(ctx) + "\n" + Prompt.wandInstruction(target: target, ctx: ctx)
+            let elsewhere = registry.notes(for: ctx).filter { n in !target.notes.contains(n) }
+            let text = Prompt.context(ctx, recent: watcher.history) + packsSection(ctx, notes: false) + "\n"
+                + Prompt.wandInstruction(target: target, ctx: ctx) + Prompt.notes(onTarget: target.notes, elsewhere: elsewhere)
             content.append(["type": "text", "text": text])
             await send(content: content, ctx: ctx)
         }
+    }
+
+    // MARK: notes
+
+    /// A note written with the pen: into the first active pack for the scene, or a pack made for it.
+    func saveNote(_ note: StickyNote) {
+        let ctx = watcher.current ?? watcher.sample()
+        Task {
+            do {
+                let pack: ToolPack
+                if let p = registry.pack(holding: note.id) { pack = p }
+                else { pack = try await registry.packForNote(anchor: note.anchor, ctx: ctx, appName: ctx?.appName) }
+                try registry.put(note, in: pack)
+                status = "Note kept in \(pack.dirName)/\(NoteStore.fileName)"
+                Log.info("notes: kept \(note.kind) on \(note.anchor.summary) in \(pack.dirName)")
+            } catch {
+                expanded = true
+                transcript.append(ChatMessage(role: .error, text: "Could not keep the note: \(error.localizedDescription)"))
+            }
+        }
+    }
+
+    func deleteNote(_ id: String) {
+        do { try registry.removeNote(id: id); status = "Note removed" }
+        catch { transcript.append(ChatMessage(role: .error, text: "Could not remove the note: \(error.localizedDescription)")) }
     }
 
     // MARK: internals
@@ -422,9 +466,10 @@ final class Assistant: ObservableObject {
         ["type": "image", "source": ["type": "base64", "media_type": shot.mediaType, "data": shot.data.base64EncodedString()]]
     }
 
-    private func packsSection(_ ctx: ScreenContext?) -> String {
+    private func packsSection(_ ctx: ScreenContext?, notes: Bool = true) -> String {
         let sel = registry.select(for: ctx)
         var s = Prompt.toolPacks(active: sel.active, global: sel.global, others: sel.others, stuffLimit: config.docsStuffLimitChars)
+        if notes { s += Prompt.notes(onTarget: [], elsewhere: registry.notes(for: ctx)) }
         let missing = registry.missingRequirements(for: sel.active + sel.global)
         if !missing.isEmpty {
             s += "\n## Not configured yet\n"

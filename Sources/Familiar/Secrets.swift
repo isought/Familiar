@@ -40,14 +40,15 @@ enum Secrets {
     static func get(_ key: String) -> String? {
         if store == .file { let v = loadFile()[key]?.trimmingCharacters(in: .whitespacesAndNewlines); return (v?.isEmpty ?? true) ? nil : v }
         if let v = read(key, service: service) { return v }
+        // A dev build may have left the value in the file store; adopt it into the Keychain first (no prompt),
+        // and only then look at entries written under older bundle ids (those can prompt once).
+        if let v = loadFile()[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty, set(key, v) { return v }
         for legacy in legacyServices {
             if let old = read(key, service: legacy) {
                 if set(key, old) { SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: legacy, kSecAttrAccount as String: key] as CFDictionary) }
                 return old
             }
         }
-        // A dev build may have left the value in the file store; adopt it into the Keychain.
-        if let v = loadFile()[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty, set(key, v) { return v }
         return nil
     }
 

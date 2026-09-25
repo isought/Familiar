@@ -54,6 +54,7 @@ final class ToolPack {
     var body = ""
     var docs: [DocFile] = []
     var scripts: [ScriptTool] = []
+    var notes: [StickyNote] = []    // notes.json: what people stuck to this tool's controls with the pen
     var isGlobal: Bool { match.isEmpty }
 
     init(dirName: String, dir: URL) {
@@ -101,11 +102,51 @@ final class ToolRegistry {
             }
             pack.docs = loadDocs(pack)
             pack.scripts = await loadScripts(pack)
+            pack.notes = NoteStore.load(packDir: dir)
             result.append(pack)
         }
         packs = result
         let scriptCount = packs.reduce(0) { $0 + $1.scripts.count }
-        Log.info("tools: \(packs.count) pack(s), \(scriptCount) script(s) in \(root.path); runtime: \(runner.summary)")
+        let noteCount = packs.reduce(0) { $0 + $1.notes.count }
+        Log.info("tools: \(packs.count) pack(s), \(scriptCount) script(s), \(noteCount) note(s) in \(root.path); runtime: \(runner.summary)")
+    }
+
+    // MARK: notes
+
+    /// Every note whose anchor is on the current scene, whichever pack keeps it.
+    func notes(for ctx: ScreenContext?) -> [StickyNote] {
+        guard let ctx else { return [] }
+        return packs.flatMap { $0.notes.filter { $0.anchor.matchesScene(ctx) } }
+    }
+
+    func pack(holding noteID: String) -> ToolPack? {
+        packs.first { $0.notes.contains { $0.id == noteID } }
+    }
+
+    /// The pack a new note on this scene belongs to: the first active pack, else one created for the scene.
+    func packForNote(anchor: NoteAnchor, ctx: ScreenContext?, appName: String?) async throws -> ToolPack {
+        if let p = select(for: ctx).active.first { return p }
+        let dir = try NoteStore.ensurePack(for: anchor, appName: appName, root: root)
+        await reload()
+        guard let p = packs.first(where: { $0.dir.lastPathComponent == dir.lastPathComponent }) else {
+            throw ClaudeError(message: "Could not create a pack for the note in \(dir.path).")
+        }
+        return p
+    }
+
+    /// Adds or replaces a note (by id) in its pack and writes notes.json.
+    func put(_ note: StickyNote, in pack: ToolPack) throws {
+        var notes = pack.notes.filter { $0.id != note.id }
+        notes.append(note)
+        try NoteStore.save(notes, packDir: pack.dir)
+        pack.notes = notes
+    }
+
+    func removeNote(id: String) throws {
+        guard let pack = pack(holding: id) else { return }
+        let notes = pack.notes.filter { $0.id != id }
+        try NoteStore.save(notes, packDir: pack.dir)
+        pack.notes = notes
     }
 
     private func loadDocs(_ pack: ToolPack) -> [DocFile] {

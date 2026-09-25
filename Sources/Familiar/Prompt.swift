@@ -27,6 +27,9 @@ enum Prompt {
     question is about the screen and no current screenshot was provided.
     Prefer the company's docs over general assumptions when they conflict, and say which doc you used. \
     Never invent internal procedures, URLs, contacts or policies. If you are unsure, say so plainly.
+    People also stick short notes on controls with the pen ("Notes left on this control"). They are first-hand, \
+    from the user or a colleague, and usually right: use them, mention them briefly when they matter, and if what \
+    you see on screen contradicts one, say so instead of silently ignoring it.
 
     Keep answers short and in plain language, no preamble. When there are obvious next things the user might \
     want, end with one final line exactly in this form (max 3 items, each under 8 words):
@@ -133,7 +136,25 @@ enum Prompt {
     }
 
     static func wandInstruction(target: WandTarget, ctx: ScreenContext?) -> String {
-        var s = "## The user pointed the pen at something on screen\n"
+        var s: String
+        if target.isRegion {
+            s = "## The user circled part of the screen with the pen\n"
+            if let t = target.windowTitle, !t.isEmpty { s += "Window: “\(t)”\(target.windowOwner.map { " (\($0))" } ?? "")\n" }
+            if !target.regionElements.isEmpty {
+                s += "Controls inside the circled area, top to bottom (Accessibility):\n"
+                for e in target.regionElements { s += "- \(e.summary)\n" }
+            }
+            s += "The violet ink stroke on the full screenshot is their drawing. The second image is a crop of the circled area.\n\n"
+            s += """
+            Respond in this shape, under 90 words before the Suggestions line:
+            1. One line naming what they circled, as it appears on screen (the group, table, chart or set of fields).
+            2. Two or three lines on what it shows or what state it is in, using the tool pack if relevant. \
+            If anything in it is clearly an error, a blocked state or an empty required field, say why and what to do right away.
+            3. Then ask what they want to know, and end with the Suggestions line offering up to 3 specific options.
+            """
+            return s
+        }
+        s = "## The user pointed the pen at something on screen\n"
         if let e = target.element { s += "Accessibility says it is: \(e.label)\n" }
         if let t = target.windowTitle, !t.isEmpty { s += "Window: “\(t)”\(target.windowOwner.map { " (\($0))" } ?? "")\n" }
         s += "The spot is marked with a violet ring on the full screenshot. The second image is a zoomed crop around it.\n\n"
@@ -144,6 +165,20 @@ enum Prompt {
         If it is clearly an error, a blocked state or an empty required field, say why and what to do right away.
         3. Then ask what they want to know, and end with the Suggestions line offering up to 3 specific options.
         """
+        return s
+    }
+
+    /// Notes people stuck on controls: the ones on what was picked, then the rest of the scene.
+    static func notes(onTarget: [StickyNote], elsewhere: [StickyNote]) -> String {
+        var s = ""
+        if !onTarget.isEmpty {
+            s += "\n## Notes left on this control\n"
+            for n in onTarget { s += "- \(n.isWarning ? "[warning] " : "")\(n.text) (\(n.by), \(n.confirmed))\n" }
+        }
+        if !elsewhere.isEmpty {
+            s += "\n## Notes left elsewhere on this screen\n"
+            for n in elsewhere.prefix(30) { s += "- On \(n.anchor.summary): \(n.isWarning ? "[warning] " : "")\(n.text) (\(n.by), \(n.confirmed))\n" }
+        }
         return s
     }
 }

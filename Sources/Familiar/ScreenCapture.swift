@@ -95,6 +95,29 @@ enum ScreenCapture {
         return ctx.makeImage() ?? image
     }
 
+    /// Draws an ink stroke (pixel coords, top-left origin): white halo under the brand purple, so it reads on anything.
+    static func annotate(_ image: CGImage, stroke: [CGPoint]) -> CGImage {
+        guard stroke.count > 1, let ctx = context(image.width, image.height) else { return image }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let path = CGMutablePath()
+        let h = CGFloat(image.height)
+        path.move(to: CGPoint(x: stroke[0].x, y: h - stroke[0].y))
+        for p in stroke.dropFirst() { path.addLine(to: CGPoint(x: p.x, y: h - p.y)) }
+        let w = max(6, CGFloat(min(image.width, image.height)) * 0.006)
+        ctx.setLineCap(.round); ctx.setLineJoin(.round)
+        ctx.addPath(path); ctx.setLineWidth(w * 1.9); ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.9)); ctx.strokePath()
+        ctx.addPath(path); ctx.setLineWidth(w); ctx.setStrokeColor(CGColor(red: 0.55, green: 0.3, blue: 0.95, alpha: 1)); ctx.strokePath()
+        return ctx.makeImage() ?? image
+    }
+
+    /// Crop around a rect (pixel coords, top-left origin) with padding, clamped to the image, at most `maxLongEdge` on the long side.
+    static func crop(_ image: CGImage, around rect: CGRect, padding: CGFloat, maxLongEdge: Int) -> CGImage? {
+        let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let r = rect.insetBy(dx: -padding, dy: -padding).intersection(bounds)
+        guard !r.isNull, r.width > 8, r.height > 8, let c = image.cropping(to: r.integral) else { return nil }
+        return downscale(c, maxLongEdge: maxLongEdge)
+    }
+
     /// Crop of `size` pixels centered on `p` (pixel coords, top-left origin), clamped to the image.
     static func crop(_ image: CGImage, around p: CGPoint, size: CGSize) -> CGImage? {
         let w = min(size.width, CGFloat(image.width)), h = min(size.height, CGFloat(image.height))

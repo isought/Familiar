@@ -32,6 +32,7 @@ struct Config: Codable {
     var watchCropWidth: Int = 900             // Watch me: crop around each click, in screen points
     var watchCropHeight: Int = 560
     var recordingsDir: String = ""            // empty = ~/.familiar/recordings
+    var noteAuthor: String = ""               // name written on the notes you leave with the pen; empty = your macOS full name
 
     static var dir: URL {
         if let h = ProcessInfo.processInfo.environment["FAMILIAR_HOME"], !h.isEmpty { return URL(fileURLWithPath: (h as NSString).expandingTildeInPath) }
@@ -92,6 +93,7 @@ struct Config: Codable {
         watchCropWidth = try c.decodeIfPresent(Int.self, forKey: .watchCropWidth) ?? d.watchCropWidth
         watchCropHeight = try c.decodeIfPresent(Int.self, forKey: .watchCropHeight) ?? d.watchCropHeight
         recordingsDir = try c.decodeIfPresent(String.self, forKey: .recordingsDir) ?? d.recordingsDir
+        noteAuthor = try c.decodeIfPresent(String.self, forKey: .noteAuthor) ?? d.noteAuthor
     }
 
     /// One-time move of the pre-rename home folder (`~/.sidekick`) to `~/.familiar`.

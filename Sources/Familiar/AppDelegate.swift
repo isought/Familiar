@@ -226,6 +226,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if !self.panel.isVisible { self.showBubble() }
             self.assistant.wandPick(target)
         }
+        wand.sceneProvider = { [weak self] in self?.watcher.sample() ?? self?.watcher.current }
+        wand.notesProvider = { [weak self] ctx in self?.registry.notes(for: ctx) ?? [] }
+        wand.author = { [weak self] in self.map { NoteStore.author($0.config) } ?? NSFullUserName() }
+        wand.onNoteSave = { [weak self] note in self?.assistant.saveNote(note) }
+        wand.onNoteDelete = { [weak self] id in self?.assistant.deleteNote(id) }
     }
 
     private func startWand() {

@@ -13,7 +13,7 @@ xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 || { echo
 ./scripts/build.sh
 APP="build/Familiar.app"
 codesign --verify --deep --strict --verbose=2 "$APP"
-grep -q "Developer ID" <(codesign -dv "$APP" 2>&1) || { echo "app is not Developer ID signed"; exit 1; }
+grep -q "Developer ID" <(codesign -dvv "$APP" 2>&1) || { echo "app is not Developer ID signed"; exit 1; }
 
 DIST=dist; rm -rf "$DIST"; mkdir -p "$DIST"
 
