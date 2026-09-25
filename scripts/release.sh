@@ -17,10 +17,16 @@ grep -q "Developer ID" <(codesign -dvv "$APP" 2>&1) || { echo "app is not Develo
 
 DIST=dist; rm -rf "$DIST"; mkdir -p "$DIST"
 
+# Do not rebuild while a submission is pending: the ticket is bound to the exact bundle that was uploaded.
+staple() {   # the ticket can take a minute to propagate after "Accepted"
+  for i in 1 2 3 4 5 6; do xcrun stapler staple "$1" && return 0; echo "staple not ready yet, retrying in 30s"; sleep 30; done
+  return 1
+}
+
 echo "== notarizing the app"
 ditto -c -k --keepParent "$APP" "$DIST/Familiar.zip"
 xcrun notarytool submit "$DIST/Familiar.zip" --keychain-profile "$PROFILE" --wait
-xcrun stapler staple "$APP"
+staple "$APP"
 rm "$DIST/Familiar.zip"
 
 echo "== dmg"
@@ -28,8 +34,10 @@ STAGE="$(mktemp -d)"; cp -R "$APP" "$STAGE/"; ln -s /Applications "$STAGE/Applic
 DMG="$DIST/Familiar-$VERSION.dmg"
 hdiutil create -volname "Familiar" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
+IDENTITY_APP="$(security find-identity -v -p codesigning | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')"
+codesign --force --timestamp --sign "$IDENTITY_APP" "$DMG"      # the image itself must be signed before notarization
 xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
-xcrun stapler staple "$DMG"
+staple "$DMG"
 
 echo "== pkg (for MDM)"
 PKG="$DIST/Familiar-$VERSION.pkg"
@@ -37,11 +45,13 @@ IDENTITY_INSTALLER="$(security find-identity -v -p basic | grep -o '"Developer I
 if [ -n "$IDENTITY_INSTALLER" ]; then
   pkgbuild --component "$APP" --install-location /Applications --identifier com.isought.familiar --version "$VERSION" --sign "$IDENTITY_INSTALLER" "$PKG"
   xcrun notarytool submit "$PKG" --keychain-profile "$PROFILE" --wait
-  xcrun stapler staple "$PKG"
+  staple "$PKG"
 else
   pkgbuild --component "$APP" --install-location /Applications --identifier com.isought.familiar --version "$VERSION" "$PKG"
   echo "note: no 'Developer ID Installer' certificate, so the .pkg is unsigned (fine for MDM push, not for direct download). Create one on the developer portal to sign it."
 fi
 
 spctl -a -vv "$APP" 2>&1 | tail -1
+spctl -a -vv -t open --context context:primary-signature "$DMG" 2>&1 | tail -1
+(cd "$DIST" && shasum -a 256 *.dmg *.pkg > SHA256SUMS.txt)
 ls -la "$DIST"
