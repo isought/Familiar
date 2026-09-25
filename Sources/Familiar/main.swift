@@ -39,6 +39,67 @@ func runSelfTest() async {
     }
     print("\ngrep 'meal' ->\n\(BuiltinTools.execute("grep", ["pattern": "meal"], root: root).content)")
     print("\nsplitSuggestions -> \(Assistant.splitSuggestions("Answer line.\n\nSuggestions: Why is it greyed out? | Show my reports | Open the wiki"))")
+    await selfTestNotes()
+}
+
+/// Notes: anchors match the scenes and controls they should, the store round-trips, and a scene without a pack gets one.
+@MainActor
+func selfTestNotes() async {
+    var failures = 0
+    func check(_ name: String, _ ok: Bool) { print("  \(ok ? "ok " : "FAIL") \(name)"); if !ok { failures += 1 } }
+    print("\nnotes:")
+    let web = ScreenContext(appName: "Google Chrome", bundleID: "com.google.Chrome", windowTitle: "Waxwing", url: "http://127.0.0.1:4310/?page=abc", focused: nil, timestamp: Date())
+    let other = ScreenContext(appName: "Google Chrome", bundleID: "com.google.Chrome", windowTitle: "Concur", url: "https://expenses.internal.example.com/reports/new", focused: nil, timestamp: Date())
+    let native = ScreenContext(appName: "TextEdit", bundleID: "com.apple.TextEdit", windowTitle: "Untitled 3 — Edited", url: nil, focused: nil, timestamp: Date())
+    var site = NoteStore.sceneAnchor(bundleID: web.bundleID, windowTitle: web.windowTitle, url: web.url)
+    site.role = "AXButton"; site.label = "Save  page"
+    check("site anchor is host+path", site.host == "127.0.0.1:4310" && site.path == "/" && site.bundle == nil)
+    check("site anchor matches its scene", site.matchesScene(web))
+    check("site anchor ignores another host", !site.matchesScene(other))
+    check("label match is case/space-insensitive", site.matchesElement(role: "AXButton", label: "save page"))
+    check("label match needs the role", !site.matchesElement(role: "AXLink", label: "Save page"))
+    var app = NoteStore.sceneAnchor(bundleID: native.bundleID, windowTitle: native.windowTitle, url: nil)
+    check("native anchor is bundle+window", app.bundle == "com.apple.TextEdit" && app.window == "Untitled 3 — Edited" && app.host == nil)
+    check("native anchor matches its scene", app.matchesScene(native))
+    app.window = "Untitled"
+    check("window fragment matches", app.matchesScene(native))
+    check("native anchor ignores a browser", !app.matchesScene(web))
+    let wf = NSRect(x: 100, y: 200, width: 1000, height: 800)
+    let r = NSRect(x: 600, y: 700, width: 200, height: 100)
+    var region = site; region.role = nil; region.label = nil
+    region.rect = NoteAnchor.fractions(of: r, in: wf)
+    let back = region.screenRect(in: wf)
+    check("rect anchor round-trips", region.isRegion && back.map { abs($0.minX - r.minX) < 0.5 && abs($0.minY - r.minY) < 0.5 && abs($0.width - r.width) < 0.5 && abs($0.height - r.height) < 0.5 } == true)
+    check("summary reads well", site.summary == "button “Save  page” on 127.0.0.1:4310" && region.summary == "a circled spot on 127.0.0.1:4310")
+
+    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("familiar-notes-\(UUID().uuidString.prefix(8))")
+    try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    do {
+        let dir = try NoteStore.ensurePack(for: site, appName: "Google Chrome", root: tmp)
+        check("pack created for the host", dir.lastPathComponent == "127-0-0-1-4310" && FileManager.default.fileExists(atPath: dir.appendingPathComponent("SKILL.md").path))
+        let again = try NoteStore.ensurePack(for: site, appName: nil, root: tmp)
+        check("ensurePack is idempotent", again.standardizedFileURL.path == dir.standardizedFileURL.path)
+        let n1 = NoteStore.make(NoteDraft(existingID: nil, anchor: site, kind: "warning", text: "  Saves a new version every time. \n", frame: .zero), by: "david")
+        let n2 = NoteStore.make(NoteDraft(existingID: nil, anchor: region, kind: "tip", text: "Filters apply to this table only.", frame: .zero), by: "david")
+        try NoteStore.save([n1, n2], packDir: dir)
+        let loaded = NoteStore.load(packDir: dir)
+        check("store round-trips", loaded == [n1, n2] && n1.text == "Saves a new version every time." && n1.isWarning && !n1.at.isEmpty)
+        let registry = ToolRegistry(root: tmp, runner: ScriptRunner(config: Config()))
+        await registry.reload()
+        check("registry loads notes and matches the scene", registry.notes(for: web).count == 2 && registry.notes(for: other).isEmpty)
+        check("registry finds the pack holding a note", registry.pack(holding: n2.id)?.dirName == "127-0-0-1-4310")
+        check("the created pack is active on its scene", registry.select(for: web).active.map(\.dirName) == ["127-0-0-1-4310"])
+        try registry.removeNote(id: n1.id)
+        check("remove writes through", NoteStore.load(packDir: dir).map(\.id) == [n2.id] && registry.notes(for: web).count == 1)
+        let placed = WandController.place(loaded, scan: AXScan.Result(bundleID: nil, windowFrame: wf, items: [
+            AXScan.Item(role: "AXButton", label: "Save page", frame: NSRect(x: 900, y: 900, width: 80, height: 24)),
+            AXScan.Item(role: "AXButton", label: "Other", frame: NSRect(x: 100, y: 900, width: 80, height: 24)),
+        ]))
+        check("stickers land on the labelled control and the region", placed.count == 2 && placed[0].frame.minX == 900 && abs(placed[1].frame.minX - r.minX) < 0.5)
+    } catch { check("store: \(error.localizedDescription)", false) }
+    print(failures == 0 ? "notes: all checks passed" : "notes: \(failures) check(s) FAILED")
+    if failures > 0 { exit(1) }
 }
 
 /// `Familiar --ask "question" [url] [--shot]`: headless question through the real Claude tool loop, no screenshot, no UI.
@@ -56,7 +117,8 @@ func runHeadlessAsk() async {
     let title = args.firstIndex(of: "--title").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? (url.contains("4310") ? "Waxwing" : "New Report - Concur")
     let ctx = ScreenContext(appName: "Google Chrome", bundleID: "com.google.Chrome", windowTitle: title, url: url, focused: nil, timestamp: Date())
     let sel = registry.select(for: ctx)
-    let text = Prompt.context(ctx, recent: []) + Prompt.toolPacks(active: sel.active, global: sel.global, others: sel.others, stuffLimit: config.docsStuffLimitChars) + "\n## Question\n\(question)\n"
+    let text = Prompt.context(ctx, recent: []) + Prompt.toolPacks(active: sel.active, global: sel.global, others: sel.others, stuffLimit: config.docsStuffLimitChars)
+        + Prompt.notes(onTarget: [], elsewhere: registry.notes(for: ctx)) + "\n## Question\n\(question)\n"
     var tools = (sel.active + sel.global).flatMap(\.scripts).map(\.definition) + BuiltinTools.definitions
     // --control: expose the computer toolset (no HUD in headless mode). Only meaningful when the user asked for it.
     let controlOn = args.contains("--control")
@@ -79,7 +141,7 @@ func runHeadlessAsk() async {
     var messages: [[String: Any]] = [["role": "user", "content": content]]
     let client = ClaudeClient(config: config, apiKey: key)
     client.maxToolRounds = controlOn ? 40 : 8
-    print("context: \(ctx.summaryLine)\nactive packs: \(sel.active.map(\.dirName)) tools: \(tools.count)\n")
+    print("context: \(ctx.summaryLine)\nactive packs: \(sel.active.map(\.dirName)) tools: \(tools.count) notes on scene: \(registry.notes(for: ctx).count)\n")
     defer { control.end() }
     do {
         let system = Prompt.system + (controlOn ? Prompt.control : "")
@@ -226,6 +288,7 @@ func runRenderCard() {
     state.contextLine = "Google Chrome · New Report - Concur"
     state.transcript = [
         ChatMessage(role: .wand, text: "Cost Center (dropdown, empty)"),
+        ChatMessage(role: .note, text: "Pick the one ending in your department code, not the project one, or Finance bounces it.", meta: "Priya · 2026-09-18", warning: true),
         ChatMessage(role: .assistant, text: """
             That's the **Cost Center** field: it tells Finance which team's budget pays for this report. It's required, so the form won't submit while it's empty.
             To fill it:
@@ -285,6 +348,70 @@ func runRenderCard() {
         render(BubblePanel.defaultExpandedSize, dark: false, "pad-400-busy.png")
         state.transcript = full; state.suggestions = sugg; state.busy = false
     }
+    exit(0)
+}
+
+/// `Familiar --render-pen <dir>`: the pen overlay over a fake window, with two stickers (one open) and the note editor,
+/// drawn into a PNG. For eyeballing the paper without a mouse.
+@MainActor
+func runRenderPen() {
+    let args = CommandLine.arguments
+    guard let i = args.firstIndex(of: "--render-pen"), i + 1 < args.count else { print("usage: --render-pen <dir>"); exit(2) }
+    let dir = URL(fileURLWithPath: args[i + 1])
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let size = NSSize(width: 1100, height: 720)
+    let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isOpaque = false
+    window.backgroundColor = .clear
+    let container = NSView(frame: NSRect(origin: .zero, size: size))
+    container.wantsLayer = true
+    container.layer?.backgroundColor = NSColor(calibratedWhite: 0.96, alpha: 1).cgColor
+
+    // a fake page: a title, a toolbar of buttons, a form and a table, so the stickers have something to stick to
+    let controls: [(String, NSRect)] = [("Save page", NSRect(x: 900, y: 640, width: 96, height: 28)), ("Update", NSRect(x: 796, y: 640, width: 92, height: 28)),
+                                        ("Cost Center", NSRect(x: 80, y: 500, width: 320, height: 30)), ("Amount", NSRect(x: 80, y: 430, width: 200, height: 30)),
+                                        ("Submit report", NSRect(x: 80, y: 360, width: 130, height: 30))]
+    for (label, r) in controls {
+        let v = NSView(frame: r); v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor.white.cgColor; v.layer?.cornerRadius = 6; v.layer?.borderWidth = 1; v.layer?.borderColor = NSColor(calibratedWhite: 0.78, alpha: 1).cgColor
+        let t = NSTextField(labelWithString: label); t.font = NSFont.systemFont(ofSize: 13); t.textColor = NSColor(calibratedWhite: 0.25, alpha: 1); t.sizeToFit()
+        t.frame.origin = NSPoint(x: 10, y: (r.height - t.frame.height) / 2); v.addSubview(t)
+        container.addSubview(v)
+    }
+    let table = NSView(frame: NSRect(x: 480, y: 300, width: 520, height: 260)); table.wantsLayer = true
+    table.layer?.backgroundColor = NSColor.white.cgColor; table.layer?.borderWidth = 1; table.layer?.borderColor = NSColor(calibratedWhite: 0.8, alpha: 1).cgColor
+    for row in 0..<6 {
+        let l = NSView(frame: NSRect(x: 0, y: CGFloat(row) * 40, width: 520, height: 1)); l.wantsLayer = true; l.layer?.backgroundColor = NSColor(calibratedWhite: 0.9, alpha: 1).cgColor; table.addSubview(l)
+    }
+    container.addSubview(table)
+    let title = NSTextField(labelWithString: "Expense report · September"); title.font = NSFont.systemFont(ofSize: 22, weight: .semibold); title.sizeToFit(); title.frame.origin = NSPoint(x: 80, y: 640); container.addSubview(title)
+
+    let controller = WandController()
+    let view = WandView(frame: NSRect(origin: .zero, size: size), controller: controller, screen: NSScreen.main ?? NSScreen.screens[0])
+    container.addSubview(view)
+    window.contentView = container
+
+    var a1 = NoteStore.sceneAnchor(bundleID: "com.google.Chrome", windowTitle: "Concur", url: "https://expenses.internal.example.com/reports/new")
+    a1.role = "AXPopUpButton"; a1.label = "Cost Center"
+    var a2 = a1; a2.role = "AXButton"; a2.label = "Submit report"
+    var a3 = a1; a3.role = nil; a3.label = nil; a3.rect = NoteAnchor.fractions(of: table.frame, in: container.frame)
+    let n1 = StickyNote(id: "n1", anchor: a1, kind: "warning", text: "Pick the one ending in your department code, not the project one, or Finance bounces it a week later.", by: "Priya", at: "2026-09-18", confirmed: "2026-09-18")
+    let n2 = StickyNote(id: "n2", anchor: a2, kind: "tip", text: "Submitting after 3pm on Friday means it waits until Tuesday's batch.", by: "Tom", at: "2026-08-30", confirmed: "2026-09-12")
+    let n3 = StickyNote(id: "n3", anchor: a3, kind: "tip", text: "Filters up top apply to this table only, the totals below ignore them.", by: "david", at: "2026-09-24", confirmed: "2026-09-24")
+    view.showStickers([.init(note: n1, frame: controls[2].1), .init(note: n2, frame: controls[4].1), .init(note: n3, frame: table.frame)])
+    view.setExpanded("n1", true)
+    view.present(anchor: a2, at: controls[1].1, existing: nil)   // the editor open on "Update"
+    view.layoutSubtreeIfNeeded()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+
+    guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2), bitsPerSample: 8,
+                                     samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+    else { print("rep failed"); exit(1) }
+    rep.size = size
+    container.cacheDisplay(in: container.bounds, to: rep)
+    guard let data = rep.representation(using: .png, properties: [:]) else { print("encode failed"); exit(1) }
+    do { try data.write(to: dir.appendingPathComponent("pen.png")); print("wrote pen.png \(rep.pixelsWide)x\(rep.pixelsHigh)") }
+    catch { print("write failed: \(error)"); exit(1) }
     exit(0)
 }
 
@@ -356,6 +483,8 @@ if CommandLine.arguments.contains("--record-synthetic") {
     MainActor.assumeIsolated { runRenderMascot() }
 } else if CommandLine.arguments.contains("--render-card") {
     MainActor.assumeIsolated { runRenderCard() }
+} else if CommandLine.arguments.contains("--render-pen") {
+    MainActor.assumeIsolated { runRenderPen() }
 } else if CommandLine.arguments.contains("--ask") {
     Task { @MainActor in
         await runHeadlessAsk()

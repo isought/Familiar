@@ -123,9 +123,9 @@ final class ToolRegistry {
         packs.first { $0.notes.contains { $0.id == noteID } }
     }
 
-    /// The pack a new note on this scene belongs to: the first active pack, else one created for the scene.
-    func packForNote(anchor: NoteAnchor, ctx: ScreenContext?, appName: String?) async throws -> ToolPack {
-        if let p = select(for: ctx).active.first { return p }
+    /// The pack a new note belongs to: the first pack whose match rules cover the note's scene, else one created for it.
+    func packForNote(anchor: NoteAnchor, appName: String?) async throws -> ToolPack {
+        if let p = select(for: anchor.sceneContext).active.first { return p }
         let dir = try NoteStore.ensurePack(for: anchor, appName: appName, root: root)
         await reload()
         guard let p = packs.first(where: { $0.dir.lastPathComponent == dir.lastPathComponent }) else {

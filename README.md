@@ -10,19 +10,28 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
 2. **Tool packs** in `~/.familiar/tools/<pack>/` match the current app/URL and supply docs plus scripts.
 3. **Pen**: hold the note until the ring fills, or press **⌃⌥Space**. The pointer becomes a quill, the screen dims with a
    shimmering border, the element under the quill is outlined, and a click sends a screenshot (ringed at the click) plus a
-   zoomed crop to Claude.
+   zoomed crop to Claude. **Drag** to circle something instead: the ink stroke goes on the screenshot, the crop is the circled
+   area, and the labelled controls inside it are named for the model.
    The reply names what you pointed at, explains its state, and offers tappable follow-ups.
-4. **Chat**: double-click the note and type, for questions that have no single thing to point at. A single click just pokes it. The note reacts as it goes:
+4. **Notes**: while the pen is up, **right-click** (two-finger click, or ⌃-click) a control and a sticky note opens right on it.
+   Type, ⏎ keeps it, ⇧⏎ makes a new line, Esc drops it; tick **Warning** for the orange kind. Right-drag circles a spot and
+   sticks the note to that area. Right-click an existing sticker to edit or remove it. Picking up the pen shows every note
+   already left on the current screen as a small sticker on its control (hover to read the whole thing); a pick puts the
+   notes on that control onto the pad first, and Claude gets them too ("Notes left on this control"). Typed questions see the
+   notes on the current screen as well. Notes live in the matching pack's `notes.json` (a pack is created for the site or app
+   if none matches), anchored by host+path or app+window, plus the control's role and label as shown, or a rectangle
+   relative to the window for circled spots. Nothing is stuck to a password field.
+5. **Chat**: double-click the note and type, for questions that have no single thing to point at. A single click just pokes it. The note reacts as it goes:
    curious when you hover, thinking while it works, happy or sad when the answer lands.
    The chat is a pad of sticky notes: each question is a note with the answer written on it (inked in line by line as it
    arrives), follow-ups are paper tabs under the note, and the character peeks over the newest one.
-5. Claude can call the pack's scripts, `read_file` / `grep` over the docs, and `read_screen` (accessibility text).
-6. **Control** (off by default, Settings → "Allow Familiar to control the mouse and keyboard"): ask it to do something
+6. Claude can call the pack's scripts, `read_file` / `grep` over the docs, and `read_screen` (accessibility text).
+7. **Control** (off by default, Settings → "Allow Familiar to control the mouse and keyboard"): ask it to do something
    ("type the sum formula for me") and it drives the mouse and keyboard through Claude's computer toolset. The screen
    gets the shimmer border with a caption of each step; moving the mouse or pressing Esc stops it instantly; it asks
    before Send / Submit / Delete / Pay. `find_on_screen` gives it exact coordinates for labelled controls via Accessibility.
 
-7. **Watch me**: menu bar → **Watch Me** (or the eye on the pad). Do the task the way you normally do, then press ⌃⌥Space or
+8. **Watch me**: menu bar → **Watch Me** (or the eye on the pad). Do the task the way you normally do, then press ⌃⌥Space or
    **Stop Watching**. Familiar records clicks (with the real labels of what you clicked, via Accessibility), a crop around each
    click, a full frame whenever the screen changes, and text typed into named form fields, into
    `~/.familiar/recordings/<stamp>/` (folder 0700, files 0600). It asks what you were doing, writes the recording up through
@@ -66,6 +75,8 @@ No packs are needed to start: watching creates them. Nothing leaves the machine 
 ./scripts/run.sh                          # builds build/Familiar.app and launches it
 .build/release/Familiar --selftest tools  # loads the packs, runs three scripts, no UI, no API
 .build/release/Familiar --render-mascot /tmp/mascot [--style innocent|sharp]   # renders every mood, the quill cursor and the app-icon source as PNGs
+.build/release/Familiar --render-card /tmp/card [--states]   # the pad with a pick, a note sticker and answers, as PNGs
+.build/release/Familiar --render-pen /tmp/pen               # the pen overlay over a fake page: stickers and the note editor, as a PNG
 build/Familiar.app/Contents/MacOS/Familiar --ask "question" [url] [--shot] [--control]   # headless Claude call, real tool loop
 ```
 First launch creates `~/.familiar/` (or `$FAMILIAR_HOME`) with `config.json`, `tools/` (example packs copied in) and `familiar.log`.
@@ -83,6 +94,7 @@ Both are user-consent only; MDM cannot pre-grant them. The menu bar menu shows t
   expenses/
     SKILL.md            manifest: name, description, match rules, short overview
     docs/               any files, any structure (md/txt are stuffed or indexed)
+    notes.json          sticky notes left with the pen: {"notes": [{id, anchor, kind, text, by, at, confirmed}]}
     scripts/
       report_status.py  def run(report_id: str) -> dict   -> tool "expenses__report_status"
   shared/               a pack with no match rules is always active
@@ -146,6 +158,7 @@ The docs were generated from the app's repo and use its real button labels.
 | watchMaxImages | 60 | Watch me: most images sent when writing a recording up |
 | watchCropWidth / watchCropHeight | 900 / 560 | Watch me: crop around each click (screen points) |
 | recordingsDir | "" | override the recordings folder (default `~/.familiar/recordings`) |
+| noteAuthor | "" | the name written on notes you leave with the pen; empty = your macOS full name |
 
 ## Dev notes
 - macOS binds permission grants to the app's code signature. Ad-hoc builds change every time, so run
@@ -161,7 +174,8 @@ and `.pkg` (signed too if a **Developer ID Installer** certificate exists). `scr
 automatically when present; Developer ID builds keep secrets in the Keychain (`secretsStore: auto`).
 IT can push the .pkg via MDM with a PPPC profile that pre-approves Accessibility; Screen Recording cannot be
 pre-approved, so the user clicks one prompt on first launch, once per install.
-- Layout, `Sources/Familiar/`: `WandOverlay` (overlay, hit test, cursor), `ScreenCapture` (ScreenCaptureKit, annotate, crop),
+- Layout, `Sources/Familiar/`: `WandOverlay` (overlay, hit test, ink, stickers, note editor, cursor), `Notes` (note anchors and store,
+  Accessibility scan), `ScreenCapture` (ScreenCaptureKit, annotate, crop),
   `WatchRecorder` + `WatchSummarizer` (Watch me: passive recording, write-up, pack writer),
   `ContextWatcher` (Accessibility), `ToolRegistry` + `ScriptRunner` + `BuiltinTools` (packs), `ClaudeClient` (raw HTTP, tool loop),
   `Assistant` (flows, history), `BubblePanel` (NSPanel + SwiftUI), `AppDelegate` (menu bar, hotkey).

@@ -6,3 +6,4 @@ tools/waxwing/token
 __pycache__/
 *.pyc
 .claude/worktrees/
+dist/

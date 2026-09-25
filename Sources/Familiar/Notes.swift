@@ -23,6 +23,18 @@ struct NoteAnchor: Codable, Equatable {
         return "a circled spot on \(place)"
     }
 
+    /// The control alone: `button “Save page”`, or `a circled spot`.
+    var controlSummary: String {
+        if let label { return "\(Self.roleWord(role)) “\(label)”" }
+        return "a circled spot"
+    }
+
+    /// A context that stands for the scene, so pack match rules can be applied to it.
+    var sceneContext: ScreenContext {
+        ScreenContext(appName: "", bundleID: bundle ?? "", windowTitle: window ?? "",
+                      url: host.map { "http://\($0)\(path ?? "/")" }, focused: nil, timestamp: Date())
+    }
+
     static func roleWord(_ role: String?) -> String {
         guard let role, !role.isEmpty else { return "control" }
         return role.replacingOccurrences(of: "AX", with: "")

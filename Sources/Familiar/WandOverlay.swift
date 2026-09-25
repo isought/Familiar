@@ -330,12 +330,25 @@ enum StickerPaper {
         return NSFont.systemFont(ofSize: size, weight: bold ? .semibold : .regular)
     }
 
-    static func height(of text: String, font: NSFont, width: CGFloat, maxLines: Int) -> CGFloat {
+    /// The text as CATextLayer should draw it, and the height it needs (measured with the same attributes, plus slack
+    /// for the layer's own leading), capped at `maxLines`.
+    static func measure(_ text: String, font: NSFont, color: NSColor, width: CGFloat, maxLines: Int) -> (NSAttributedString, CGFloat) {
         let para = NSMutableParagraphStyle(); para.lineBreakMode = .byWordWrapping
-        let attr = NSAttributedString(string: text, attributes: [.font: font, .paragraphStyle: para])
+        let attr = NSAttributedString(string: text, attributes: [.font: font, .paragraphStyle: para, .foregroundColor: color])
         let r = attr.boundingRect(with: NSSize(width: width, height: 10_000), options: [.usesLineFragmentOrigin, .usesFontLeading])
-        let line = ceil(font.ascender - font.descender + font.leading) + 1
-        return min(ceil(r.height) + 2, line * CGFloat(maxLines) + 2)
+        let line = ceil(font.ascender - font.descender + font.leading) + 2
+        let lines = max(1, min(CGFloat(maxLines), ceil(r.height / max(1, line - 2))))
+        return (attr, lines * line + 4)
+    }
+
+    /// Stuck to the control's top-right corner; when there is no room above, hung under its bottom-right corner instead.
+    static func origin(for size: NSSize, control: NSRect, in bounds: NSRect) -> NSPoint {
+        var x = control.maxX - 26
+        var y = control.maxY - 10
+        if y + size.height > bounds.height - 6 { y = control.minY + 10 - size.height }
+        x = min(max(6, x), bounds.width - size.width - 6)
+        y = min(max(6, y), bounds.height - size.height - 6)
+        return NSPoint(x: x, y: y)
     }
 }
 
@@ -477,7 +490,7 @@ final class WandView: NSView {
         s.layer.borderColor = StickerPaper.edge
         s.layer.shadowOpacity = 0.3; s.layer.shadowRadius = 3; s.layer.shadowOffset = CGSize(width: 0, height: -2)
         for t in [s.text, s.byline] { t.contentsScale = scale; t.isWrapped = true; t.truncationMode = .end }
-        s.text.foregroundColor = StickerPaper.ink.cgColor
+        s.text.foregroundColor = StickerPaper.ink.cgColor      // the truncation token takes the layer's colour, not the string's
         s.byline.foregroundColor = StickerPaper.inkSoft.cgColor
         s.byline.font = NSFont.systemFont(ofSize: 10); s.byline.fontSize = 10
         s.layer.addSublayer(s.text); s.layer.addSublayer(s.byline)
@@ -492,20 +505,17 @@ final class WandView: NSView {
         let width: CGFloat = s.expanded ? 280 : 190
         let body = (s.note.isWarning ? "⚠︎ " : "") + (s.expanded ? s.note.text : String(s.note.text.prefix(100)))
         let font = StickerPaper.font(s.expanded ? 13.5 : 12.5, bold: true)
-        let textH = StickerPaper.height(of: body, font: font, width: width - 20, maxLines: s.expanded ? 14 : 2)
+        let (attr, textH) = StickerPaper.measure(body, font: font, color: StickerPaper.ink, width: width - 20, maxLines: s.expanded ? 14 : 2)
         let height = textH + (s.expanded ? 34 : 14)
-        var x = control.maxX - 26, y = control.maxY - 10
-        x = min(max(6, x), bounds.width - width - 6)
-        y = min(max(6, y), bounds.height - height - 6)
+        let o = StickerPaper.origin(for: NSSize(width: width, height: height), control: control, in: bounds)
         let seed = CGFloat(abs(s.note.id.hashValue % 100)) / 100
         CATransaction.begin(); CATransaction.setDisableActions(true)
         s.layer.transform = CATransform3DIdentity
         s.layer.bounds = CGRect(x: 0, y: 0, width: width, height: height)
-        s.layer.position = CGPoint(x: x + width / 2, y: y + height / 2)
+        s.layer.position = CGPoint(x: o.x + width / 2, y: o.y + height / 2)
         s.layer.transform = s.expanded ? CATransform3DIdentity : CATransform3DMakeRotation((seed - 0.5) * 0.06, 0, 0, 1)
         s.layer.zPosition = s.expanded ? 10 : 1
-        s.text.font = font; s.text.fontSize = font.pointSize
-        s.text.string = body
+        s.text.string = attr
         s.text.frame = CGRect(x: 10, y: s.expanded ? 24 : 7, width: width - 20, height: textH)
         s.byline.string = "— " + s.note.byline
         s.byline.frame = CGRect(x: 10, y: 7, width: width - 20, height: 13)
@@ -543,15 +553,16 @@ final class WandView: NSView {
         present(anchor: anchor, at: region, existing: nil)
     }
 
-    private func present(anchor: NoteAnchor, at frame: NSRect, existing: StickyNote?) {
+    /// Render mode: open or close a sticker by note id.
+    func setExpanded(_ id: String, _ on: Bool) {
+        for s in stickers where s.note.id == id && s.expanded != on { s.expanded = on; layout(s) }
+    }
+
+    func present(anchor: NoteAnchor, at frame: NSRect, existing: StickyNote?) {
         editor?.removeFromSuperview()
-        let ed = NoteEditor(existing: existing, place: anchor.summary)
-        let control = local(frame)
-        let size = ed.frame.size
-        var x = control.maxX - 26, y = control.maxY - 10
-        x = min(max(8, x), bounds.width - size.width - 8)
-        y = min(max(8, y), bounds.height - size.height - 8)
-        ed.frame = NSRect(x: x, y: y, width: size.width, height: size.height)
+        let ed = NoteEditor(existing: existing, place: anchor.controlSummary)
+        let o = StickerPaper.origin(for: ed.frame.size, control: local(frame), in: bounds)
+        ed.frame = NSRect(origin: o, size: ed.frame.size)
         ed.onCommit = { [weak self] text, kind in self?.finishEditor(text: text, kind: kind) }
         ed.onCancel = { [weak self] in self?.closeEditor() }
         ed.onDelete = { [weak self] in
@@ -678,7 +689,7 @@ final class NoteEditor: NSView, NSTextViewDelegate {
     static let size = NSSize(width: 276, height: 138)
     let textView = NoteTextView()
     private let scroll = NSScrollView()
-    private let kind = NSSegmentedControl(labels: ["Tip", "Warning"], trackingMode: .selectOne, target: nil, action: nil)
+    private let warning = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let placeLabel = NSTextField(labelWithString: "")
     private let placeholder = NSTextField(labelWithString: "What should the next person know?")
     private let hint = NSTextField(labelWithString: "⏎ keep · ⇧⏎ line · esc drop")
@@ -745,14 +756,14 @@ final class NoteEditor: NSView, NSTextViewDelegate {
         placeholder.isHidden = !(existing?.text ?? "").isEmpty
         addSubview(placeholder)
 
-        kind.selectedSegment = existing?.isWarning == true ? 1 : 0
-        kind.controlSize = .small
-        kind.font = NSFont.systemFont(ofSize: 10.5)
-        kind.target = self
-        kind.action = #selector(kindChanged)
-        kind.sizeToFit()
-        kind.frame.origin = NSPoint(x: 10, y: 8)
-        addSubview(kind)
+        warning.attributedTitle = NSAttributedString(string: "⚠︎ Warning", attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: StickerPaper.ink])
+        warning.state = existing?.isWarning == true ? .on : .off
+        warning.controlSize = .small
+        warning.target = self
+        warning.action = #selector(kindChanged)
+        warning.sizeToFit()
+        warning.frame.origin = NSPoint(x: 10, y: 9)
+        addSubview(warning)
 
         hint.font = NSFont.systemFont(ofSize: 10)
         hint.textColor = StickerPaper.inkSoft
@@ -762,13 +773,17 @@ final class NoteEditor: NSView, NSTextViewDelegate {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    /// A click on the paper itself is not a click on the screen behind it.
+    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(textView) }
+    override func rightMouseDown(with event: NSEvent) { window?.makeFirstResponder(textView) }
+
     func commit() {
         let t = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty { onCancel?() } else { onCommit?(String(t.prefix(600)), kind.selectedSegment == 1 ? "warning" : "tip") }
+        if t.isEmpty { onCancel?() } else { onCommit?(String(t.prefix(600)), warning.state == .on ? "warning" : "tip") }
     }
 
     @objc private func kindChanged() {
-        layer?.backgroundColor = kind.selectedSegment == 1 ? StickerPaper.warning : StickerPaper.tip
+        layer?.backgroundColor = warning.state == .on ? StickerPaper.warning : StickerPaper.tip
         window?.makeFirstResponder(textView)
     }
 

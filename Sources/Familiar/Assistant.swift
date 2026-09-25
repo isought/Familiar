@@ -412,7 +412,7 @@ final class Assistant: ObservableObject {
             do {
                 let pack: ToolPack
                 if let p = registry.pack(holding: note.id) { pack = p }
-                else { pack = try await registry.packForNote(anchor: note.anchor, ctx: ctx, appName: ctx?.appName) }
+                else { pack = try await registry.packForNote(anchor: note.anchor, appName: ctx?.appName) }
                 try registry.put(note, in: pack)
                 status = "Note kept in \(pack.dirName)/\(NoteStore.fileName)"
                 Log.info("notes: kept \(note.kind) on \(note.anchor.summary) in \(pack.dirName)")
