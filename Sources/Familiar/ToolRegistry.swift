@@ -51,6 +51,7 @@ final class ToolPack {
     var description: String
     var match = MatchRules()
     var requires: [String] = []     // env var names the scripts need (secrets from the Keychain)
+    var irreversible: [String] = [] // control labels the background lane must confirm before pressing (SKILL.md `irreversible:`)
     var body = ""
     var docs: [DocFile] = []
     var scripts: [ScriptTool] = []
@@ -94,6 +95,7 @@ final class ToolRegistry {
                 pack.description = fm["description"] as? String ?? ""
                 pack.body = body.trimmingCharacters(in: .whitespacesAndNewlines)
                 pack.requires = Self.list(fm["requires"])
+                pack.irreversible = Self.list(fm["irreversible"])
                 if let m = fm["match"] as? [String: Any] {
                     pack.match.urls = Self.list(m["urls"])
                     pack.match.bundles = Self.list(m["bundles"])

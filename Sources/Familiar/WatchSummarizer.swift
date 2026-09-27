@@ -31,9 +31,11 @@ enum WatchSummarizer {
     static let maxImagesAllowed = 100            // the Messages API's per-request image limit
     static let imageByteBudget = 20_000_000      // base64 bytes for all images; the request limit is 32 MB
 
-    static func summarize(_ rec: Recording, purpose: String?, config: Config, apiKey: String,
+    static func summarize(_ rec: Recording, purpose: String?, config: Config,
                           onStatus: @escaping (String) -> Void) async throws -> PackDraft {
-        let client = ClaudeClient(config: config, apiKey: apiKey)
+        guard let client = ConversationBackend.make(config: config) else {
+            throw ClaudeError(message: ConversationBackend.setupMessage(config: config))
+        }
         client.effort = "high"
         client.maxTokens = max(config.maxTokens, 8192)
         client.maxToolRounds = 0

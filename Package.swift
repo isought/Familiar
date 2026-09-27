@@ -13,6 +13,11 @@ let package = Package(
                 .linkedFramework("ScreenCaptureKit"),
                 .linkedFramework("Carbon"),
             ]
+        ),
+        .testTarget(
+            name: "FamiliarTests",
+            dependencies: ["Familiar"],
+            path: "Tests/FamiliarTests"
         )
     ]
 )

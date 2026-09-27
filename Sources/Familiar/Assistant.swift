@@ -3,12 +3,13 @@ import Foundation
 import SwiftUI
 
 struct ChatMessage: Identifiable {
-    enum Role { case user, wand, assistant, error, draft, learned, note }   // draft/learned: a note Familiar starts itself (a watched workflow's title), before and after Keep; note: a sticky note someone left on the control
+    enum Role { case user, wand, assistant, error, draft, learned, note, receipt }   // draft/learned: a note Familiar starts itself (a watched workflow's title), before and after Keep; note: a sticky note someone left on the control; receipt: the last frame of a background job
     let id = UUID()
     let role: Role
     let text: String
     var meta: String? = nil        // note: who left it and when
     var warning = false            // note: a warning rather than a tip
+    var image: CGImage? = nil      // receipt: the target window when the job ended
 }
 
 @MainActor
@@ -23,6 +24,7 @@ final class Assistant: ObservableObject {
     @Published var cardSize = NSSize(width: 400, height: 540)
     @Published var watching = false
     @Published var pendingDraft: PackDraft?
+    @Published var backgroundControl = true   // mirror of config.controlInBackground for the pad's hand button
 
     var config: Config
     let watcher: ContextWatcher
@@ -36,9 +38,32 @@ final class Assistant: ObservableObject {
     var onPoke: (() -> Void)?             // single click on the note: reaction only, plus a first-time hint
     var onResizeCard: ((NSSize, Bool) -> Void)?   // new size, and whether the drag ended (persist)
     var onToggleLarge: (() -> Void)?
+    var onSetControlLane: ((_ allow: Bool, _ background: Bool) -> Void)?   // the app persists both and reconfigures
 
-    private var client: ClaudeClient?
+    /// The live peek of the window a background job works in; the pad shows it on the request's note.
+    let peek = PeekFeed()
+
+    /// Open the pad without taking key focus away from the app the user is working in (a background job finished).
+    private(set) var quietExpandPending = false
+    func expandQuietly() { quietExpandPending = true; expanded = true }
+    func consumeQuietExpand() -> Bool { defer { quietExpandPending = false }; return quietExpandPending }
+
+    /// The pad's hand: on = work in the window you asked from. Clicking it while control is off turns control on
+    /// (the user is flipping the gate themselves), in the background lane, which never takes the mouse unasked.
+    var backgroundOn: Bool { config.allowControl && backgroundControl }
+    func toggleBackgroundControl() {
+        if !config.allowControl {
+            onSetControlLane?(true, true)
+            status = "Control is on — I'll work in the window while you carry on, and ask before I ever take the mouse."
+        } else {
+            onSetControlLane?(true, !backgroundControl)
+            status = backgroundControl ? "I'll take the mouse when you ask me to do things." : "I'll work in the window while you carry on."
+        }
+    }
+
+    private var client: (any ConversationClient)?
     private var apiMessages: [[String: Any]] = []
+    private var conversationGeneration = 0
     private var lastCapture: (at: Date, scene: ScreenContext?)?
     private(set) lazy var recorder = WatchRecorder(config: config, watcher: watcher)
     private var pendingRecording: Recording?     // stopped, waiting for a purpose, being written up, or under review
@@ -58,12 +83,14 @@ final class Assistant: ObservableObject {
         self.config = config
         self.watcher = watcher
         self.registry = registry
-        if let key = config.resolvedApiKey { client = ClaudeClient(config: config, apiKey: key) }
+        backgroundControl = config.controlInBackground
+        client = ConversationBackend.make(config: config)
     }
 
-    var hasApiKey: Bool { client != nil }
+    var hasConnection: Bool { client != nil }
 
     func clearConversation() {
+        conversationGeneration += 1
         transcript.removeAll()
         apiMessages.removeAll()
         suggestions.removeAll()
@@ -95,6 +122,7 @@ final class Assistant: ObservableObject {
             if s == Self.retryTab, let rec = pendingRecording { summarize(rec, purpose: rec.meta.purpose); return }
         }
         if Self.reservedTabs.contains(s) { suggestions = reviewTabs([]); return }   // a stale tab: never a question for Claude
+        if s.hasPrefix("Confirm: ") { control?.confirm(label: String(s.dropFirst("Confirm: ".count))) }   // one irreversible press may go through
         question = s
         ask()
     }
@@ -200,19 +228,18 @@ final class Assistant: ObservableObject {
         busy = true
         suggestions = []
         status = "Writing it up…"
-        guard let client else {
-            transcript.append(ChatMessage(role: .error, text: "No API key. Add it in Familiar Settings, then press Try again."))
+        guard client != nil else {
+            transcript.append(ChatMessage(role: .error, text: ConversationBackend.setupMessage(config: config) + " Then press Try again."))
             draftFailed = true; busy = false; status = ""
             suggestions = reviewTabs([])
             return
         }
         let config = self.config
-        let key = client.apiKey
         Task {
             let started = Date()
             var result: Result<PackDraft, Error>
             do {
-                result = .success(try await WatchSummarizer.summarize(rec, purpose: purpose, config: config, apiKey: key,
+                result = .success(try await WatchSummarizer.summarize(rec, purpose: purpose, config: config,
                                                                       onStatus: { [weak self] s in Task { @MainActor in self?.status = s == "Thinking…" ? "Writing it up…" : s } }))
             } catch { result = .failure(error) }
             busy = false
@@ -480,29 +507,44 @@ final class Assistant: ObservableObject {
 
     /// Re-create the API client after settings change.
     func reconfigure(_ newConfig: Config) {
+        // Keep the visible conversation while dropping provider-specific tools and image state.
+        if newConfig.connectionMode != config.connectionMode {
+            conversationGeneration += 1
+            apiMessages = apiMessages.compactMap { message in
+                guard let role = message["role"] as? String,
+                      let blocks = message["content"] as? [[String: Any]] else { return nil }
+                let text = blocks.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
+                    .joined(separator: "\n")
+                guard !text.isEmpty else { return nil }
+                return ["role": role, "content": [["type": "text", "text": text]]]
+            }
+            lastCapture = nil
+        }
         config = newConfig
-        client = newConfig.resolvedApiKey.map { ClaudeClient(config: newConfig, apiKey: $0) }
+        backgroundControl = newConfig.controlInBackground
+        client = ConversationBackend.make(config: newConfig)
         recorder.config = newConfig
         objectWillChange.send()
     }
 
     /// Set by the app; nil in headless runs without control.
-    var control: ComputerController?
+    var control: ComputerController? { didSet { control?.peek = peek } }
 
     private func toolDefinitions(_ ctx: ScreenContext?) -> [[String: Any]] {
         let sel = registry.select(for: ctx)
         let scripts = (sel.active + sel.global).flatMap(\.scripts).map(\.definition)
         var tools = scripts + BuiltinTools.definitions
-        if config.allowControl, control != nil {
+        if config.allowControl, control != nil, !watching {
             tools.append(ComputerController.findDefinition)
             tools.append(ComputerController.toolsetDefinition)
+            if backgroundControl { tools += ComputerController.backgroundDefinitions }
         }
         return tools
     }
 
     private func send(content: [[String: Any]], ctx: ScreenContext?) async {
         guard let client else {
-            transcript.append(ChatMessage(role: .error, text: "No API key. Put it in \(Config.file.path) under \"apiKey\" (or export ANTHROPIC_API_KEY) and relaunch."))
+            transcript.append(ChatMessage(role: .error, text: ConversationBackend.setupMessage(config: config)))
             return
         }
         busy = true
@@ -518,12 +560,28 @@ final class Assistant: ObservableObject {
         }
         apiMessages.append(["role": "user", "content": newContent])
         trimHistory()
+        let generation = conversationGeneration
 
         let tools = toolDefinitions(ctx)
         let registry = self.registry
         let control = self.control
         let controlAllowed = config.allowControl && control != nil && !watching
         control?.reset()
+        // The background lane works in the window that is in front right now (the pad never takes the foreground).
+        let background = controlAllowed && backgroundControl
+        var laneNote = ""
+        if let control {
+            control.lane = background ? .background : .foreground
+            control.target = nil
+            control.declaredIrreversible = (registry.select(for: ctx).active).flatMap(\.irreversible)
+            control.warningNoteLabels = registry.notes(for: ctx).filter(\.isWarning).compactMap(\.anchor.label)
+            if background {
+                switch await TargetWindow.resolveFrontmost() {
+                case .success(let t): control.target = t
+                case .failure(let e): laneNote = "\n\nNo target window right now: \(e.localizedDescription) Call target_window to pick one before acting."
+                }
+            }
+        }
         client.maxToolRounds = controlAllowed ? 40 : 8
         client.shouldStop = { [weak control] in control?.stopped ?? false }
         let executor: ToolExecutor = { [weak self] name, input, toolset in
@@ -534,6 +592,15 @@ final class Assistant: ObservableObject {
             if name == "find_on_screen" {
                 guard controlAllowed, let control else { return .text("Computer control is off.", isError: true) }
                 return control.find(input["query"] as? String ?? "")
+            }
+            if ComputerController.backgroundToolNames.contains(name) {
+                guard controlAllowed, let control else { return .text("Computer control is off.", isError: true) }
+                switch name {
+                case "target_window": return await control.targetWindow(input)
+                case "click_element": return await control.clickElement(input)
+                case "ask_for_the_mouse": return await control.askForMouse(input)
+                default: return control.giveMouseBack()
+                }
             }
             if name == "look_at_screen" {
                 guard let self else { return .text("unavailable", isError: true) }
@@ -552,20 +619,30 @@ final class Assistant: ObservableObject {
         defer { control?.end() }
         do {
             var messages = apiMessages
-            let system = Prompt.system + (controlAllowed ? Prompt.control : "")
+            let system = Prompt.system + (controlAllowed ? Prompt.control + (background ? Prompt.background + laneNote : "") : "")
             let reply = try await client.converse(system: system, tools: tools, messages: &messages,
                                                   executor: executor, onStatus: { [weak self] s in Task { @MainActor in self?.status = s } })
-            apiMessages = messages
-            let (text, sugg) = Self.splitSuggestions(reply.text)
-            transcript.append(ChatMessage(role: .assistant, text: text))
-            suggestions = reviewTabs(sugg)
-            let secs = String(format: "%.1f", Date().timeIntervalSince(started))
-            status = "\(reply.inputTokens) in · \(reply.outputTokens) out · \(reply.toolCalls) tool call\(reply.toolCalls == 1 ? "" : "s") · \(secs)s"
-            Log.info("reply: \(reply.outputTokens) out, \(reply.inputTokens) in (cache read \(reply.cacheRead)), \(reply.toolCalls) tool calls, \(secs)s")
+            if generation == conversationGeneration {
+                apiMessages = messages
+                let (text, sugg) = Self.splitSuggestions(reply.text)
+                // A background job leaves a receipt: the last frame of the window and how long it took.
+                if background, let control, let s = control.summary, s.steps > 0 {
+                    let secs = Int(Date().timeIntervalSince(started))
+                    let steps = "\(s.steps) step\(s.steps == 1 ? "" : "s")"
+                    transcript.append(ChatMessage(role: .receipt, text: control.stopped ? "Stopped after \(steps) in \(s.appName)" : "Done in \(s.appName) · \(steps) · \(secs)s", image: peek.frame))
+                }
+                transcript.append(ChatMessage(role: .assistant, text: text))
+                suggestions = reviewTabs(sugg)
+                let secs = String(format: "%.1f", Date().timeIntervalSince(started))
+                status = "\(reply.inputTokens) in · \(reply.outputTokens) out · \(reply.toolCalls) tool call\(reply.toolCalls == 1 ? "" : "s") · \(secs)s"
+                Log.info("reply: \(reply.outputTokens) out, \(reply.inputTokens) in (cache read \(reply.cacheRead)), \(reply.toolCalls) tool calls, \(secs)s")
+            } else { status = "" }
         } catch {
-            apiMessages.removeLast()   // drop the failed user turn so the history stays consistent
-            transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
-            suggestions = reviewTabs([])
+            if generation == conversationGeneration {
+                if !apiMessages.isEmpty { apiMessages.removeLast() }   // drop the failed user turn
+                transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
+                suggestions = reviewTabs([])
+            }
             status = ""
             Log.info("error: \(error.localizedDescription)")
         }

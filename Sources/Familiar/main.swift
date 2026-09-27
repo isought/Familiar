@@ -109,13 +109,23 @@ func runHeadlessAsk() async {
     guard let i = args.firstIndex(of: "--ask"), i + 1 < args.count else { print("usage: --ask \"question\" [url]"); return }
     let question = args[i + 1]
     let url = i + 2 < args.count && !args[i + 2].hasPrefix("--") ? args[i + 2] : "https://expenses.internal.example.com/reports/new"
-    let config = Config.load()
-    guard let key = config.resolvedApiKey else { print("no API key"); return }
+    var config = Config.load()
+    if args.contains("--claude-cli") { config.connectionMode = "claudeCode" }
+    guard let client = ConversationBackend.make(config: config) else {
+        print(ConversationBackend.setupMessage(config: config)); exit(1)
+    }
     let runner = ScriptRunner(config: config)
     let registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
     await registry.reload()
     let title = args.firstIndex(of: "--title").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? (url.contains("4310") ? "Waxwing" : "New Report - Concur")
-    let ctx = ScreenContext(appName: "Google Chrome", bundleID: "com.google.Chrome", windowTitle: title, url: url, focused: nil, timestamp: Date())
+    var ctx = ScreenContext(appName: "Google Chrome", bundleID: "com.google.Chrome", windowTitle: title, url: url, focused: nil, timestamp: Date())
+    // --background describes the real window it will work in, not the synthetic Chrome scene.
+    let backgroundOn = args.contains("--control") && args.contains("--background")
+    var backgroundTarget: TargetWindow?
+    if backgroundOn, case .success(let t) = await TargetWindow.resolveFrontmost() {
+        backgroundTarget = t
+        ctx = ScreenContext(appName: t.appName, bundleID: t.bundleID, windowTitle: t.title, url: nil, focused: nil, timestamp: Date())
+    }
     let sel = registry.select(for: ctx)
     let text = Prompt.context(ctx, recent: []) + Prompt.toolPacks(active: sel.active, global: sel.global, others: sel.others, stuffLimit: config.docsStuffLimitChars)
         + Prompt.notes(onTarget: [], elsewhere: registry.notes(for: ctx)) + "\n## Question\n\(question)\n"
@@ -124,9 +134,24 @@ func runHeadlessAsk() async {
     let controlOn = args.contains("--control")
     let control = ComputerController()
     control.hudEnabled = false
+    control.ghostEnabled = false
     control.maxLongEdge = config.maxImageLongEdge
+    control.preciseClicks = config.backgroundPreciseClicks
     control.onCaption = { print("  [control] \($0)") }
     if controlOn { tools += [ComputerController.findDefinition, ComputerController.toolsetDefinition] }
+    var laneNote = ""
+    if backgroundOn {
+        // --background: drive the window that is frontmost right now (start this from another window than Terminal).
+        control.lane = .background
+        tools += ComputerController.backgroundDefinitions
+        if let t = backgroundTarget {
+            control.target = t
+            print("target: \(t.appName) “\(t.title)” \(Int(t.frameCG.width))x\(Int(t.frameCG.height))pt \(t.toolkit.rawValue)")
+        } else if case .failure(let e) = await TargetWindow.resolveFrontmost() {
+            laneNote = "\n\nNo target window right now: \(e.localizedDescription) Call target_window to pick one before acting."
+            print("target: none (\(e.localizedDescription))")
+        }
+    }
     var content: [[String: Any]] = []
     if args.contains("--shot") {
         do {
@@ -139,15 +164,19 @@ func runHeadlessAsk() async {
     }
     content.append(["type": "text", "text": text])
     var messages: [[String: Any]] = [["role": "user", "content": content]]
-    let client = ClaudeClient(config: config, apiKey: key)
     client.maxToolRounds = controlOn ? 40 : 8
+    client.shouldStop = { control.stopped }
     print("context: \(ctx.summaryLine)\nactive packs: \(sel.active.map(\.dirName)) tools: \(tools.count) notes on scene: \(registry.notes(for: ctx).count)\n")
     defer { control.end() }
     do {
-        let system = Prompt.system + (controlOn ? Prompt.control : "")
+        let system = Prompt.system + (controlOn ? Prompt.control + (backgroundOn ? Prompt.background + laneNote : "") : "")
         let reply = try await client.converse(system: system, tools: tools, messages: &messages, executor: { name, input, toolset in
             if toolset == "computer" { return await control.perform(name, input) }
             if name == "find_on_screen" { return control.find(input["query"] as? String ?? "") }
+            if name == "target_window" { return await control.targetWindow(input) }
+            if name == "click_element" { return await control.clickElement(input) }
+            if name == "ask_for_the_mouse" { return await control.askForMouse(input) }
+            if name == "give_the_mouse_back" { return control.giveMouseBack() }
             if name == "look_at_screen" {
                 do {
                     let raw = try await ScreenCapture.captureDisplay()
@@ -158,11 +187,12 @@ func runHeadlessAsk() async {
             }
             if BuiltinTools.names.contains(name) { return BuiltinTools.execute(name, input, root: registry.root) }
             guard let s = registry.script(named: name) else { return .text("unknown tool", isError: true) }
-            do { return .text(try await runner.run(s, args: input, context: ctx)) } catch { return .text(error.localizedDescription, isError: true) }
+            let requirements = registry.packs.first { $0.dirName == s.packDir }?.requires ?? []
+            do { return .text(try await runner.run(s, args: input, context: ctx, secrets: requirements)) } catch { return .text(error.localizedDescription, isError: true) }
         }, onStatus: { print("  [\($0)]") })
         let (answer, sugg) = Assistant.splitSuggestions(reply.text)
         print("\n--- reply ---\n\(answer)\n--- suggestions: \(sugg)\n--- usage: \(reply.inputTokens) in, \(reply.outputTokens) out, cache read \(reply.cacheRead), \(reply.toolCalls) tool calls")
-    } catch { print("FAILED: \(error.localizedDescription)") }
+    } catch { print("FAILED: \(error.localizedDescription)"); exit(1) }
 }
 
 /// `Familiar --render-mascot <dir>`: render every mascot mood at 256pt and 48pt (@2x PNG), a charging variant, gaze samples,
@@ -172,7 +202,10 @@ func runHeadlessAsk() async {
 @MainActor
 func runRenderMascot() {
     let args = CommandLine.arguments
-    guard let i = args.firstIndex(of: "--render-mascot"), i + 1 < args.count else { print("usage: --render-mascot <dir> [--style innocent|sharp]"); exit(2) }
+    guard let i = args.firstIndex(of: "--render-mascot"), i + 1 < args.count else {
+        print("usage: --render-mascot <dir> [--style \(MascotStyle.allCases.map(\.rawValue).joined(separator: "|"))]")
+        exit(2)
+    }
     if let si = args.firstIndex(of: "--style"), si + 1 < args.count, let st = MascotStyle(rawValue: args[si + 1]) { MascotStyle.current = st }
     let dir = URL(fileURLWithPath: args[i + 1])
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -445,13 +478,13 @@ func runSummarizeRecording() async {
     let purpose = i + 2 < args.count && !args[i + 2].hasPrefix("--") ? args[i + 2] : nil
     let toolsRoot = args.firstIndex(of: "--tools-root").flatMap { $0 + 1 < args.count ? URL(fileURLWithPath: args[$0 + 1]) : nil }
         ?? FileManager.default.temporaryDirectory.appendingPathComponent("familiar-tools-\(Int(Date().timeIntervalSince1970))")
-    let config = Config.load()
-    guard let key = config.resolvedApiKey else { print("no API key"); exit(1) }
+    var config = Config.load()
+    if args.contains("--claude-cli") { config.connectionMode = "claudeCode" }
     do {
         let rec = try Recording.load(dir)
         let picks = WatchSummarizer.selectImages(rec, max: config.watchMaxImages)
         print("recording: \(rec.events.count) events, \(rec.meta.clicks) clicks, hosts \(rec.meta.hosts), \(picks.count) images to send\n")
-        let draft = try await WatchSummarizer.summarize(rec, purpose: purpose, config: config, apiKey: key, onStatus: { print("  [\($0)]") })
+        let draft = try await WatchSummarizer.summarize(rec, purpose: purpose, config: config, onStatus: { print("  [\($0)]") })
         print("--- draft (parsed: \(draft.parsed)) ---\n\(draft.prettyJSON)\n")
         if args.contains("--keep") {
             guard draft.parsed else { print("not kept: the draft could not be parsed"); exit(1) }
@@ -481,6 +514,8 @@ if CommandLine.arguments.contains("--record-synthetic") {
     RunLoop.main.run()
 } else if CommandLine.arguments.contains("--render-mascot") {
     MainActor.assumeIsolated { runRenderMascot() }
+} else if CommandLine.arguments.contains("--render-origami") {
+    MainActor.assumeIsolated { runRenderOrigami() }
 } else if CommandLine.arguments.contains("--render-card") {
     MainActor.assumeIsolated { runRenderCard() }
 } else if CommandLine.arguments.contains("--render-pen") {

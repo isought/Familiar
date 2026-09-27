@@ -53,6 +53,25 @@ enum Prompt {
     - When finished, say what you did in one or two lines.
     """
 
+    /// Appended after `control` when the job runs in the background lane (the user keeps the mouse and keyboard).
+    static let background = """
+
+    Background lane. You are working in the window the user was in when they asked, through Accessibility and events \
+    posted to that app, without their mouse or keyboard; they may be working elsewhere the whole time and nobody is \
+    watching. What that changes:
+    - Screenshots show only that window; coordinates are pixels of the window capture. target_window lists the other \
+    windows and switches if the task needs another app.
+    - Press controls by name: find_on_screen, then click_element with the #id. Clicking by coordinates presses whatever \
+    control is under the point. Type into a field after clicking into it. Results say what was verified.
+    - Menus, ⌘ shortcuts, drags, context menus and hover do not work in the background. If there is no other way, call \
+    ask_for_the_mouse with a plain one-line reason and wait; if the user agrees, take a screenshot, do that part in one go \
+    and call give_the_mouse_back. If they say not now, do what you can and say what is left.
+    - Before anything that sends, submits, pays, deletes, signs, approves, publishes, closes or overwrites, stop and ask \
+    on the pad. A result saying "looks irreversible" means exactly that: ask, and end your reply with the Suggestions \
+    line it gives you. Never press ⌘Q, ⌘W or a close button.
+    - If a result says the window changed, closed, or the user is busy, take a screenshot or stop, never guess.
+    """
+
     /// System prompt for writing a "Watch me" recording up as a tool-pack entry.
     static let watchSystem = """
     You are Familiar, and you are writing the company's own notes for an internal tool by watching an employee use it. \

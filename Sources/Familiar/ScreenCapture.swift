@@ -11,17 +11,26 @@ struct Screenshot {
     var sizeKB: Int { data.count / 1024 }
 }
 
-/// Full-resolution capture of one display plus the geometry needed to map screen points into it.
+/// Full-resolution capture of one display (or one window) plus the geometry needed to map screen points into it.
 struct RawCapture {
     let image: CGImage
     let screen: NSScreen
     let pixelsPerPoint: CGFloat
+    /// Set for a window capture: the window's frame in CG global coordinates (top-left origin). Nil for a display.
+    var frame: CGRect? = nil
 
     /// AppKit global point (bottom-left origin) -> pixel coordinates in `image` (top-left origin).
     func imagePoint(_ p: NSPoint) -> CGPoint {
-        CGPoint(x: (p.x - screen.frame.minX) * pixelsPerPoint,
-                y: (screen.frame.maxY - p.y) * pixelsPerPoint)
+        if let frame {
+            let cg = CaptureSpace.cg(p)
+            return CGPoint(x: (cg.x - frame.minX) * pixelsPerPoint, y: (cg.y - frame.minY) * pixelsPerPoint)
+        }
+        return CGPoint(x: (p.x - screen.frame.minX) * pixelsPerPoint,
+                       y: (screen.frame.maxY - p.y) * pixelsPerPoint)
     }
+
+    /// CG global point (top-left origin) -> pixel coordinates in `image`.
+    func imagePoint(cg p: CGPoint) -> CGPoint { imagePoint(CaptureSpace.appKit(p)) }
 }
 
 enum ScreenCaptureError: LocalizedError {
@@ -63,6 +72,36 @@ enum ScreenCapture {
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         let ppp = CGFloat(image.width) / CGFloat(display.width)
         return RawCapture(image: image, screen: screen, pixelsPerPoint: ppp)
+    }
+
+    /// The shareable window with this id, whether or not it is on screen (occluded, hidden and minimized windows
+    /// included, which is what the background lane needs). Nil when the window is gone.
+    static func shareableWindow(id: CGWindowID) async throws -> SCWindow? {
+        guard Permissions.screenRecordingGranted else { throw ScreenCaptureError.notPermitted }
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        return content.windows.first { $0.windowID == id }
+    }
+
+    /// Native-resolution capture of one window, independent of what covers it: live content for occluded windows,
+    /// hidden apps and minimized windows (verified on macOS 26). The window's own shadow is left out.
+    /// `backingScale` is the display's scale factor (2 on Retina); `frame` on the result is the window frame in CG
+    /// global coordinates, so `imagePoint(cg:)` maps screen points into the image.
+    static func captureWindow(_ window: SCWindow, backingScale: CGFloat) async throws -> RawCapture {
+        guard Permissions.screenRecordingGranted else { throw ScreenCaptureError.notPermitted }
+        let frame = window.frame
+        guard frame.width >= 1, frame.height >= 1 else { throw ScreenCaptureError.noDisplay }
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let config = SCStreamConfiguration()
+        config.width = Int(frame.width * backingScale)
+        config.height = Int(frame.height * backingScale)
+        config.showsCursor = false
+        config.ignoreShadowsSingleWindow = true
+        config.captureResolution = .best
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        let ppp = CGFloat(image.width) / frame.width
+        let screen = NSScreen.screens.first { $0.frame.intersects(CGRect(origin: CaptureSpace.appKit(CGPoint(x: frame.minX, y: frame.maxY)), size: frame.size)) }
+            ?? NSScreen.main ?? NSScreen.screens[0]
+        return RawCapture(image: image, screen: screen, pixelsPerPoint: ppp, frame: frame)
     }
 
     /// Convenience: one downscaled screenshot of the display under the mouse.

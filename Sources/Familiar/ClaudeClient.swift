@@ -24,7 +24,7 @@ struct ToolResult {
 typealias ToolExecutor = (_ name: String, _ input: [String: Any], _ toolset: String?) async -> ToolResult
 
 /// Raw HTTP client for the Claude Messages API with a manual tool-use loop.
-final class ClaudeClient {
+final class ClaudeClient: ConversationClient {
     var apiKey: String
     var model: String
     var effort: String
@@ -53,7 +53,7 @@ final class ClaudeClient {
 
     /// Runs the conversation until Claude stops calling tools. `messages` is updated in place with every turn.
     func converse(system: String, tools: [[String: Any]], messages: inout [[String: Any]],
-                  executor: ToolExecutor, onStatus: @escaping (String) -> Void) async throws -> ClaudeReply {
+                  executor: @escaping ToolExecutor, onStatus: @escaping (String) -> Void) async throws -> ClaudeReply {
         var totalIn = 0, totalOut = 0, cacheRead = 0, toolCalls = 0
         var rounds = 0
         while true {

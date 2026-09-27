@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var assistant: Assistant!
     private let wand = WandController()
     private let hideHint = HideHint()
+    private let origami = OrigamiFlightController()
     private let settings = SettingsWindowController()
     private var savedBubbleFrame: NSRect?
     private var dragOffset: NSPoint?     // cursor position relative to the panel origin while dragging
@@ -28,6 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var axPermItem: NSMenuItem!
     private var toolsMenuItem: NSMenuItem!
     private var watchMenuItem: NSMenuItem!
+    private var stopWorkMenuItem: NSMenuItem!
+    private var origamiMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.info("Familiar launching (bundle: \(Bundle.main.bundleIdentifier ?? "none"), config: \(Config.file.path))")
@@ -76,6 +79,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let target = self.assistant.cardSize.height >= large.height - 1 ? BubblePanel.defaultExpandedSize : large
             self.assistant.onResizeCard?(target, true)
         }
+        assistant.onSetControlLane = { [weak self] allow, background in
+            guard let self else { return }
+            self.config.allowControl = allow
+            self.config.controlInBackground = background
+            self.config.save()
+            self.assistant.reconfigure(self.config)
+            Log.info("control lane: allow=\(allow) background=\(background)")
+        }
         assistant.onPoke = { [weak self] in
             guard let self, self.config.pokeHintsShown < 3 else { return }
             self.config.pokeHintsShown += 1
@@ -86,17 +97,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         runner.extraEnv = config.env
         control.maxLongEdge = config.maxImageLongEdge
-        control.onCaption = { [weak self] c in self?.assistant.status = c }
+        control.hideFromScreenShare = config.hideFromScreenShare
+        control.preciseClicks = config.backgroundPreciseClicks
+        control.onCaption = { [weak self] c in
+            guard let self else { return }
+            self.assistant.status = c
+            if self.control.lane == .background, self.control.active {
+                self.assistant.contextLine = "Working in \(self.assistant.peek.appName) · step \(self.assistant.peek.step) · ⌃⌥Space to stop"
+            }
+        }
+        // Foreground: our windows get out of the way of the real cursor. Background: the pad stays, showing the peek.
         control.onBegin = { [weak self] in
             guard let self else { return }
+            self.origami.cancel()
+            if self.control.lane == .background {
+                self.showBackgroundHintIfNeeded()
+                return
+            }
             self.bubbleWasVisibleBeforeControl = self.panel.isVisible
             self.assistant.expanded = false
             self.panel.orderOut(nil)          // keep our own windows out of the way of clicks
         }
         control.onEnd = { [weak self] in
             guard let self else { return }
+            if self.control.lane == .background {
+                if self.panel.isVisible, !self.assistant.expanded { self.assistant.expandQuietly() }   // the receipt is in view, focus stays with the user
+                self.assistant.contextLine = self.watcher.current?.summaryLine ?? self.assistant.contextLine
+                return
+            }
             if self.bubbleWasVisibleBeforeControl { self.panel.orderFrontRegardless() }
             self.assistant.expanded = true
+        }
+        control.onGrant = { [weak self] entering in
+            guard let self else { return }
+            if entering {
+                self.bubbleWasVisibleBeforeControl = self.panel.isVisible
+                self.assistant.expanded = false
+                self.panel.orderOut(nil)
+            } else {
+                if self.bubbleWasVisibleBeforeControl { self.panel.orderFrontRegardless() }
+                self.assistant.expandQuietly()
+            }
         }
         assistant.control = control
 
@@ -109,12 +150,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         requestPermissionsOnFirstRun()
         Task {
             await registry.reload()
-            Secrets.migrateKeychainToFile(keys: ["ANTHROPIC_API_KEY"] + registry.packs.flatMap(\.requires))
-            if !assistant.hasApiKey { assistant.reconfigure(config) }   // pick up a migrated key
+            Secrets.migrateKeychainToFile(keys: (config.connectionMode == "api" ? ["ANTHROPIC_API_KEY"] : []) + registry.packs.flatMap(\.requires))
+            if !assistant.hasConnection { assistant.reconfigure(config) }   // pick up a migrated key
         }
 
-        if !assistant.hasApiKey {
-            Log.info("no API key found; set \"apiKey\" in \(Config.file.path) or export ANTHROPIC_API_KEY")
+        if !assistant.hasConnection {
+            Log.info(ConversationBackend.setupMessage(config: config))
         }
     }
 
@@ -142,7 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupPanel() {
         panel = BubblePanel(hideFromScreenShare: config.hideFromScreenShare)
-        let host = NSHostingView(rootView: BubbleView(state: assistant))
+        let host = NSHostingView(rootView: BubbleView(state: assistant, onOrigami: { [weak self] in self?.takeOrigamiFlight() }))
         host.frame = NSRect(origin: .zero, size: BubblePanel.collapsedSize)
         panel.contentView = host
         if let x = config.bubbleX, let y = config.bubbleY,
@@ -158,8 +199,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] expanded in
                 guard let self else { return }
+                if self.origami.isFlying {
+                    if expanded { self.origami.cancel() } else { return }
+                }
                 self.panel.resize(to: expanded ? BubblePanel.expandedSize : BubblePanel.collapsedSize, animate: false)
-                if expanded { self.panel.makeKeyAndOrderFront(nil) } else { self.panel.orderFrontRegardless(); self.panel.resignKey() }
+                if expanded {
+                    if self.assistant.consumeQuietExpand() { self.panel.orderFrontRegardless() } else { self.panel.makeKeyAndOrderFront(nil) }
+                } else { self.panel.orderFrontRegardless(); self.panel.resignKey() }
+            }
+            .store(in: &cancellables)
+
+        assistant.$busy.combineLatest(assistant.$watching)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] busy, watching in
+                if busy || watching { self?.origami.cancel() }
             }
             .store(in: &cancellables)
     }
@@ -176,10 +229,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Point the Pen   ⌃⌥Space", action: #selector(menuWand), keyEquivalent: ""))
         watchMenuItem = NSMenuItem(title: "Watch Me", action: #selector(menuWatch), keyEquivalent: "")
         menu.addItem(watchMenuItem)
+        stopWorkMenuItem = NSMenuItem(title: "Stop Working", action: #selector(menuStopWork), keyEquivalent: "")
+        stopWorkMenuItem.isHidden = true
+        menu.addItem(stopWorkMenuItem)
         menu.addItem(NSMenuItem(title: "Open Chat", action: #selector(openChat), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Show Bubble", action: #selector(menuShowBubble), keyEquivalent: ""))
         hideMenuItem = NSMenuItem(title: "Hide Bubble", action: #selector(menuHideBubble), keyEquivalent: "")
         menu.addItem(hideMenuItem)
+        origamiMenuItem = NSMenuItem(title: "Fold into a Crane", action: #selector(takeOrigamiFlight), keyEquivalent: "")
+        menu.addItem(origamiMenuItem)
         menu.addItem(.separator())
         watcherMenuItem = NSMenuItem(title: "Watcher: On", action: #selector(toggleWatcher), keyEquivalent: "")
         menu.addItem(watcherMenuItem)
@@ -207,14 +265,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotKey = HotKey(keyCode: code, modifiers: mods) { [weak self] in
             guard let self else { return }
             if self.assistant.watching { self.stopWatchingAndShow() }
+            else if self.control.active, self.control.lane == .background { self.control.stop(reason: HotKey.display(self.config.hotkey)) }
             else if self.wand.isActive { self.wand.cancel() }
             else { self.startWand() }
+        }
+    }
+
+    /// The first background jobs with the bubble collapsed get a callout saying where the work is happening.
+    private func showBackgroundHintIfNeeded() {
+        guard config.backgroundHintsShown < 2, !assistant.expanded, panel.isVisible else { return }
+        config.backgroundHintsShown += 1
+        config.save()
+        hideHint.show(under: panel.frame, title: "Working in \(assistant.peek.appName) while you carry on",
+                      subtitle: "Click me to watch · \(HotKey.display(config.hotkey)) to stop", seconds: 3) { [weak self] in
+            self?.assistant.expandQuietly()
         }
     }
 
     private func setupWatcher() {
         watcher.onChange = { [weak self] ctx in
             guard let self, !self.assistant.watching else { return }   // the line reads "Watching…" while recording
+            if self.control.active, self.control.lane == .background { return }   // "Working in …" stays put during a job
             self.assistant.contextLine = ctx.summaryLine
         }
         if config.watcherEnabled { watcher.start(interval: config.watcherIntervalSeconds) } else { assistant.contextLine = "Watcher off" }
@@ -234,6 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func startWand() {
+        origami.cancel()
         guard !assistant.watching else { assistant.startWand(); return }   // no-op with a status line
         guard !assistant.busy else { assistant.expanded = true; return }
         assistant.expanded = false
@@ -267,7 +339,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         watcherMenuItem.title = watcher.isRunning ? "Watcher: On" : "Watcher: Off"
         watchMenuItem.title = assistant.watching ? "Stop Watching   ⌃⌥Space" : "Watch Me"
-        hideMenuItem.isEnabled = panel.isVisible
+        let working = control.active && control.lane == .background
+        stopWorkMenuItem.isHidden = !working
+        stopWorkMenuItem.title = "Stop Working in \(assistant.peek.appName)   \(HotKey.display(config.hotkey))"
+        hideMenuItem.isEnabled = panel.isVisible || origami.isFlying
+        origamiMenuItem.title = origami.isFlying ? "Land Familiar   Esc" : "Fold into a Crane"
+        origamiMenuItem.isEnabled = origami.isFlying || canTakeOrigamiFlight
         let scripts = registry.packs.reduce(0) { $0 + $1.scripts.count }
         let missing = registry.missingRequirements(for: registry.packs)
         toolsMenuItem.title = missing.isEmpty
@@ -278,6 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func menuWand() { startWand() }
+    @objc private func menuStopWork() { control.stop(reason: "menu") }
     @objc private func menuWatch() {
         if assistant.watching { stopWatchingAndShow() } else { assistant.startWatching() }
     }
@@ -290,17 +368,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Quitting mid-recording leaves nothing behind: the unfinished recording and any draft still under review go.
     func applicationWillTerminate(_ notification: Notification) {
+        origami.cancel()
+        control.end()          // never leave a ghost cursor behind
         assistant.abortWatching()
     }
     @objc private func openChat() {
+        origami.cancel()
         if !panel.isVisible { showBubble() }
         assistant.expanded = true
     }
 
-    @objc private func menuHideBubble() { if panel.isVisible { hideBubbleWithHint() } }
+    @objc private func menuHideBubble() { if panel.isVisible || origami.isFlying { hideBubbleWithHint() } }
+
+    private var canTakeOrigamiFlight: Bool {
+        !assistant.busy && !assistant.watching && !control.active && !wand.isActive
+    }
+
+    @objc private func takeOrigamiFlight() {
+        if origami.isFlying { origami.cancel(); return }
+        guard canTakeOrigamiFlight else { return }
+        hideHint.dismiss(animated: false)
+        assistant.expanded = false
+        // Collapse synchronously before measuring home. The published resize skips a flight already in progress.
+        panel.resize(to: BubblePanel.collapsedSize, animate: false)
+        guard let screen = panel.screen ?? NSScreen.main else { return }
+        let home = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
+        let started = origami.start(home: home, screen: screen, hideFromScreenShare: config.hideFromScreenShare) { [weak self] in
+            guard let self else { return }
+            // A disconnected/resized display must not leave even part of the note beyond the desktop.
+            let center = CGPoint(x: self.panel.frame.midX, y: self.panel.frame.midY)
+            let screens = NSScreen.screens
+            let destination = screens.first { $0.visibleFrame.contains(center) } ?? screens.min {
+                hypot($0.visibleFrame.midX - center.x, $0.visibleFrame.midY - center.y)
+                    < hypot($1.visibleFrame.midX - center.x, $1.visibleFrame.midY - center.y)
+            }
+            if let bounds = destination?.visibleFrame {
+                let frame = self.panel.frame
+                self.panel.setFrameOrigin(CGPoint(
+                    x: min(max(frame.minX, bounds.minX), max(bounds.minX, bounds.maxX - frame.width)),
+                    y: min(max(frame.minY, bounds.minY), max(bounds.minY, bounds.maxY - frame.height))
+                ))
+            }
+            self.panel.orderFrontRegardless()
+            Log.info("origami: returned home")
+        }
+        if started {
+            panel.orderOut(nil)
+            Log.info("origami: folding for a flight")
+        }
+    }
 
     /// Always available: bring the bubble back, or if it is already on screen, bring it to the front and hop.
     @objc private func menuShowBubble() {
+        origami.cancel()
         if panel.isVisible {
             panel.orderFrontRegardless()
             hop()
@@ -331,6 +451,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Fly the bubble into the menu bar icon, pulse the icon, and show a callout saying where it went.
     private func hideBubbleWithHint() {
+        origami.cancel()
         assistant.expanded = false
         wand.deactivate()
         guard let target = statusItemRect else { panel.orderOut(nil); return }
@@ -353,6 +474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showBubble() {
+        origami.cancel()
         hideHint.dismiss(animated: true)
         guard !panel.isVisible else { return }
         let dest = savedBubbleFrame ?? panel.frame
@@ -390,6 +512,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func reloadTools() { Task { await registry.reload() } }
 
     @objc private func openSettings() {
+        origami.cancel()
         settings.show(config: config, packs: registry.packs, onSave: { [weak self] in
             guard let self else { return }
             self.config = self.settings.model.save(into: self.config)
@@ -398,7 +521,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.setupHotKey()
             MascotStyle.current = MascotStyle(rawValue: self.config.mascotStyle) ?? .innocent
             self.panel.sharingType = self.config.hideFromScreenShare ? .none : .readOnly
-            Log.info("settings saved (key: \(self.assistant.hasApiKey ? "set" : "missing"), hotkey: \(self.config.hotkey))")
+            self.control.maxLongEdge = self.config.maxImageLongEdge
+            self.control.hideFromScreenShare = self.config.hideFromScreenShare
+            self.control.preciseClicks = self.config.backgroundPreciseClicks
+            Log.info("settings saved (connection: \(self.config.connectionMode), ready: \(self.assistant.hasConnection), hotkey: \(self.config.hotkey))")
         }, onOpenTools: { [weak self] in self?.openTools() }, onReloadTools: { [weak self] in self?.reloadTools() })
     }
     @objc private func openTools() { NSWorkspace.shared.open(config.resolvedToolsDir) }

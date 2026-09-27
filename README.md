@@ -25,11 +25,22 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    curious when you hover, thinking while it works, happy or sad when the answer lands.
    The chat is a pad of sticky notes: each question is a note with the answer written on it (inked in line by line as it
    arrives), follow-ups are paper tabs under the note, and the character peeks over the newest one.
+   For a little paper adventure, right-click the note → **Fold into a crane** (also in the pad's More menu and menu bar).
+   It folds, flaps around the current screen once, lands at the same spot, and unfolds. The flight is click-through;
+   **Esc** or menu bar → **Land Familiar** brings it back early. Starting work brings it back too. Available while idle;
+   with macOS Reduce Motion enabled, the fold and gentle flap stay at home.
 6. Claude can call the pack's scripts, `read_file` / `grep` over the docs, and `read_screen` (accessibility text).
 7. **Control** (off by default, Settings → "Allow Familiar to control the mouse and keyboard"): ask it to do something
-   ("type the sum formula for me") and it drives the mouse and keyboard through Claude's computer toolset. The screen
-   gets the shimmer border with a caption of each step; moving the mouse or pressing Esc stops it instantly; it asks
-   before Send / Submit / Delete / Pay. `find_on_screen` gives it exact coordinates for labelled controls via Accessibility.
+   ("type the sum formula for me") and it does it through Claude's computer toolset. By default it works **in the
+   background**: it drives the window you were in when you asked through Accessibility and events sent to that app, so
+   your mouse and keyboard stay yours and you can carry on elsewhere. A purple ghost cursor shows what it presses, and the
+   pad shows a live peek of that window with each step and a **Stop** tab (⌃⌥Space stops too). When something needs the
+   real mouse (a drag, a context menu, a ⌘ shortcut) it asks on the note first: **Go ahead** lends it the mouse with the
+   shimmer border as before, and moving the mouse or pressing Esc takes it back. The hand icon on the pad, next to the
+   eye, turns background mode off; then it takes the mouse as before (the shimmer border, a caption per step, moving the
+   mouse or pressing Esc stops it). It asks before Send / Submit / Delete / Pay either way, and a pack can list more
+   controls to confirm under `irreversible:` in its SKILL.md. `find_on_screen` gives it labelled controls via Accessibility;
+   in the background it presses them by id with `click_element`.
 
 8. **Watch me**: menu bar → **Watch Me** (or the eye on the pad). Do the task the way you normally do, then press ⌃⌥Space or
    **Stop Watching**. Familiar records clicks (with the real labels of what you clicked, via Accessibility), a crop around each
@@ -47,7 +58,7 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    says only that something was typed. A click never stores the value of a secure field, a text area or a terminal. Without
    Accessibility, keystrokes are not listened for at all. The write-up sends at most `watchMaxImages` images and 20 MB.
    Headless: `--record-synthetic <dir>` (a fake recording from the current screen) and
-   `--summarize-recording <dir> ["purpose"] [--tools-root <dir>] [--keep]` (prints the draft JSON; keeps into a temp folder by default).
+   `--summarize-recording <dir> ["purpose"] [--tools-root <dir>] [--keep] [--claude-cli]` (prints the draft JSON; keeps into a temp folder by default).
 
 ## Try it on another Mac (5 minutes)
 ```bash
@@ -59,7 +70,7 @@ git clone https://github.com/isought/Familiar.git && cd Familiar
 ```
 Then, once:
 1. macOS asks for **Accessibility** and **Screen Recording**. Grant both (System Settings → Privacy & Security), then quit and relaunch Familiar from the menu bar.
-2. Right-click the note → **Settings…** → paste an Anthropic API key → **Save**.
+2. Right-click the note → **Settings…** → choose **API key** and paste an Anthropic API key, or choose **Local Claude CLI** to use your installed, signed-in Claude Code → **Save**.
 3. Menu bar → **Watch Me**, do a short task in the app you want it to learn, then **Stop Watching** (or ⌃⌥Space). Answer "what were you doing?" or skip it, read the draft, **Keep it**. It becomes a tool pack under `~/.familiar/tools/`.
 
 No packs are needed to start: watching creates them. Nothing leaves the machine except the write-up request you trigger.
@@ -67,21 +78,33 @@ No packs are needed to start: watching creates them. Nothing leaves the machine 
 ## Requirements
 - macOS 14+, Xcode Command Line Tools (Swift 5.9+). No Xcode needed.
 - `uv` on the build machine (gets bundled into the app; scripts declare deps inline, PEP 723).
-- An Anthropic API key, or a gateway that speaks the Messages API.
+- An Anthropic API key (or a gateway that speaks the Messages API), or an installed Claude Code CLI with its own login.
 
 ## Build and run
 ```bash
 ./scripts/make-dev-cert.sh                # once: local signing identity so permission grants survive rebuilds
 ./scripts/run.sh                          # builds build/Familiar.app and launches it
+./scripts/test.sh                         # deterministic tests; current Swift tools, no API/login needed
 .build/release/Familiar --selftest tools  # loads the packs, runs three scripts, no UI, no API
-.build/release/Familiar --render-mascot /tmp/mascot [--style innocent|sharp]   # renders every mood, the quill cursor and the app-icon source as PNGs
+.build/release/Familiar --render-mascot /tmp/mascot [--style innocent|innocentV1|innocentV3|innocentV4|sharp]   # renders every mood, the quill cursor and the app-icon source as PNGs
+.build/release/Familiar --render-origami /tmp/origami [--style innocentV4]   # folding stages and crane wing poses as PNGs
 .build/release/Familiar --render-card /tmp/card [--states]   # the pad with a pick, a note sticker and answers, as PNGs
 .build/release/Familiar --render-pen /tmp/pen               # the pen overlay over a fake page: stickers and the note editor, as a PNG
-build/Familiar.app/Contents/MacOS/Familiar --ask "question" [url] [--shot] [--control]   # headless Claude call, real tool loop
+build/Familiar.app/Contents/MacOS/Familiar --ask "question" [url] [--shot] [--control] [--claude-cli]   # headless Claude call, real tool loop
 ```
 First launch creates `~/.familiar/` (or `$FAMILIAR_HOME`) with `config.json`, `tools/` (example packs copied in) and `familiar.log`.
-Right-click the bubble → **Settings…** to enter the Claude API key, pack secrets, the hotkey, hold time and start-at-login.
+Right-click the bubble → **Settings…** to choose the Claude connection, enter pack secrets, and set the hotkey, hold time and start-at-login.
 Secrets never go into `config.json`: dev builds keep them owner-only in `~/.familiar/secrets.json` (a self-signed app is re-identified by macOS on every rebuild, so the Keychain would prompt each time); set `secretsStore` to `keychain` for Developer ID builds.
+
+### Use your Claude Code login
+The API connection remains the default, including for existing configurations. To use the local CLI:
+1. Install Claude Code and sign in through its normal flow (`claude auth login` in Terminal).
+2. In Familiar **Settings… → Connection**, choose **Local Claude CLI**. Leave the executable path blank to find it automatically, or enter its full path. Leave the model blank to use Claude Code's default.
+3. Click **Check connection** to check installation and login status, then **Save**.
+
+Familiar runs the unmodified Claude Code executable using its own login; no additional API key is needed for this mode. Requests share your Claude Code usage allowance, including your existing subscription allowance when signed in through a Claude plan. Switching connections preserves your API credentials and gateway settings.
+
+For a single headless run, append `--claude-cli` to `--ask` or `--summarize-recording`; this override does not change your saved connection. Tool packs, screen access and optional mouse/keyboard control run through Familiar's tools. Claude Code's own filesystem and shell tools are disabled. Private temporary bridge data is removed after each turn, and CLI sessions are not persisted.
 
 ## Permissions
 Both are user-consent only; MDM cannot pre-grant them. The menu bar menu shows their status and opens the right pane.
@@ -135,11 +158,14 @@ The docs were generated from the app's repo and use its real button labels.
 ## Config (`~/.familiar/config.json`)
 | key | default | meaning |
 |---|---|---|
+| connectionMode | api | `api` for the Messages API; `claudeCode` for the local Claude Code CLI |
+| claudePath | "" | Claude Code executable path; empty = find automatically |
+| claudeModel | "" | CLI model; empty = Claude Code's default |
 | apiKey | "" | fallback only; Settings stores the key in the Keychain (or use `ANTHROPIC_API_KEY`) |
 | apiBaseURL | "" | corporate gateway base URL; empty = api.anthropic.com |
 | apiHeaders | {} | extra headers for the gateway |
-| model | claude-opus-5 | model id |
-| effort | medium | low / medium / high / xhigh / max |
+| model | claude-opus-5 | API model id |
+| effort | medium | API: low / medium / high / xhigh / max; CLI: low / medium / high |
 | maxTokens | 4096 | answer length cap |
 | screenshotMode | auto | `auto`: attach a screenshot when the question sounds screen-related, otherwise the model may call `look_at_screen`; `always`; `never` |
 | screenshotReuseSeconds | 0 | if > 0, quick follow-ups on the same screen reuse the last screenshot within this window |
@@ -148,9 +174,11 @@ The docs were generated from the app's repo and use its real button labels.
 | docsStuffLimitChars | 24000 | how much doc text to paste before switching to read_file |
 | uvPath | "" | override the uv binary |
 | wandHoldSeconds | 0.8 | how long to hold the bubble to pick up the pen |
-| mascotStyle | innocent | character brows: `innocent` (v2, the default), `innocentV1`, `innocentV3` (experiment), or `sharp` (the original merge) |
+| mascotStyle | innocent | character brows: `innocent` (v2, the default), `innocentV1`, `innocentV3` (experiment), `innocentV4` (bashful), or `sharp` (the original merge) |
 | hotkey | control+option+space | pen hotkey, e.g. `cmd+shift+k` |
 | allowControl | false | let Familiar move the mouse and type when asked |
+| controlInBackground | true | do things in the window you asked from, keeping your mouse and keyboard (the hand icon on the pad) |
+| backgroundPreciseClicks | false | experimental: click exact spots in a background window through a private macOS path (self-tested at first use) |
 | env | {} | non-secret variables handed to every script |
 | bubbleX / bubbleY | | remembered bubble position |
 | watcherEnabled / watcherIntervalSeconds | true / 2 | context polling |
@@ -177,9 +205,9 @@ pre-approved, so the user clicks one prompt on first launch, once per install.
 - Layout, `Sources/Familiar/`: `WandOverlay` (overlay, hit test, ink, stickers, note editor, cursor), `Notes` (note anchors and store,
   Accessibility scan), `ScreenCapture` (ScreenCaptureKit, annotate, crop),
   `WatchRecorder` + `WatchSummarizer` (Watch me: passive recording, write-up, pack writer),
-  `ContextWatcher` (Accessibility), `ToolRegistry` + `ScriptRunner` + `BuiltinTools` (packs), `ClaudeClient` (raw HTTP, tool loop),
+  `ContextWatcher` (Accessibility), `ToolRegistry` + `ScriptRunner` + `BuiltinTools` (packs), `ClaudeClient` (raw HTTP, tool loop), `ClaudeCodeClient` (local CLI and tool bridge),
   `Assistant` (flows, history), `BubblePanel` (NSPanel + SwiftUI), `AppDelegate` (menu bar, hotkey).
-- Python helpers in `Resources/py/`: `introspect.py` (ast-only schema extraction), `run_tool.py` (executes `run(**args)`).
+- Python helpers in `Resources/py/`: `introspect.py` (ast-only schema extraction), `run_tool.py` (executes `run(**args)`), `claude_mcp.py` (private CLI tool bridge).
 
 ## License
 Apache License 2.0. Copyright 2026 isought. See `LICENSE`.

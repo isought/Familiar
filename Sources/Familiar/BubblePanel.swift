@@ -58,6 +58,7 @@ final class BubblePanel: NSPanel {
 
 struct BubbleView: View {
     @ObservedObject var state: Assistant
+    var onOrigami: (() -> Void)? = nil
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -125,6 +126,9 @@ struct BubbleView: View {
             Button("Point the pen") { state.startWand() }
             Button(state.watching ? "Stop watching" : "Watch me") { state.toggleWatching() }
             Divider()
+            Button("Fold into a crane") { onOrigami?() }
+                .disabled(onOrigami == nil || state.busy || state.watching || sense.controlActive)
+            Divider()
             Button("Settings…") { state.onOpenSettings?() }
             Button("Hide bubble") { state.onHideBubble?() }
             Button("Quit Familiar") { NSApp.terminate(nil) }
@@ -134,8 +138,10 @@ struct BubbleView: View {
 
     @State private var lastClick: Date?
 
-    /// Single click = a poke (the note reacts, nothing opens). Double click = chat.
+    /// Single click = a poke (the note reacts, nothing opens). Double click = chat. While a background job runs, a
+    /// click opens the pad without taking focus from the app the user is in, so they can watch.
     private func click() {
+        if sense.controlActive, state.peek.isWorking { lastClick = nil; state.expandQuietly(); return }
         let now = Date()
         if let last = lastClick, now.timeIntervalSince(last) < NSEvent.doubleClickInterval {
             lastClick = nil
@@ -204,6 +210,8 @@ struct BubbleView: View {
     /// brief happy/sad the orb shows; curious over the empty pad; sad while the last word on the pad is an error.
     private var peekMood: MascotMood {
         if state.watching { return .curious }
+        if case .asking = state.peek.phase { return .curious }   // the character looks at the user when it asks
+        if state.peek.isWorking { return .onIt }                 // eyes on the app for the whole job
         if state.busy { return .thinking }
         if ledger.isRevealing { return .onIt }
         if let r = reaction { return r }
@@ -245,6 +253,15 @@ struct BubbleView: View {
                 Text(state.contextLine).font(.caption).foregroundStyle(Pad.deskInkSoft(dark)).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
+            Button { state.toggleBackgroundControl() } label: {
+                Image(systemName: state.backgroundOn ? "rectangle.and.hand.point.up.left.filled" : "rectangle.and.hand.point.up.left")
+                    .symbolEffect(.pulse, isActive: sense.controlActive && state.backgroundOn)
+            }
+                .buttonStyle(.borderless)
+                .foregroundStyle(state.backgroundOn ? Pad.penInk : Pad.deskInk(dark).opacity(0.8))
+                .opacity(state.config.allowControl ? 1 : 0.45)
+                .disabled(sense.controlActive)
+                .help(handHelp)
             Button { state.toggleWatching() } label: { Image(systemName: state.watching ? "eye.fill" : "eye") }
                 .buttonStyle(.borderless).help(state.watching ? "Stop watching" : "Watch me do something, then write it up as a tool pack").disabled(state.busy)
             Button { state.clearConversation() } label: { Image(systemName: "trash") }
@@ -254,6 +271,8 @@ struct BubbleView: View {
             Button { state.expanded = false } label: { Image(systemName: "chevron.down") }
                 .buttonStyle(.borderless).help("Collapse")
             Menu {
+                Button("Fold into a crane") { onOrigami?() }
+                    .disabled(onOrigami == nil || state.busy || state.watching || sense.controlActive)
                 Button("Settings…") { state.onOpenSettings?() }
                 Button("Hide bubble") { state.onHideBubble?() }
                 Button("Quit Familiar") { NSApp.terminate(nil) }
@@ -277,6 +296,14 @@ struct BubbleView: View {
         )
     }
 
+    /// The hand's tooltip describes the effective state: a fresh install (control off) never shows a purple hand that does nothing.
+    private var handHelp: String {
+        if sense.controlActive && state.backgroundOn { return "Working in the window you asked from — Stop is on the note, or ⌃⌥Space." }
+        if !state.config.allowControl { return "Control is off. Click to let Familiar do things for you — it works in the window while you carry on." }
+        if state.backgroundOn { return "Works in the window you asked about while you carry on — your mouse and keyboard stay yours. Click to have it take the mouse instead." }
+        return "Takes the mouse when it does things for you. Click to have it work in the window while you carry on instead."
+    }
+
     /// The notes, oldest at the top, newest at the bottom and on top of the pile.
     private var transcript: some View {
         let notes = Note.group(state.transcript)
@@ -290,6 +317,7 @@ struct BubbleView: View {
                         StickyNoteView(note: n, index: i, isLatest: latest, busy: state.busy && latest, status: state.status,
                                        suggestions: n.id == tabsOn ? state.suggestions : [], ledger: ledger,
                                        peek: latest ? peekMood : nil, animated: padAnimated,
+                                       peekFeed: latest ? state.peek : nil,
                                        onSuggest: { state.askSuggestion($0) })
                             .id(n.id)
                     }
@@ -320,6 +348,12 @@ struct BubbleView: View {
                 InkLine(wobble: 0.6).stroke(Pad.ink.opacity(0.22), lineWidth: 1).frame(height: 3)
                 Text("Hold me to pick up the pen, then point it at anything on screen and I'll tell you what it is and what you can do about it.")
                 Text("Or just write to me below.").foregroundStyle(Pad.inkSoft)
+                (Text(state.config.allowControl
+                      ? "Ask me to do something and I'll do it in that window while you carry on — the "
+                      : "Ask me to do something and I'll do it for you once you click the ")
+                 + Text(Image(systemName: "rectangle.and.hand.point.up.left"))
+                 + Text(state.config.allowControl ? " up top turns that off." : " up top."))
+                    .foregroundStyle(Pad.inkSoft)
             }
             .font(Pad.body).foregroundStyle(Pad.ink).lineSpacing(Pad.lineSpacing)
             .padding(EdgeInsets(top: 16, leading: 16, bottom: 20, trailing: 16))
@@ -391,14 +425,14 @@ struct BubbleView: View {
 
     private var footer: some View {
         HStack {
-            if !state.hasApiKey {
-                Button { state.onOpenSettings?() } label: { Label("No API key — open Settings", systemImage: "key") }
+            if !state.hasConnection {
+                Button { state.onOpenSettings?() } label: { Label("Connect to Claude — open Settings", systemImage: "key") }
                     .buttonStyle(.plain).foregroundStyle(.orange)
             } else if !state.busy, !state.status.isEmpty {
                 Text(state.status)
             }
             Spacer()
-            Text(state.watching ? "⌃⌥Space stop watching" : "⌃⌥Space pen")
+            Text(state.watching ? "⌃⌥Space stop watching" : state.peek.isWorking ? "⌃⌥Space stop" : "⌃⌥Space pen")
             resizeGrip
         }
         .font(.caption2).foregroundStyle(Pad.deskInkSoft(dark))

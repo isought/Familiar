@@ -1,6 +1,9 @@
 import Foundation
 
 struct Config: Codable {
+    var connectionMode: String = "api"       // "api" or "claudeCode" (the user's installed, signed-in CLI)
+    var claudePath: String = ""               // empty = find the installed Claude Code executable
+    var claudeModel: String = ""              // empty = Claude Code's default model
     var apiKey: String = ""
     var apiBaseURL: String = ""              // e.g. a corporate gateway; empty = api.anthropic.com
     var apiHeaders: [String: String] = [:]   // extra headers for the gateway
@@ -18,9 +21,12 @@ struct Config: Codable {
     var docsStuffLimitChars: Int = 24000
     var uvPath: String = ""                  // empty = bundled uv, then ~/.local/bin, homebrew
     var wandHoldSeconds: Double = 0.8        // hold the bubble this long to charge the wand
-    var mascotStyle: String = "innocent"     // "innocent" (high, arched brows) or "sharp" (the original merge)
+    var mascotStyle: String = "innocent"     // "innocent" (v2, default), "innocentV1", "innocentV3", "innocentV4" (bashful), or "sharp"
     var hotkey: String = "control+option+space"
     var allowControl: Bool = false           // let Familiar move the mouse and type when asked to do something
+    var controlInBackground: Bool = true     // do things in the window you asked from, keeping your mouse and keyboard yours
+    var backgroundPreciseClicks: Bool = false // experimental: click exact spots in a background window through a private macOS path
+    var backgroundHintsShown: Int = 0        // the "working behind you" callout shows on the first background jobs
     var env: [String: String] = [:]          // non-secret variables handed to every script (secrets go to the Keychain)
     var bubbleX: Double? = nil               // remembered bubble position (bottom-left, screen points)
     var bubbleY: Double? = nil
@@ -62,6 +68,9 @@ struct Config: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Config()
+        connectionMode = try c.decodeIfPresent(String.self, forKey: .connectionMode) ?? d.connectionMode
+        claudePath = try c.decodeIfPresent(String.self, forKey: .claudePath) ?? d.claudePath
+        claudeModel = try c.decodeIfPresent(String.self, forKey: .claudeModel) ?? d.claudeModel
         apiKey = try c.decodeIfPresent(String.self, forKey: .apiKey) ?? d.apiKey
         apiBaseURL = try c.decodeIfPresent(String.self, forKey: .apiBaseURL) ?? d.apiBaseURL
         apiHeaders = try c.decodeIfPresent([String: String].self, forKey: .apiHeaders) ?? d.apiHeaders
@@ -82,6 +91,9 @@ struct Config: Codable {
         mascotStyle = try c.decodeIfPresent(String.self, forKey: .mascotStyle) ?? d.mascotStyle
         hotkey = try c.decodeIfPresent(String.self, forKey: .hotkey) ?? d.hotkey
         allowControl = try c.decodeIfPresent(Bool.self, forKey: .allowControl) ?? d.allowControl
+        controlInBackground = try c.decodeIfPresent(Bool.self, forKey: .controlInBackground) ?? d.controlInBackground
+        backgroundPreciseClicks = try c.decodeIfPresent(Bool.self, forKey: .backgroundPreciseClicks) ?? d.backgroundPreciseClicks
+        backgroundHintsShown = try c.decodeIfPresent(Int.self, forKey: .backgroundHintsShown) ?? d.backgroundHintsShown
         env = try c.decodeIfPresent([String: String].self, forKey: .env) ?? d.env
         bubbleX = try c.decodeIfPresent(Double.self, forKey: .bubbleX)
         bubbleY = try c.decodeIfPresent(Double.self, forKey: .bubbleY)

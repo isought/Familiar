@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>BGTEST</title>
+<style>
+  body { font: 16px -apple-system, sans-serif; margin: 24px; }
+  #tall { height: 3000px; background: linear-gradient(#f4f4f4, #ddd); margin-top: 24px; }
+  button, input, textarea { font: inherit; }
+</style>
+</head>
+<body>
+  <h1 id="h">Familiar background test</h1>
+  <p>
+    <button id="b" onclick="document.title = 'CLICKED'">Set title</button>
+    <button id="submit" onclick="document.title = 'SUBMITTED'">Submit</button>
+  </p>
+  <p><label>Name <input id="i" oninput="document.title = 'INPUT:' + this.value"></label></p>
+  <p><label>Notes <textarea id="t" rows="3" cols="40"></textarea></label></p>
+  <p>last key: <span id="k">none</span> · scrollY: <span id="s">0</span></p>
+  <div id="tall"></div>
+  <script>
+    document.addEventListener('keydown', e => { document.getElementById('k').textContent = e.key; });
+    window.addEventListener('scroll', () => {
+      const y = Math.round(window.scrollY);
+      document.getElementById('s').textContent = y;
+      document.title = 'SCROLL:' + y;
+    });
+  </script>
+</body>
+</html>

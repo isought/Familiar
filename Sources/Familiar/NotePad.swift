@@ -84,7 +84,7 @@ struct Note: Identifiable {
             case .assistant:
                 if let i = out.indices.last, !out[i].hasAnswer { out[i].answers.append(m) }
                 else { out.append(Note(id: m.id, heading: nil, answers: [m])) }
-            case .error, .note:
+            case .error, .note, .receipt:
                 if let i = out.indices.last { out[i].answers.append(m) }
                 else { out.append(Note(id: m.id, heading: nil, answers: [m])) }
             }
@@ -133,6 +133,7 @@ struct StickyNoteView: View {
     let ledger: RevealLedger
     var peek: MascotMood? = nil     // the character looking over the top edge (the newest note only)
     var animated = true
+    var peekFeed: PeekFeed? = nil   // the live print of the window a background job works in (the newest note only)
     let onSuggest: (String) -> Void
     @Environment(\.colorScheme) private var scheme
 
@@ -156,7 +157,9 @@ struct StickyNoteView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let h = note.heading { heading(h) }
             ForEach(note.answers) { a in answer(a) }
-            if busy && !note.hasAnswer {
+            if let feed = peekFeed {
+                PeekSlot(feed: feed, busy: busy && !note.hasAnswer, status: status)
+            } else if busy && !note.hasAnswer {
                 HStack(spacing: 7) {
                     ProgressView().controlSize(.small)
                     Text(status.isEmpty ? "Writing…" : status).font(.callout).foregroundStyle(Pad.inkSoft)
@@ -219,6 +222,22 @@ struct StickyNoteView: View {
             )
             .rotationEffect(.degrees(-0.8))
             .padding(.vertical, 3)
+        case .receipt:
+            // the last frame of the window a background job worked in, clipped on like a photo, with the tally under it
+            VStack(alignment: .leading, spacing: 4) {
+                if let img = m.image {
+                    Image(decorative: img, scale: 2)
+                        .resizable().aspectRatio(contentMode: .fit)
+                        .padding(4)
+                        .background(Color.white)
+                        .overlay(RoundedRectangle(cornerRadius: 1).stroke(Pad.tabEdge, lineWidth: 0.8))
+                        .shadow(color: .black.opacity(0.18), radius: 2, y: 1.5)
+                        .frame(maxWidth: 200)
+                        .rotationEffect(.degrees(-0.8))
+                }
+                Text(m.text).font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft)
+            }
+            .padding(.vertical, 3)
         default:
             RevealingText(message: m, ledger: ledger)
         }
@@ -234,6 +253,27 @@ struct StickyNoteView: View {
         }
         .padding(.leading, 14).padding(.trailing, 12).padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The slot under the heading of the newest note: the live peek while a background job runs, else the busy row.
+/// Observes the feed itself so the rest of the pad does not redraw with every frame.
+struct PeekSlot: View {
+    @ObservedObject var feed: PeekFeed
+    let busy: Bool
+    let status: String
+
+    var body: some View {
+        if feed.phase != .idle {
+            PeekNoteView(feed: feed).padding(.top, 4)
+        } else if busy {
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text(status.isEmpty ? "Writing…" : status).font(.callout).foregroundStyle(Pad.inkSoft)
+            }
+            .padding(.top, 2)
+            .id("busy")
+        }
     }
 }
 

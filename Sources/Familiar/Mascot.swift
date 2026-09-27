@@ -2,10 +2,10 @@ import SwiftUI
 
 /// The Familiar character: a small yellow sticky note with two elliptical eyes, two glossy eyebrows and a curled corner.
 /// Drawn entirely with SwiftUI shapes so every part can animate.
-/// Two brow personalities. `sharp` is the original merge; `innocent` keeps both brows high and arched so curiosity
-/// reads as wide-eyed rather than skeptical (a lowered brow is what makes a face look suspicious).
+/// Versioned brow personalities. `innocent` is v2; v4 lifts the inner ends and lets the outer tails droop
+/// for a bashful, slightly bewildered expression. Earlier versions remain available for comparison.
 enum MascotStyle: String, CaseIterable {
-    case sharp, innocent, innocentV1, innocentV3
+    case sharp, innocent, innocentV1, innocentV3, innocentV4
     nonisolated(unsafe) static var current: MascotStyle = .innocent
     var isInnocentFamily: Bool { self != .sharp }
 }
@@ -78,6 +78,7 @@ private struct Expression {
         case .innocent: return innocent(mood)
         case .innocentV1: return innocentV1(mood)
         case .innocentV3: return innocentV3(mood)
+        case .innocentV4: return innocentV4(mood)
         case .sharp: break
         }
         switch mood {
@@ -108,6 +109,39 @@ private struct Expression {
                               eyeOpen: 0.9, eyeScale: 0.7, gaze: CGPoint(x: 0.1, y: 0.7), followsPointer: false, lean: -2,
                               shift: CGSize(width: 0, height: 0.03), squashX: 1.02, squashY: 0.97)
         }
+    }
+
+    /// Innocent brows, v4: fine, uneven arcs with raised inner ends and relaxed outer tails.
+    /// Inherit v2's eyes, gaze and body motion so this version changes only the brows.
+    static func innocentV4(_ mood: MascotMood) -> Expression {
+        var ex = innocent(mood)
+        switch mood {
+        case .idle:
+            ex.left = Brow(raise: 0.045, innerUp: 32, arch: 0.66, peak: 0.64)
+            ex.right = Brow(raise: 0.045, innerUp: 23, arch: 0.78, peak: 0.38)
+        case .curious:
+            ex.left = Brow(raise: 0.065, innerUp: 36, arch: 0.72, peak: 0.64)
+            ex.right = Brow(raise: 0.050, innerUp: 25, arch: 0.80, peak: 0.38)
+        case .happy:
+            ex.left = Brow(raise: 0.075, innerUp: 25, arch: 0.80, peak: 0.60)
+            ex.right = Brow(raise: 0.050, innerUp: 18, arch: 0.88, peak: 0.40)
+        case .thinking:
+            ex.left = Brow(raise: 0.090, innerUp: 38, arch: 0.68, peak: 0.64)
+            ex.right = Brow(raise: 0.050, innerUp: 24, arch: 0.78, peak: 0.38)
+        case .charging:
+            ex.left = Brow(raise: 0.030, innerUp: 27, arch: 0.60, peak: 0.62)
+            ex.right = Brow(raise: 0.025, innerUp: 20, arch: 0.68, peak: 0.40)
+        case .onIt:
+            ex.left = Brow(raise: 0.045, innerUp: 22, arch: 0.68, peak: 0.60)
+            ex.right = Brow(raise: 0.035, innerUp: 16, arch: 0.76, peak: 0.40)
+        case .peek:
+            ex.left = Brow(raise: 0.060, innerUp: 34, arch: 0.70, peak: 0.64)
+            ex.right = Brow(raise: 0.045, innerUp: 25, arch: 0.80, peak: 0.38)
+        case .sad:
+            ex.left = Brow(raise: 0.035, innerUp: 40, arch: 0.42, peak: 0.62)
+            ex.right = Brow(raise: 0.025, innerUp: 33, arch: 0.48, peak: 0.38)
+        }
+        return ex
     }
 
     /// Innocent brows, v3 (experiment, traced from the reference): both brows the SAME stroke, drooping to the right,
@@ -363,19 +397,24 @@ struct MascotView: View {
         let eyeDX = b * 0.17, eyeY = cy - b * 0.005          // eyes on the note's midline (they used to hang at 60%)
         let drift = CGSize(width: gaze.x * b * 0.02, height: gaze.y * b * 0.015)   // the eyes themselves drift a hair; the pupils do the looking
         let style = MascotStyle.current
-        let innocent = style.isInnocentFamily, v1 = style == .innocentV1
+        let innocent = style.isInnocentFamily, v1 = style == .innocentV1, v4 = style == .innocentV4
         let browY = cy - b * (innocent ? 0.235 : 0.21)          // just above the eyes, like the reference
         // v2: shorter brows set wide apart, each floating over its own eye (the Clippy "harmless" look)
-        let browW = b * (v1 ? 0.26 : innocent ? 0.215 : 0.27), browLW = b * (v1 ? 0.034 : innocent ? 0.038 : 0.042)
+        let browW = b * (v1 ? 0.26 : innocent ? 0.215 : 0.27)
+        // Keep v4's finer stroke legible in the 24pt peeker as well as the full-size character.
+        let browLW = v4 ? max(0.7, b * 0.024) : b * (v1 ? 0.034 : innocent ? 0.038 : 0.042)
         let rightScale: CGFloat = v1 ? 0.80 : innocent ? 0.95 : 0.93        // v1 shortened the right brow to dodge the curl
-        let leftDX: CGFloat = v1 ? 0.02 : innocent ? 0.045 : 0.02            // outward push of the left brow
-        let rightDX: CGFloat = v1 ? 0.065 : innocent ? 0.045 : 0.01
+        // Give v4's raised inner tips breathing room: move each brow outward by 6.5% of the paper width.
+        // The right offset is subtracted below, so a negative value moves that brow toward the outer edge.
+        let leftDX: CGFloat = v4 ? 0.077 : v1 ? 0.02 : innocent ? 0.045 : 0.02
+        let rightDX: CGFloat = v4 ? -0.053 : v1 ? 0.065 : innocent ? 0.045 : 0.01
         let rightDY: CGFloat = v1 ? 0.04 : innocent ? 0.045 : 0.015
         let cock: CGFloat = style == .innocentV3 ? 1 : 0   // v3 only: the face is cocked like the reference (right eye lower)
         // Pointer proximity: both brows drift up a little as the mouse approaches, the one on the pointer's side a bit more.
         let side = max(-1, min(1, gaze.x * 3))
         let liftL = proximity * b * (0.025 + 0.02 * max(0, -side))
-        let liftR = proximity * b * (0.025 + 0.02 * max(0, side))
+        // The wider v4 brow sits below the curl; keep its hover lift small enough to clear the fold.
+        let liftR = proximity * b * (v4 ? 0.005 : 0.025 + 0.02 * max(0, side))
         return ZStack {
             eye(w: eyeW, h: eyeH, open: open, happy: ex.happy, gaze: gaze)
                 .rotationEffect(.degrees(6))
