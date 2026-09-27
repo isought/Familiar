@@ -4,6 +4,14 @@
 
 **Basis:** Main checkpoint `9fdba88`, pushed before cleanup on September 26, 2026. It preserves the Claude CLI connection, background execution/ghost cursor/peek, and origami work. Its 84 tests in 13 suites passed. This is a source-and-test assessment, not fresh verification of live desktop interactions.
 
+### Goals and scope — clarified September 27, 2026
+
+1. **Retain existing functionality.** Preserve Chat, API/Claude Code connections, Watch and Learn, pen/notes, foreground/background execution, confirmations, Stop, and companion/origami behavior, along with settings, stored data, and packaging. Separate any intentional behavior change from structural moves so it can be reviewed explicitly.
+2. **Keep Waxwing integration possible.** Keep external-service details out of feature state and inject dependencies at app composition. No Waxwing implementation, API repair, integration testing, or backend choice is required to finish this cleanup. The earlier investigation in sections 8–9 is deferred reference material.
+3. **Make feature development independent.** Existing and future feature sets own their state and workflows, use shared services through narrow interfaces, and cooperate without reaching into another feature's mutable implementation. Adding a feature should normally touch its own code and app composition, rather than require changes throughout Chat, Watch, and the shell.
+
+Independent features still share the app's settings, native capabilities, and explicit resource-conflict rules. Independence does not mean separate apps, a package per feature, or unrestricted concurrent desktop control. Extract boundaries demonstrated by current callers; add new interfaces when a real consumer needs them. Daily cards, ingestion, personalization, scheduling, and connector implementations are separate feature work, not cleanup acceptance criteria.
+
 ### Implemented boundary
 
 - `FamiliarContracts` owns the existing conversation interface, replies, errors, and tool results/executor.
@@ -23,7 +31,7 @@ Conversation history still uses the existing provider-shaped dictionaries so opa
 
 The daily experience owns discovery, presentation, and proposed work. A shared execution capability owns doing approved work. Progress, questions, and results remain connected to the item that initiated it.
 
-The architectural test is concrete: a day card must be able to request work, observe progress, answer a pending request, cancel, and display the result without importing the chat feature or manipulating its history.
+This is one architectural stress test, not the only feature the structure should support: a future day card should be able to request work, observe progress, answer a pending request, cancel, and display the result without importing the chat feature or manipulating its history. During cleanup, validate that boundary with fixture callers of today's execution behavior; no Day implementation is needed.
 
 This proposal prepares those boundaries. Building the daily feature, connecting its data sources, and designing the pack-opening experience are subsequent work.
 
@@ -53,7 +61,7 @@ Sources/
     Tools/                           # definitions, invocations, results, JSON values
     Execution/                       # run/job identity, pending requests, progress, outcomes
     Context/                         # screen context and encoded image values
-    Knowledge/                       # scoped ingestion/retrieval interfaces; source and evidence refs
+    Knowledge/                       # future integration interfaces; add with a concrete consumer
 
   FamiliarRuntime/                   # Foundation; orchestration and non-UI implementations
     Conversation/
@@ -68,8 +76,8 @@ Sources/
       ToolCatalog.swift              # pack discovery/selection and snapshots
       PackModels.swift               # pack, script, document descriptors
       ContextNotesStore.swift        # existing anchored notes and their storage rules
-    Knowledge/                       # shared context boundary; implementations grow with real consumers
-      ContextResolver.swift          # context requests and evidence results; initial pack adapter
+    Knowledge/                       # future shared retrieval; current pack context stays focused
+      ContextResolver.swift          # add when a concrete consumer needs retrieval beyond packs
     Processes/
       ScriptRunner.swift
       ProcessRunner.swift
@@ -117,7 +125,7 @@ docs/architecture/
   next-phase-structure.md
 ```
 
-`ToolPacks` owns today's pack selection, scripts, and stored screen annotations. Its concrete domain models belong there, not in `FamiliarContracts`. The separate `Knowledge` boundary supports scoped context retrieval for different consumers, initially adapting existing pack documents. It can later receive captured knowledge and external knowledge-base results without treating every document as an executable capability. Add ingestion/vendor implementations when those features are built, not empty implementations during cleanup. See the stress test in section 8.
+`ToolPacks` owns today's pack selection, scripts, and stored screen annotations. Its concrete domain models belong there, not in `FamiliarContracts`. Keep the current pack context separate from executable tools. A future `Knowledge` boundary can support scoped retrieval and captured or external knowledge without treating every document as an executable capability. Define that broader contract when its first integration is built; neither empty interfaces nor vendor implementations are needed during cleanup. See the deferred stress test in section 8.
 
 Native extensions for coordinate conversion and accessibility remain in the app. Watch recordings and learned-pack drafts belong to `WatchLearn` even where their types happen to use only Foundation. Only source/evidence values that cross the ingestion or retrieval boundary become knowledge contracts.
 
@@ -162,6 +170,8 @@ The app injects the execution service and context/knowledge interfaces. `Familia
 
 ## 4. Work continues independently of the window
 
+For this cleanup, extract ownership of existing execution, history, confirmations, Stop and resource cleanup while retaining their current behavior. The job/card concepts below describe the direction that extraction should permit. Whole-card approval, proposal revisions, durable job records and new completion-evidence policies are future feature design, not additional behaviors to build during restructuring.
+
 There are three different lifetimes:
 
 | Concept | Owns | Ends when |
@@ -184,7 +194,7 @@ The control lease is enforced below the feature UIs. Initially, a second control
 
 ### Minimum shared execution contract
 
-Names describe responsibilities; exact Swift declarations are implementation work.
+Names describe responsibilities for the future workflow. Implement only the subset needed to represent today's callers, confirmations and lifecycle during cleanup; extend it with real feature requirements later.
 
 | Value or operation | Required meaning |
 | --- | --- |
@@ -241,8 +251,8 @@ Each stage changes the maintained app and leaves it usable. File moves and behav
 | --- | --- | --- |
 | 0. Preserve the baseline | Checkpoint existing work and document current interaction behavior. | Current build/test baseline recorded; preserve uncommitted features and existing data. |
 | 1. Extract contracts and common routing | Move shared values/interfaces; split resource discovery and dependencies; route Chat and CLI through one dispatcher; distinguish executable tools from knowledge/context sources. | Both entry points exercise the same routing tests; existing pack context is supplied through a focused interface without adding a new backend. |
-| 2. Own execution explicitly | Introduce coordinator-owned work, typed pending requests, cancellation and result reporting; adapt today's UI. | Tests cover requests across turn/session boundaries, stale decisions, stopping while waiting, one terminal result, and native cleanup. |
-| 3. Separate existing feature state | Extract Watch lifecycle and notes service; separate shell state and paper primitives from Chat; define a source export boundary for future ingestion. | Chat clear, Watch keep/discard, window close, settings changes, and feature conflicts have explicit owners and regression coverage. Watch-owned recording objects do not become a runtime dependency. |
+| 2. Own execution explicitly | Extract current conversation/run ownership, confirmations, cancellation and result reporting into shared services; adapt today's UI without changing its approval semantics. | Fixture callers exercise existing behavior without constructing Chat; tests cover turn/session boundaries, stale decisions, stopping while waiting, one terminal result, and native cleanup. |
+| 3. Separate existing feature state | Extract Watch lifecycle and notes service; separate shell state and reused paper primitives from Chat. | Chat clear, Watch keep/discard, window close, settings changes, and feature conflicts have explicit owners and regression coverage. Watch-owned recording objects do not become a runtime dependency. |
 | 4. Enforce modules and verify packaging | Move cleaned code into the three targets; update imports, access levels and test targets. | Runtime builds without UI/native imports; deterministic suite passes; packaged helpers resolve; existing signing/resource layout is preserved. |
 
 Implementation order: stages 0 and 1 are delivered on the cleanup branch, along with the three-target enforcement part of stage 4. Next extract the execution owner and lifecycle in stage 2, then feature/shell ownership in stage 3. Moving the remaining pack/script models and final native interaction verification remain part of stage 4. Each stage should be a separate reviewable change; module creation is not evidence that the whole ownership migration is complete.
@@ -253,18 +263,20 @@ During implementation, package and live interaction checks are separate from uni
 
 ### Cleanup is complete when
 
+- Existing workflows and stored data remain compatible, with regression checks for the behavior touched by each extraction.
 - The same runtime serves existing Chat and CLI entry points.
 - A test caller can start work, observe it, answer a pending request and cancel without constructing Chat or a window.
-- Feature state and shell state have separate owners.
+- Feature state and shell state have separate owners; features cooperate through explicit operations rather than another feature's mutable state.
 - The runtime cannot import the app, SwiftUI, or native desktop APIs.
-- No new daily data is stored in chat history, anchored-note files, or global settings.
-- Existing behavior, resource lookup and on-disk formats remain compatible.
+- A future feature can use shared execution/context capabilities through app composition without depending on Chat or Watch internals.
+- External integration details remain replaceable at the app/service boundary; no Waxwing code or running Waxwing service is required for completion.
+- Resource lookup, settings, signing and on-disk formats remain compatible.
 
-At that point, begin the first real daily feature. Do not extend cleanup into speculative source connectors, a general workflow language, autonomous scheduling, process isolation, or a rewrite of the control algorithms.
+At that point, the structure is ready for the next chosen feature set, including the proposed daily experience. Do not extend cleanup into speculative source connectors, a general workflow language, autonomous scheduling, process isolation, or a rewrite of the control algorithms.
 
 ## 7. Product and design decisions to review
 
-The following are open decisions, not assumptions already implemented. Structural extraction can proceed before final visual design.
+The following belong to future product/design work, not prerequisites for this cleanup. Preserve existing user-facing behavior while extracting its owners. Structural extraction can proceed without resolving the daily experience or Waxwing design.
 
 | Decision | Proposed starting point | When your input is needed |
 | --- | --- | --- |
@@ -286,7 +298,9 @@ For design review, a rough storyboard is sufficient: **open pack → scan items 
 
 Engineering can own target names, dependency injection, protocol placement, test organization, and the mechanical extraction sequence. Your review should focus on whether these ownership and workflow defaults support the product you intend to build.
 
-## 8. Stress test: captured knowledge, personalized execution and a daily feed
+## 8. Deferred reference: captured knowledge, personalized execution and a daily feed
+
+This earlier stress test records possible future requirements. Its ingestion, retrieval and personalization contracts are not deliverables or acceptance gates for the current restructure.
 
 **Verdict:** The three-target dependency structure survives. The earlier responsibility split needed refinement: tool packs are only one knowledge source, and a screen recording feature must not become the shared memory owner. These scenarios are evaluated as future requirements; this document does not authorize implementing those integrations now.
 
@@ -319,7 +333,7 @@ The diagram is data flow, not module imports. An external tool may already perfo
 | Decide what belongs in today's feed | FamiliarDay uses retrieved evidence, its time horizon, novelty, previously shown items and user edits. |
 | Execute a selected action | Existing execution service consumes relevant context, revalidates where needed and enforces the approved scope. |
 
-ExecutionCoordinator remains responsible for work ownership, decisions and cleanup. It delegates retrieval to ContextResolver and does not implement indexing, connector sync, recommendation ranking or profile inference. The knowledge implementation can become a separate Swift target when those concrete implementations warrant it; the public interfaces and dependency direction already allow that move.
+ExecutionCoordinator remains responsible for work ownership, decisions and cleanup. When shared retrieval is implemented, it should delegate to a context resolver and leave indexing, connector sync, recommendation ranking and profile inference outside execution. The knowledge implementation can become a separate Swift target when concrete implementations warrant it; the proposed dependency direction permits that move without defining speculative interfaces now.
 
 ### Feature 1: Watch Me connected to automated knowledge capture
 
@@ -361,9 +375,11 @@ Captured observations, inferred procedures/preferences, executable tools, approv
 | Knowledge service is unavailable | Every app feature fails or stale facts look current. | Retrieval reports unavailable/partial/stale status; unrelated actions still work and dependent work can request missing context. |
 | An execution writes an uncertain result back to knowledge | The model repeatedly reinforces its own incorrect conclusion. | Write provenance and evidence explicitly; distinguish observations/inferences from verified outcomes. |
 
-These checks become implementation tests when their corresponding feature exists. Cleanup only needs to establish the interfaces, preserve current pack behavior through the context adapter, and prove independent consumers using fixtures. It does not need a vector database, a knowledge graph, a new backend, or a durable desktop-execution queue. An ingestion retry queue is a separate concern and may be required when ingestion is implemented.
+These checks become implementation tests when their corresponding feature exists. Cleanup needs to preserve current pack behavior through the focused context helper and prove shared services usable by independent fixture callers. Broader knowledge interfaces, a vector database, a knowledge graph, a new backend, and a durable desktop-execution queue are outside its scope. An ingestion retry queue is a separate concern if ingestion is later implemented.
 
-## 9. Concrete integration check: Waxwing App and local files
+## 9. Deferred reference: Waxwing App and local files
+
+Waxwing is a possible later integration, not an active cleanup workstream. The findings below preserve the September 26 investigation for later revalidation; none requires an implementation or fix during this restructure.
 
 The user identified `/Users/david/projects/waxwing-app` as the preferred integration, while keeping Familiar-managed/local-file knowledge possible. The following findings come from that sibling checkout's current source and contracts. Its old `spec/` directory is explicitly historical. `GET http://127.0.0.1:4310/api` could not connect during this review; no service was started, authenticated content accessed, or Waxwing data modified.
 
@@ -400,4 +416,4 @@ Choose one authoritative destination for each knowledge scope. A local upload ou
 4. **Freshness:** Preserve source IDs/revisions and load authoritative current content when preparing work. Search references may distinguish an annotation's source from the target it annotates; retain both. Source resolution must dispatch by content kind because Waxwing does not expose one generic reader for all result types. Refreshing context is separate from approving a materially changed proposal.
 5. **Current connector drift:** Familiar's [search script](../../tools/waxwing/scripts/search.py) reads `results`, while Waxwing returns `hits`. The [attention script](../../tools/waxwing/scripts/attention.py) reads `pages`/`citations`, while Waxwing returns `items`/`changed`. These are source-confirmed field mismatches; no live integration was tested or application code fixed during this planning task. Add adapter fixtures from Waxwing's current contracts before relying on these calls for context or cards.
 
-This concrete check strengthens the need for one validated knowledge adapter shared by tool calls, context retrieval and the feed. It does not require a different app shell or a rewrite of execution. The initial cleanup establishes that shared boundary; actual Waxwing writes, local-backend implementation and any Waxwing API extensions are subsequent feature work.
+If integration is pursued, this check suggests one validated knowledge adapter shared by its consumers. It does not require a different app shell or a rewrite of execution. Cleanup leaves room to inject such an adapter later; it does not need to define it now. Waxwing writes, local-backend implementation, connector fixes and any Waxwing API extensions are subsequent feature work.
