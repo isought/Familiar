@@ -1,8 +1,21 @@
 # Familiar: code structure for the next phase
 
-**Status:** Proposal for review. No application restructuring has been implemented.
+**Status:** Stage 1 implemented on `codex/modular-cleanup`; remaining stages are planned. The module boundary from stage 4 was brought forward to enforce the first extraction immediately.
 
-**Basis:** Local working tree on `codex/claude-cli-mode`, reviewed September 26, 2026. Includes the uncommitted Claude CLI connection, background execution/ghost cursor/peek, and origami work. The existing 84 tests in 13 suites passed during the preceding review. This is a source-and-test assessment, not fresh verification of live desktop interactions.
+**Basis:** Main checkpoint `9fdba88`, pushed before cleanup on September 26, 2026. It preserves the Claude CLI connection, background execution/ghost cursor/peek, and origami work. Its 84 tests in 13 suites passed. This is a source-and-test assessment, not fresh verification of live desktop interactions.
+
+### Implemented boundary
+
+- `FamiliarContracts` owns the existing conversation interface, replies, errors, and tool results/executor.
+- `FamiliarRuntime` owns the API and Claude Code providers, subprocess helper, Python runtime discovery, and per-request tool routing. Its target depends only on Contracts and Foundation; it cannot import the executable app.
+- `Familiar/App` chooses providers and injects settings, credentials, resource locations, logging, and native tool handlers. Chat and the headless command use the same `ExecutionTools` composition and runtime router.
+- `Familiar/Knowledge/PackContextProvider` assembles today's pack documents, anchored notes, and configuration notices for both callers. It remains app-local while its pack and scene models remain there; it is not yet the future cross-module knowledge interface.
+
+The router snapshots registrations for each request. Only selected active/global scripts and enabled native capabilities are registered. Unexpected namespaces cannot fall through to an unrelated handler. This intentionally tightens dispatch: previously an unadvertised script or background tool could still reach some handlers. Script arguments, provider definitions, image results, and existing prompt formatting remain unchanged.
+
+Conversation history still uses the existing provider-shaped dictionaries so opaque thinking signatures and image content survive replay. The extraction does **not** yet introduce typed jobs/approvals, complete cancellation of script subprocesses, separate Watch/shell owners, or the daily/Waxwing features. The full cleanup acceptance criteria below are not yet met.
+
+**Stage 1 validation:** `./scripts/test.sh` passes 103 tests in 18 suites (19 added). The runtime target builds independently. The release app builds through `./scripts/build.sh release`, passes `codesign --verify --deep --strict`, and passes the packaged `--selftest` from an unrelated working directory using empty temporary packs and temporary app storage. Bundle helper discovery resolves correctly. No live provider call or desktop-control interaction was used for these checks. Existing concurrency warnings remain in native shell/target code and the moved subprocess helper.
 
 ## 1. Product workflow the structure must support
 
@@ -26,7 +39,7 @@ This proposal prepares those boundaries. Building the daily feature, connecting 
 | Separate product data from its paper appearance. | Chat messages, screen annotations, and daily items have different meanings and persistence needs. |
 | Keep current on-disk formats and bundle/resource layout through cleanup. | Structural changes should not require a user-data migration. |
 
-The first implementation should checkpoint the current work before moving files. Existing uncommitted changes are the baseline to preserve.
+The baseline was checkpointed and pushed before moving files. Cleanup stays on a feature branch for review and rollback.
 
 ## 3. Proposed structure after cleanup
 
@@ -201,7 +214,7 @@ Preview frames are transient presentation data. Keep their high-frequency native
 | --- | --- |
 | [Assistant.swift](../../Sources/Familiar/Assistant.swift) | Chat state stays with Chat; Watch workflow moves to WatchLearn; routing/session ownership moves to Runtime; expansion/size/focus moves to the shell. |
 | [AppDelegate.swift](../../Sources/Familiar/AppDelegate.swift) | Lifecycle stays; construction moves to CompositionRoot; focus, windows, hotkey priority, and feature conflict decisions move to ShellCoordinator. |
-| [ConversationClient.swift](../../Sources/Familiar/ConversationClient.swift), [ClaudeClient.swift](../../Sources/Familiar/ClaudeClient.swift) | Shared interfaces/results move to Contracts; API/CLI implementations move to Runtime; backend selection moves to app composition. |
+| [Conversation.swift](../../Sources/FamiliarContracts/Conversation.swift), [ClaudeClient.swift](../../Sources/FamiliarRuntime/Conversation/ClaudeClient.swift) | Extracted: shared interfaces/results are in Contracts; API/CLI implementations are in Runtime; backend selection is in app composition. |
 | [main.swift](../../Sources/Familiar/main.swift) | Retain dispatch; move commands into files; GUI and `--ask` use the same tool router and execution lifecycle. |
 | [PeekNote.swift](../../Sources/Familiar/Background/PeekNote.swift) | Shared execution state is separated from observable view adapters and SwiftUI rendering. |
 | [ComputerControl.swift](../../Sources/Familiar/ComputerControl.swift), [Background/](../../Sources/Familiar/Background/) | Keep native mechanics together; replace dependencies on chat/paper state with execution events and native presentation adapters. |
@@ -213,7 +226,7 @@ Preview frames are transient presentation data. Keep their high-frequency native
 
 Important extraction details:
 
-- `ToolResult`, `ToolExecutor`, and `ClaudeReply` currently belong to the HTTP-client file. Extract their shared meaning first. Arbitrary script arguments can use a typed JSON value without forcing every script to have a handwritten Swift type.
+- `ToolResult`, `ToolExecutor`, and `ClaudeReply` now live in Contracts. A later typed JSON representation can replace arbitrary script arguments without forcing every script to have a handwritten Swift type; this first extraction preserves their existing wire representation.
 - Preserve provider-specific thinking/signature blocks, tool round trips, and image behavior when adapters encode/decode session-owned history. Typed feature-facing values should not cause a lossy rewrite of that history.
 - `Config` and `Secrets` currently refer to each other. Separate settings values, app paths, storage, and secret lookup before moving runtime consumers.
 - `BuiltinTools` combines file tools with Accessibility reading. Separate those implementations before moving the Foundation-only portion.
@@ -231,6 +244,8 @@ Each stage changes the maintained app and leaves it usable. File moves and behav
 | 2. Own execution explicitly | Introduce coordinator-owned work, typed pending requests, cancellation and result reporting; adapt today's UI. | Tests cover requests across turn/session boundaries, stale decisions, stopping while waiting, one terminal result, and native cleanup. |
 | 3. Separate existing feature state | Extract Watch lifecycle and notes service; separate shell state and paper primitives from Chat; define a source export boundary for future ingestion. | Chat clear, Watch keep/discard, window close, settings changes, and feature conflicts have explicit owners and regression coverage. Watch-owned recording objects do not become a runtime dependency. |
 | 4. Enforce modules and verify packaging | Move cleaned code into the three targets; update imports, access levels and test targets. | Runtime builds without UI/native imports; deterministic suite passes; packaged helpers resolve; existing signing/resource layout is preserved. |
+
+Implementation order: stages 0 and 1 are delivered on the cleanup branch, along with the three-target enforcement part of stage 4. Next extract the execution owner and lifecycle in stage 2, then feature/shell ownership in stage 3. Moving the remaining pack/script models and final native interaction verification remain part of stage 4. Each stage should be a separate reviewable change; module creation is not evidence that the whole ownership migration is complete.
 
 Before and after moving a boundary, add only the tests needed to establish its behavior. Current coverage is strongest around the CLI bridge and native policy/geometry. Prioritize missing orchestration tests rather than duplicating those algorithms' tests. Include an HTTP-provider fixture test, shared tool routing, cancellation, resource paths, and Watch persistence where the extraction touches them. Tests should use temporary storage and fake backends instead of the user's credentials or live screen.
 

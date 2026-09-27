@@ -126,10 +126,9 @@ func runHeadlessAsk() async {
         backgroundTarget = t
         ctx = ScreenContext(appName: t.appName, bundleID: t.bundleID, windowTitle: t.title, url: nil, focused: nil, timestamp: Date())
     }
-    let sel = registry.select(for: ctx)
-    let text = Prompt.context(ctx, recent: []) + Prompt.toolPacks(active: sel.active, global: sel.global, others: sel.others, stuffLimit: config.docsStuffLimitChars)
-        + Prompt.notes(onTarget: [], elsewhere: registry.notes(for: ctx)) + "\n## Question\n\(question)\n"
-    var tools = (sel.active + sel.global).flatMap(\.scripts).map(\.definition) + BuiltinTools.definitions
+    let packContext = PackContextProvider.context(for: ctx, registry: registry, docsLimit: config.docsStuffLimitChars,
+                                                   includeMissingRequirements: false)
+    let text = Prompt.context(ctx, recent: []) + packContext.promptSection + "\n## Question\n\(question)\n"
     // --control: expose the computer toolset (no HUD in headless mode). Only meaningful when the user asked for it.
     let controlOn = args.contains("--control")
     let control = ComputerController()
@@ -138,12 +137,10 @@ func runHeadlessAsk() async {
     control.maxLongEdge = config.maxImageLongEdge
     control.preciseClicks = config.backgroundPreciseClicks
     control.onCaption = { print("  [control] \($0)") }
-    if controlOn { tools += [ComputerController.findDefinition, ComputerController.toolsetDefinition] }
     var laneNote = ""
     if backgroundOn {
         // --background: drive the window that is frontmost right now (start this from another window than Terminal).
         control.lane = .background
-        tools += ComputerController.backgroundDefinitions
         if let t = backgroundTarget {
             control.target = t
             print("target: \(t.appName) “\(t.title)” \(Int(t.frameCG.width))x\(Int(t.frameCG.height))pt \(t.toolkit.rawValue)")
@@ -166,30 +163,21 @@ func runHeadlessAsk() async {
     var messages: [[String: Any]] = [["role": "user", "content": content]]
     client.maxToolRounds = controlOn ? 40 : 8
     client.shouldStop = { control.stopped }
-    print("context: \(ctx.summaryLine)\nactive packs: \(sel.active.map(\.dirName)) tools: \(tools.count) notes on scene: \(registry.notes(for: ctx).count)\n")
     defer { control.end() }
     do {
+        let router = try ExecutionTools.make(registry: registry, context: ctx, control: controlOn ? control : nil,
+                                              background: backgroundOn) {
+            do {
+                let raw = try await ScreenCapture.captureDisplay()
+                guard let shot = ScreenCapture.encode(ScreenCapture.downscale(raw.image, maxLongEdge: config.maxImageLongEdge)) else { return .text("encode failed", isError: true) }
+                print("  [look_at_screen \(shot.width)x\(shot.height)]")
+                return .blocks([["type": "image", "source": ["type": "base64", "media_type": shot.mediaType, "data": shot.data.base64EncodedString()]]])
+            } catch { return .text(error.localizedDescription, isError: true) }
+        }
+        print("context: \(ctx.summaryLine)\nactive packs: \(packContext.active.map(\.dirName)) tools: \(router.definitions.count) notes on scene: \(packContext.sceneNotes.count)\n")
         let system = Prompt.system + (controlOn ? Prompt.control + (backgroundOn ? Prompt.background + laneNote : "") : "")
-        let reply = try await client.converse(system: system, tools: tools, messages: &messages, executor: { name, input, toolset in
-            if toolset == "computer" { return await control.perform(name, input) }
-            if name == "find_on_screen" { return control.find(input["query"] as? String ?? "") }
-            if name == "target_window" { return await control.targetWindow(input) }
-            if name == "click_element" { return await control.clickElement(input) }
-            if name == "ask_for_the_mouse" { return await control.askForMouse(input) }
-            if name == "give_the_mouse_back" { return control.giveMouseBack() }
-            if name == "look_at_screen" {
-                do {
-                    let raw = try await ScreenCapture.captureDisplay()
-                    guard let shot = ScreenCapture.encode(ScreenCapture.downscale(raw.image, maxLongEdge: config.maxImageLongEdge)) else { return .text("encode failed", isError: true) }
-                    print("  [look_at_screen \(shot.width)x\(shot.height)]")
-                    return .blocks([["type": "image", "source": ["type": "base64", "media_type": shot.mediaType, "data": shot.data.base64EncodedString()]]])
-                } catch { return .text(error.localizedDescription, isError: true) }
-            }
-            if BuiltinTools.names.contains(name) { return BuiltinTools.execute(name, input, root: registry.root) }
-            guard let s = registry.script(named: name) else { return .text("unknown tool", isError: true) }
-            let requirements = registry.packs.first { $0.dirName == s.packDir }?.requires ?? []
-            do { return .text(try await runner.run(s, args: input, context: ctx, secrets: requirements)) } catch { return .text(error.localizedDescription, isError: true) }
-        }, onStatus: { print("  [\($0)]") })
+        let reply = try await client.converse(system: system, tools: router.definitions, messages: &messages,
+                                              executor: router.executor, onStatus: { print("  [\($0)]") })
         let (answer, sugg) = Assistant.splitSuggestions(reply.text)
         print("\n--- reply ---\n\(answer)\n--- suggestions: \(sugg)\n--- usage: \(reply.inputTokens) in, \(reply.outputTokens) out, cache read \(reply.cacheRead), \(reply.toolCalls) tool calls")
     } catch { print("FAILED: \(error.localizedDescription)"); exit(1) }

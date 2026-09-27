@@ -495,15 +495,8 @@ final class Assistant: ObservableObject {
     }
 
     private func packsSection(_ ctx: ScreenContext?, notes: Bool = true) -> String {
-        let sel = registry.select(for: ctx)
-        var s = Prompt.toolPacks(active: sel.active, global: sel.global, others: sel.others, stuffLimit: config.docsStuffLimitChars)
-        if notes { s += Prompt.notes(onTarget: [], elsewhere: registry.notes(for: ctx)) }
-        let missing = registry.missingRequirements(for: sel.active + sel.global)
-        if !missing.isEmpty {
-            s += "\n## Not configured yet\n"
-            for m in missing { s += "- \(m.pack.name) needs \(m.keys.joined(separator: ", ")). Its scripts will fail until the user adds it in Familiar Settings (right-click the bubble → Settings…).\n" }
-        }
-        return s
+        PackContextProvider.context(for: ctx, registry: registry, docsLimit: config.docsStuffLimitChars,
+                                    includeNotes: notes).promptSection
     }
 
     /// Re-create the API client after settings change.
@@ -531,18 +524,6 @@ final class Assistant: ObservableObject {
     /// Set by the app; nil in headless runs without control.
     var control: ComputerController? { didSet { control?.peek = peek } }
 
-    private func toolDefinitions(_ ctx: ScreenContext?) -> [[String: Any]] {
-        let sel = registry.select(for: ctx)
-        let scripts = (sel.active + sel.global).flatMap(\.scripts).map(\.definition)
-        var tools = scripts + BuiltinTools.definitions
-        if config.allowControl, control != nil, !watching {
-            tools.append(ComputerController.findDefinition)
-            tools.append(ComputerController.toolsetDefinition)
-            if backgroundControl { tools += ComputerController.backgroundDefinitions }
-        }
-        return tools
-    }
-
     private func send(content: [[String: Any]], ctx: ScreenContext?) async {
         guard let client else {
             transcript.append(ChatMessage(role: .error, text: ConversationBackend.setupMessage(config: config)))
@@ -563,66 +544,40 @@ final class Assistant: ObservableObject {
         trimHistory()
         let generation = conversationGeneration
 
-        let tools = toolDefinitions(ctx)
         let registry = self.registry
         let control = self.control
         let controlAllowed = config.allowControl && control != nil && !watching
         control?.reset()
         // The background lane works in the window that is in front right now (the pad never takes the foreground).
         let background = controlAllowed && backgroundControl
-        var laneNote = ""
-        if let control {
-            control.lane = background ? .background : .foreground
-            control.target = nil
-            control.declaredIrreversible = (registry.select(for: ctx).active).flatMap(\.irreversible)
-            control.warningNoteLabels = registry.notes(for: ctx).filter(\.isWarning).compactMap(\.anchor.label)
-            if background {
-                switch await TargetWindow.resolveFrontmost() {
-                case .success(let t): control.target = t
-                case .failure(let e): laneNote = "\n\nNo target window right now: \(e.localizedDescription) Call target_window to pick one before acting."
-                }
-            }
-        }
-        client.maxToolRounds = controlAllowed ? 40 : 8
-        client.shouldStop = { [weak control] in control?.stopped ?? false }
-        let executor: ToolExecutor = { [weak self] name, input, toolset in
-            if toolset == "computer" {
-                guard controlAllowed, let control else { return .text("Computer control is off. The user can enable it in Familiar Settings.", isError: true) }
-                return await control.perform(name, input)
-            }
-            if name == "find_on_screen" {
-                guard controlAllowed, let control else { return .text("Computer control is off.", isError: true) }
-                return control.find(input["query"] as? String ?? "")
-            }
-            if ComputerController.backgroundToolNames.contains(name) {
-                guard controlAllowed, let control else { return .text("Computer control is off.", isError: true) }
-                switch name {
-                case "target_window": return await control.targetWindow(input)
-                case "click_element": return await control.clickElement(input)
-                case "ask_for_the_mouse": return await control.askForMouse(input)
-                default: return control.giveMouseBack()
-                }
-            }
-            if name == "look_at_screen" {
+        defer { control?.end() }
+        do {
+            // Bind definitions and handlers before target resolution can suspend and tools can reload.
+            let router = try ExecutionTools.make(registry: registry, context: ctx,
+                                                control: controlAllowed ? control : nil, background: background) { [weak self] in
                 guard let self else { return .text("unavailable", isError: true) }
                 return await self.lookAtScreen(ctx)
             }
-            if BuiltinTools.names.contains(name) {
-                return BuiltinTools.execute(name, input, root: registry.root)
+            var laneNote = ""
+            if let control {
+                control.lane = background ? .background : .foreground
+                control.target = nil
+                control.declaredIrreversible = (registry.select(for: ctx).active).flatMap(\.irreversible)
+                control.warningNoteLabels = registry.notes(for: ctx).filter(\.isWarning).compactMap(\.anchor.label)
+                if background {
+                    switch await TargetWindow.resolveFrontmost() {
+                    case .success(let t): control.target = t
+                    case .failure(let e): laneNote = "\n\nNo target window right now: \(e.localizedDescription) Call target_window to pick one before acting."
+                    }
+                }
             }
-            guard let script = registry.script(named: name) else { return .text("Unknown tool \(name)", isError: true) }
-            let pack = registry.packs.first { $0.dirName == script.packDir }
-            do { return .text(try await registry.runner.run(script, args: input, context: ctx, secrets: pack?.requires ?? [])) }
-            catch { return .text(error.localizedDescription, isError: true) }
-        }
-
-        let started = Date()
-        defer { control?.end() }
-        do {
+            client.maxToolRounds = controlAllowed ? 40 : 8
+            client.shouldStop = { [weak control] in control?.stopped ?? false }
+            let started = Date()
             var messages = apiMessages
             let system = Prompt.system + (controlAllowed ? Prompt.control + (background ? Prompt.background + laneNote : "") : "")
-            let reply = try await client.converse(system: system, tools: tools, messages: &messages,
-                                                  executor: executor, onStatus: { [weak self] s in Task { @MainActor in self?.status = s } })
+            let reply = try await client.converse(system: system, tools: router.definitions, messages: &messages,
+                                                  executor: router.executor, onStatus: { [weak self] s in Task { @MainActor in self?.status = s } })
             if generation == conversationGeneration {
                 apiMessages = messages
                 let (text, sugg) = Self.splitSuggestions(reply.text)
