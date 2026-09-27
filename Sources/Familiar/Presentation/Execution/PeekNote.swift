@@ -16,6 +16,8 @@ import SwiftUI
     @Published var highlight: CGRect?      // normalized
     @Published var pulse = 0               // increments per click
     @Published var borrowKeepsWindowOffscreen = false
+    @Published var approvalMessage: String?
+    @Published var approvalContext: String?
     var startedAt: Date?
     var onStop: (() -> Void)?
     var onGoAhead: (() -> Void)?
@@ -40,6 +42,8 @@ import SwiftUI
     /// Back to idle with nothing on the print, so the next job starts from a blank photo.
     func reset() {
         approvalRequestID = nil
+        approvalMessage = nil
+        approvalContext = nil
         onGoAhead = nil
         onNotNow = nil
         phase = .idle
@@ -223,11 +227,33 @@ struct PeekNoteView: View {
 
     private func confirming(_ label: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Approve “\(label)”?").font(HandFont.font(size: 14)).foregroundStyle(Pad.ink)
-            Text("This action may be irreversible. Approval applies to this control once; it does not give Familiar your mouse.")
-                .font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft)
-            if !feed.metaLine.isEmpty {
-                Text(feed.metaLine).font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft).lineLimit(1)
+            if let message = feed.approvalMessage {
+                Text("\(label)?").font(HandFont.font(size: 14)).foregroundStyle(Pad.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let context = feed.approvalContext, !context.isEmpty {
+                    Text(context).font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft)
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                }
+                ScrollView(.vertical) {
+                    Text(verbatim: message).font(Pad.body).lineSpacing(Pad.lineSpacing).foregroundStyle(Pad.ink)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        .padding(8)
+                }
+                .frame(minHeight: 48, maxHeight: 160)
+                .background(Pad.paperDeep)
+                .overlay(Rectangle().strokeBorder(Pad.tabEdge, lineWidth: 0.8))
+                .accessibilityLabel("Message to send")
+                Text("Approve sending this exact draft once with Return. This does not grant mouse or keyboard access; input permission is separate.")
+                    .font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Approve “\(label)”?").font(HandFont.font(size: 14)).foregroundStyle(Pad.ink)
+                Text("This action may be irreversible. Approval applies to this control once; it does not give Familiar your mouse.")
+                    .font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft)
+                if !feed.metaLine.isEmpty {
+                    Text(feed.metaLine).font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft).lineLimit(1)
+                }
             }
         }
     }

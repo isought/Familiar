@@ -6,7 +6,7 @@ struct BackgroundTaskActivation {
     private static let workOperations: Set<String> = [
         "left_click", "right_click", "middle_click", "double_click", "triple_click", "left_click_drag",
         "left_mouse_down", "left_mouse_up", "scroll", "type", "key", "hold_key",
-        "click_element", "ask_for_the_mouse",
+        "click_element", "send_message", "ask_for_the_mouse",
     ]
 
     mutating func beginIfNeeded(for operation: String) -> Bool {

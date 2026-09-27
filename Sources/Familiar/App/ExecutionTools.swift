@@ -49,6 +49,7 @@ enum ExecutionTools {
                         switch name {
                         case "target_window": return await control.targetWindow(input)
                         case "click_element": return await control.clickElement(input)
+                        case "send_message": return await control.sendMessage(input)
                         case "ask_for_the_mouse": return await control.askForMouse(input)
                         case "give_the_mouse_back": return control.giveMouseBack()
                         default: return .text("Unknown tool \(name)", isError: true)

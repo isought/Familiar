@@ -51,6 +51,11 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    on the task screen; a changed window or control invalidates that approval. A pack can list more
    controls to confirm under `irreversible:` in its SKILL.md. `find_on_screen` gives it labelled controls via Accessibility;
    in the background it presses them by id with `click_element`.
+   Chat composers that send with Return can use `send_message`: the task screen shows the recipient, observed
+   app/window/composer context and complete typed draft for one-action approval. Familiar rechecks the focused
+   composer and exact draft, then presses Return once. Input permission is separate and must still be active for
+   a separate-display send. Unreadable or changed drafts are not sent; uncertain delivery is inspected without
+   automatically retrying. The offscreen input runner still rejects raw Return; send approval is handled by this dedicated tool.
 
    **Separate display (experimental, off by default):** Settings → "Use a separate display for background tasks"
    lets Familiar move the selected task window onto a temporary virtual monitor when the first action begins.

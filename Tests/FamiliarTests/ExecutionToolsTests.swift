@@ -8,6 +8,21 @@ import FamiliarRuntime
 @MainActor
 struct ExecutionToolsTests {
     @Test
+    func returnBasedMessageSendingHasAnApprovalToolWithoutAVisibleSendButton() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let control = ComputerController()
+        control.lane = .background
+        let router = try ExecutionTools.make(registry: fixture.registry(), context: nil, control: control,
+                                             background: true, lookAtScreen: { .text("unused") })
+
+        #expect(router.accepts(name: "send_message"))
+        let result = await router.execute("send_message", ["recipient": "Local test", "message": "Hello 👋"])
+        #expect((result.content as? String)?.contains("No target window") == true)
+        #expect(!control.active)
+    }
+
+    @Test
     func backgroundScreenshotWithoutTargetDoesNotReadTheHumansDisplay() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

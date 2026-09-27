@@ -10,6 +10,8 @@ final class BackgroundActionApproval {
         let id: UUID
         let feed: PeekFeed
         let label: String
+        let message: String?
+        let context: String?
         let continuation: CheckedContinuation<Decision, Never>
     }
 
@@ -17,15 +19,18 @@ final class BackgroundActionApproval {
     private var timeoutTask: Task<Void, Never>?
     var isPending: Bool { pending != nil }
 
-    func request(label: String, on feed: PeekFeed?, timeout: TimeInterval = 120) async -> Decision {
+    func request(label: String, on feed: PeekFeed?, timeout: TimeInterval = 120,
+                 message: String? = nil, context: String? = nil) async -> Decision {
         guard !Task.isCancelled else { return .cancelled }
         guard let feed, pending == nil, feed.approvalRequestID == nil else { return .unavailable }
         let id = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 guard !Task.isCancelled else { continuation.resume(returning: .cancelled); return }
-                pending = Pending(id: id, feed: feed, label: label, continuation: continuation)
+                pending = Pending(id: id, feed: feed, label: label, message: message, context: context, continuation: continuation)
                 feed.approvalRequestID = id
+                feed.approvalMessage = message
+                feed.approvalContext = context
                 feed.onGoAhead = { [weak self] in self?.resolve(id: id, decision: .approved) }
                 feed.onNotNow = { [weak self] in self?.resolve(id: id, decision: .denied) }
                 feed.caption = "Waiting for approval"
@@ -55,15 +60,19 @@ final class BackgroundActionApproval {
         timeoutTask?.cancel()
         timeoutTask = nil
         let feed = pending.feed
-        let decision = feed.approvalRequestID == id && feed.phase == .confirming(pending.label) ? decision : .cancelled
+        let unchanged = feed.approvalRequestID == id && feed.phase == .confirming(pending.label)
+            && feed.approvalMessage == pending.message && feed.approvalContext == pending.context
+        let decision = unchanged ? decision : .cancelled
         if feed.approvalRequestID == id {
             feed.approvalRequestID = nil
+            feed.approvalMessage = nil
+            feed.approvalContext = nil
             feed.onGoAhead = nil
             feed.onNotNow = nil
             if feed.phase == .confirming(pending.label) {
                 feed.phase = decision == .cancelled ? .stopped : .working
                 switch decision {
-                case .approved: feed.caption = "Checking the approved control"
+                case .approved: feed.caption = pending.message == nil ? "Checking the approved control" : "Checking the approved draft"
                 case .denied: feed.caption = "Approval declined"
                 case .timedOut: feed.caption = "Approval timed out"
                 case .cancelled: feed.caption = "Stopped"

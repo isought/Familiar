@@ -45,6 +45,7 @@ final class ActionLadder {
     }
     var captureTypingState: ((AXUIElement?) async -> AXSnapshot)?
     var refreshWindow: (inout TargetWindow) -> Bool = { $0.refresh() }
+    var postMessageReturn: (pid_t) -> Void = { PidEvents.press(pid: $0, code: 36, flags: []) }
 
     init(target: TargetWindow, maxLongEdge: Int) {
         self.target = target
@@ -418,6 +419,21 @@ final class ActionLadder {
     private func typingSnapshot(_ field: AXUIElement?) async -> AXSnapshot {
         if let captureTypingState { return await captureTypingState(field) }
         return await snapshot(element: field, cropAroundCG: nil)
+    }
+
+    /// Called only by the suspended, approved send action. A native state check
+    /// immediately precedes the one down/up pair, with no model or retry in between.
+    func sendApprovedMessage(validation: () -> Bool) async -> ToolResult {
+        if let refusal = refreshTarget() { return refusal }
+        guard !target.sharedWithHuman, !target.isMinimized, makeMainForTyping(target) else {
+            return Self.needsForeground("the approved conversation cannot receive a background Return; request input access, then fresh send approval")
+        }
+        guard await clear(), !Task.isCancelled, !isStopped(), validation() else {
+            return .text("Not sent: input is busy or the approved draft/conversation changed. No Return was pressed.")
+        }
+        caption("Sending the approved message")
+        postMessageReturn(target.pid)
+        return .text("Return was pressed once for the approved draft. Delivery is not yet verified; inspect the conversation and do not automatically repeat the send.")
     }
 
     private func key(_ combo: String, times: Int, hold: Double?) async -> ToolResult {

@@ -47,9 +47,14 @@ import FamiliarContracts
     }
 
     func perform(_ name: String, _ input: [String: Any], target: TargetWindow, displayID: CGDirectDisplayID,
-                 space: CaptureSpace, cancelled: @escaping () -> Bool) async -> ToolResult {
+                 space: CaptureSpace, cancelled: @escaping () -> Bool,
+                 approvedSendValidation: (() -> Bool)? = nil) async -> ToolResult {
         guard !running else { return refusal("Another input operation is still returning control.") }
         guard !cancelled(), !Task.isCancelled else { return refusal("The operation was cancelled.") }
+        let sendValidation = name == "send_message" ? approvedSendValidation : nil
+        guard name != "send_message" || sendValidation != nil else {
+            return refusal("Sending with Return requires approval for this exact message and composer.")
+        }
         let packets: [Packet]
         do { packets = try Self.prepare(name, input, space: space) }
         catch { return refusal(error.localizedDescription) }
@@ -110,6 +115,8 @@ import FamiliarContracts
             failure = reason
         } else if packets.contains(where: { $0.requiresEditableFocus }), !adapters.canType(target) {
             failure = "no editable text field in the task window has confirmed focus"
+        } else if let sendValidation, !sendValidation() {
+            failure = "the approved message, composer, or destination changed after activation"
         }
         if failure == nil {
             for packet in packets {
@@ -125,6 +132,16 @@ import FamiliarContracts
                 if let reason = adapters.inputRefusal?(target) { failure = reason; break }
                 guard !interrupted(), adapters.frontPID() == target.pid else {
                     failure = interruption ?? "the operation was cancelled or timed out"; break
+                }
+                if let sendValidation, !sendValidation() {
+                    failure = "the approved message, composer, or destination changed before sending"
+                    break
+                }
+                // Validation can read native state. Recheck focus/cancellation after that read
+                // before posting the one approved key; no await separates these checks and dispatch.
+                guard !interrupted(), adapters.frontPID() == target.pid,
+                      adapters.targetFocused(target) else {
+                    failure = interruption ?? "input focus changed before dispatch"; break
                 }
                 if case .move = packet.down { cursorUsed = true }
                 adapters.post(packet.down)
@@ -176,6 +193,10 @@ import FamiliarContracts
             return p
         }
         switch name {
+        case "send_message":
+            // This internal action is reachable only with native approval validation above.
+            // Tool input cannot choose a key, modifier, or repetition count for a send.
+            return [Packet(down: .key(36, true, []), release: .key(36, false, []), requiresEditableFocus: true)]
         case "left_click", "right_click", "middle_click", "double_click", "triple_click":
             let p = try point()
             guard (input["text"] as? String ?? "").isEmpty else { throw Invalid("Modified clicks are not supported by a brief input loan yet.") }

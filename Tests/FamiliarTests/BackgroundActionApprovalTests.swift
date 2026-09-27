@@ -5,6 +5,79 @@ import Testing
 
 @Suite @MainActor
 struct BackgroundActionApprovalTests {
+    @Test func messageApprovalShowsTheWholeDraftAndClearsItAfterApproval() async {
+        let approval = BackgroundActionApproval()
+        let feed = PeekFeed()
+        let message = String(repeating: "A long draft with an emoji 👋\n", count: 40)
+        let context = "Discord · Aiiiiiii · Message @Aiiiiiii"
+        let result = Task {
+            await approval.request(label: "Send message to Aiiiiiii", on: feed, message: message, context: context)
+        }
+        await waitForPrompt(feed)
+        #expect(feed.approvalMessage == message)
+        #expect(feed.approvalContext == context)
+        #expect(feed.phase == .confirming("Send message to Aiiiiiii"))
+        feed.onGoAhead?()
+        #expect(await result.value == .approved)
+        #expect(feed.approvalMessage == nil && feed.approvalContext == nil)
+    }
+
+    @Test func declinedMessageCannotLeakIntoTheNextControlApproval() async {
+        let approval = BackgroundActionApproval()
+        let feed = PeekFeed()
+        let first = Task {
+            await approval.request(label: "Send message to Alice", on: feed, message: "Private draft", context: "Chat · Alice")
+        }
+        await waitForPrompt(feed)
+        let staleYes = feed.onGoAhead
+        feed.onNotNow?()
+        #expect(await first.value == .denied)
+        #expect(feed.approvalMessage == nil && feed.approvalContext == nil)
+
+        let next = Task { await approval.request(label: "Submit", on: feed) }
+        await waitForPrompt(feed)
+        #expect(feed.approvalMessage == nil && feed.approvalContext == nil)
+        staleYes?()
+        #expect(approval.isPending)
+        feed.onNotNow?()
+        #expect(await next.value == .denied)
+    }
+
+    @Test func alteredMessageApprovalCannotAuthorizeTheOriginalDraft() async {
+        let approval = BackgroundActionApproval()
+        let feed = PeekFeed()
+        let result = Task {
+            await approval.request(label: "Send message to Alice", on: feed, message: "Original draft", context: "Chat · Alice")
+        }
+        await waitForPrompt(feed)
+        feed.approvalMessage = "Changed displayed draft"
+        feed.onGoAhead?()
+        #expect(await result.value == .cancelled)
+        #expect(feed.approvalMessage == nil && feed.approvalContext == nil)
+    }
+
+    @Test func timeoutAndResetRemoveMessageApprovalDetails() async {
+        let approval = BackgroundActionApproval()
+        let feed = PeekFeed()
+        let timed = Task {
+            await approval.request(label: "Send message to Alice", on: feed, timeout: 0.01, message: "Draft", context: "Chat · Alice")
+        }
+        await waitForPrompt(feed)
+        #expect(await timed.value == .timedOut)
+        #expect(feed.approvalMessage == nil && feed.approvalContext == nil)
+
+        let reset = Task {
+            await approval.request(label: "Send message to Bob", on: feed, message: "New draft", context: "Chat · Bob")
+        }
+        await waitForPrompt(feed)
+        let staleYes = feed.onGoAhead
+        feed.reset()
+        #expect(feed.approvalMessage == nil && feed.approvalContext == nil)
+        staleYes?()
+        #expect(await reset.value == .cancelled)
+        #expect(feed.phase == .idle)
+    }
+
     @Test func approvalIsPendingOnTheTaskAndConsumedOnce() async {
         let approval = BackgroundActionApproval()
         let feed = PeekFeed()

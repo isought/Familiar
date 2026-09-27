@@ -130,6 +130,68 @@ import Testing
         #expect(!f.events.contains("down"))
         #expect(f.front == 12)
     }
+    @Test func approvedMessageSendDispatchesExactlyOneReturnAndRestoresFocus() async {
+        let f = Fixture()
+        var validations = 0
+        _ = await f.run("send_message", ["text": "cmd+Return", "repeat": 20], approvedSendValidation: {
+            validations += 1
+            #expect(f.front == f.target.pid)
+            return true
+        })
+        #expect(validations == 2)
+        #expect(f.keys.map(\.code) == [36, 36])
+        #expect(f.keys.map(\.down) == [true, false])
+        #expect(f.keys.allSatisfy { $0.flags.isEmpty })
+        #expect(f.front == 12)
+        #expect(f.events.contains("restore:12"))
+    }
+    @Test func sendRequiresNativeApprovalAndRawReturnCannotUseApprovalFlag() async {
+        let f = Fixture()
+        _ = await f.run("send_message", ["approved": true])
+        _ = await f.run("key", ["text": "Return", "approved": true])
+        _ = await f.run("key", ["text": "Return"], approvedSendValidation: { true })
+        #expect(f.events.isEmpty)
+        #expect(f.keys.isEmpty)
+    }
+    @Test func changedDraftAfterActivationPreventsApprovedSend() async {
+        let f = Fixture()
+        var draftMatches = true
+        f.afterActivate = { draftMatches = false }
+        _ = await f.run("send_message", [:], approvedSendValidation: { draftMatches })
+        #expect(f.keys.isEmpty)
+        #expect(f.front == 12)
+        #expect(f.events.contains("activate"))
+        #expect(f.events.contains("restore:12"))
+    }
+    @Test func changedApprovalImmediatelyBeforeDispatchPreventsApprovedSend() async {
+        let f = Fixture()
+        var validations = 0
+        _ = await f.run("send_message", [:], approvedSendValidation: {
+            validations += 1
+            return validations == 1
+        })
+        #expect(validations == 2)
+        #expect(f.keys.isEmpty)
+        #expect(f.front == 12)
+    }
+    @Test func approvedMessageSendStillRequiresEditableFocusAfterActivation() async {
+        let f = Fixture()
+        f.afterActivate = { f.typingAllowed = false }
+        _ = await f.run("send_message", [:], approvedSendValidation: { true })
+        #expect(f.keys.isEmpty)
+        #expect(f.front == 12)
+        #expect(f.events.contains("restore:12"))
+    }
+    @Test func approvedSendReleasesReturnEvenWhenCancelledAfterKeyDown() async {
+        let f = Fixture()
+        f.afterPost = { if case .key(_, true, _) = $0 { f.cancelled = true } }
+        _ = await f.run("send_message", [:], approvedSendValidation: { true })
+        #expect(f.keys.map(\.code) == [36, 36])
+        #expect(f.keys.map(\.down) == [true, false])
+        #expect(f.events.filter { $0 == "key" }.count == 2)
+        #expect(f.front == 12)
+        #expect(f.events.last == "unmonitor")
+    }
     @MainActor private final class Fixture {
         let target: TargetWindow
         var currentFrame: CGRect
@@ -137,6 +199,7 @@ import Testing
         var front: pid_t = 12
         var busy = false, cancelled = false, fullScreen = false, typingAllowed = true, activationWorks = true, monitorAvailable = true
         var events: [String] = [], positions: [CGPoint] = [], typed = ""
+        var keys: [(code: CGKeyCode, down: Bool, flags: CGEventFlags)] = []
         var callback: ((OffscreenInputBorrow.Interruption) -> Void)?
         var afterPost: ((OffscreenInputBorrow.Event) -> Void)?
         var afterActivate: (() -> Void)?
@@ -147,7 +210,8 @@ import Testing
                                   axApp: ax, axWindow: ax, toolkit: .electron, backingScale: 1, scWindow: nil,
                                   frameCG: currentFrame, title: "Fixture")
         }
-        func run(_ name: String, _ input: [String: Any]) async -> FamiliarContracts.ToolResult {
+        func run(_ name: String, _ input: [String: Any],
+                 approvedSendValidation: (() -> Bool)? = nil) async -> FamiliarContracts.ToolResult {
             let a = OffscreenInputBorrow.Adapters(now: { self.time }, pause: { self.time += $0 },
                 displayBounds: { _ in CGRect(x: 1600, y: 0, width: 1600, height: 1000) }, frame: { _ in self.currentFrame },
                 context: { .init(pid: self.front, cursor: CGPoint(x: 100, y: 100), fullScreen: self.fullScreen) },
@@ -165,13 +229,15 @@ import Testing
                     case .move(let p): self.events.append("move"); self.positions.append(p)
                     case .mouse(let type, _, _, _, _): self.events.append(type == .leftMouseDown ? "down" : "up")
                     case .unicode(let text, let down): if down { self.typed += text }
+                    case .key(let code, let down, let flags): self.keys.append((code, down, flags)); self.events.append("key")
                     default: self.events.append("key")
                     }
                     self.afterPost?(event)
                 }, restore: { context in self.events.append("restore:\(context.pid)"); self.front = context.pid; return true },
                 restoreCursor: { _ in self.events.append("cursor") })
             return await OffscreenInputBorrow(adapters: a).perform(name, input, target: target, displayID: 7,
-                space: .window(frameCG: target.frameCG, backingScale: 1, maxLongEdge: 800), cancelled: { self.cancelled })
+                space: .window(frameCG: target.frameCG, backingScale: 1, maxLongEdge: 800), cancelled: { self.cancelled },
+                approvedSendValidation: approvedSendValidation)
         }
     }
 }

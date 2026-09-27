@@ -123,6 +123,43 @@ struct OffscreenGrantTests {
         #expect(!fixture.screens.contains { $0.id == 100 })
     }
 
+    @Test(arguments: [false, true])
+    func sendApprovalUsesOneOffscreenActionAndRequiresInputPermissionAtDispatch(revoke: Bool) async throws {
+        let (fixture, control, ladder) = try await approvedSession()
+        defer { control.end() }
+        let feed = try #require(control.peek)
+        let target = ladder.target
+        let parked = fixture.state.frame
+        control.readMessageDraft = { _ in
+            KeyboardMessageDraft(pid: target.pid, windowID: target.cgWindowID, window: target.axWindow,
+                                 field: target.axWindow, windowTitle: target.title, windowFrame: parked,
+                                 role: "AXTextArea", context: ["Message to Avery"], text: "Hello 👋")
+        }
+        var calls = 0
+        control.offscreenExecutor = { name, _, _, _, space in
+            #expect(name == "send_message")
+            #expect(fixture.state.frame == parked)
+            #expect(space.originCG == parked.origin)
+            #expect(feed.approvalRequestID == nil)
+            calls += 1
+            return .text("Return dispatched once")
+        }
+        let send = Task { await control.sendMessage(["recipient": "Avery", "message": "Hello 👋"]) }
+        for _ in 0..<200 where feed.onGoAhead == nil { await Task.yield() }
+        try #require(feed.onGoAhead != nil)
+        #expect(calls == 0)
+        #expect(!control.isBorrowingOffscreenInput)
+        if revoke {
+            _ = control.giveMouseBack()
+            #expect(feed.onGoAhead == nil)
+            #expect(feed.approvalRequestID == nil)
+        } else { feed.onGoAhead?() }
+        let result = await send.value
+        #expect(calls == (revoke ? 0 : 1))
+        if revoke { #expect((result.content as? String)?.contains("expired") == true) }
+        #expect(fixture.state.frame == parked)
+    }
+
     private func approvedSession() async throws -> (Fixture, ComputerController, ActionLadder) {
         let fixture = Fixture()
         let workspace = VirtualDisplayWorkspace(adapters: fixture.adapters)

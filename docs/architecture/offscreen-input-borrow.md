@@ -47,9 +47,18 @@ task engine or separate demo app.
 This first version supports short clicks, scrolling, single-line draft text
 (up to 256 characters), and a limited set of editing/navigation keys. It
 rejects split mouse-down/up actions, drags, long holds, app-switching shortcuts,
-and Enter-to-send. Input borrowing does not approve a consequential action;
+and raw Enter-to-send. Input borrowing does not approve a consequential action;
 known guarded controls continue through the existing action-approval path.
-The separate action-approval limitation for apps without a Send button remains.
+
+`send_message` now supports Return-based chat composers through one-action
+approval. It shows the recipient, observed window/composer context, and exact
+readable draft, then revalidates window, composer identity, context and text
+before dispatching one Return pair. Separate-display input permission must
+still be active. The native runner rechecks after activation and immediately
+before dispatch. Declined, stale, unreadable or cancelled approvals send no
+input. Delivery must be checked afterward; uncertain sends are never retried
+automatically. Recipient matching uses observed labels, not a service-level
+recipient ID, so the visible context remains part of the user review.
 
 It rejects full-screen user contexts, borrowing while the user is already in
 the target app, changed target geometry, and text entry whose field focus
@@ -75,7 +84,22 @@ On 2026-09-27, the full suite passed: **228 tests in 35 suites**, run with an
 isolated `FAMILIAR_HOME`. `scripts/build.sh` produced the signed release app at
 `build/Familiar.app`; `codesign --verify --deep --strict` passed.
 
-Live verification is pending: the Mac was locked when the computer-use tool
+Initial live verification was pending: the Mac was locked when the computer-use tool
 attempted to begin the local fixture test, including a retry after the release
 build. The running app has not been restarted into this build. No Discord
-messages have been sent as part of this implementation.
+messages were sent as part of that implementation.
+
+### Approved Return sending
+
+The follow-up adds `send_message`, exact-draft/context approval, and one native
+Return pair. The full suite passes **246 tests in 36 suites**, including denied
+and changed approvals, changed focus during native preparation, input permission
+revocation during approval, and cancellation immediately after Return key-down.
+
+The local `Tests/Fixtures/message-send-test.html` has a labelled Avery composer,
+no Send button, and an in-page message counter. It has no network behavior.
+The live task card displayed the exact draft `Hello Avery 👋 — one approved
+Return.` and requested separate input and send approvals. The first dispatch
+attempt refused because Chrome was the active work app; the draft remained
+unchanged and the counter stayed at zero. A successful native dispatch test is
+pending switching the work app away from Chrome. No real messages were sent.

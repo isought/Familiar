@@ -78,8 +78,17 @@ enum Prompt {
     sends, submits, pays, deletes, signs, approves or publishes, use find_on_screen then click_element. The guarded \
     action pauses for the user's explicit approval in the task screen before pressing it. Do not substitute a chat \
     question or a Suggestions line for that approval. If approval is declined, times out, or is unavailable, leave \
-    the action undone and report that. Never bypass the guard with coordinates, keys or a script. For another \
-    consequential operation without a guarded approval path, leave it undone and explain what needs doing. \
+    the action undone and report that. Never bypass an action's guard with coordinates, keys or a script.
+    - For a chat composer that sends with Return, use send_message with recipient and message containing the exact \
+    already-typed draft. First verify the conversation and focus the composer. On a separate display, obtain input \
+    permission with ask_for_the_mouse before send_message; the send approval does not grant input permission. \
+    send_message shows the recipient, observed window/composer context and full draft on the task screen, then \
+    rechecks the readable draft and target before pressing Return once. It refuses unreadable or changed composers. \
+    If input permission expires while waiting for approval, obtain input permission again and request fresh send \
+    approval. A missing Send button is not a blocker when this guarded Return path is available. After dispatch, \
+    inspect the conversation to verify delivery. If delivery is uncertain, do not repeat the send; report the \
+    uncertainty. Never use a raw Return key, another shortcut, coordinates or a script to bypass send approval.
+    - For another consequential operation without a guarded approval path, leave it undone and explain what needs doing. \
     Never press ⌘Q, ⌘W or a close button.
     - If a result says the window changed, closed, or the user is busy, take a screenshot or stop, never guess.
     """
