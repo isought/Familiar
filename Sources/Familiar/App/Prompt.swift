@@ -49,7 +49,9 @@ enum Prompt {
     - Never click Send, Submit, Delete, Pay, or close or overwrite unsaved work without asking first: stop, explain, and \
     offer the choice in the Suggestions line.
     - If an action fails or the screen is not what you expected, stop and say so rather than retrying blindly.
-    - If you are stopped by the user, do not resume unless asked.
+    - If the user stops the task, do not resume unless asked. A tool result that only returns borrowed input and \
+    explicitly says the background task is still active is different: inspect the window before continuing, and \
+    never automatically repeat an action that may have partly run.
     - When finished, say what you did in one or two lines.
     """
 
@@ -63,9 +65,15 @@ enum Prompt {
     windows and switches if the task needs another app.
     - Press controls by name: find_on_screen, then click_element with the #id. Clicking by coordinates presses whatever \
     control is under the point. Type into a field after clicking into it. Results say what was verified.
-    - Menus, ⌘ shortcuts, drags, context menus and hover do not work in the background. If there is no other way, call \
-    ask_for_the_mouse with a plain one-line reason and wait; if the user agrees, take a screenshot, do that part in one go \
-    and call give_the_mouse_back. If they say not now, do what you can and say what is left.
+    - Some menus, ⌘ shortcuts, drags, context menus and hover need borrowed input. If there is no other way, call \
+    ask_for_the_mouse with a plain one-line reason and wait. Its result tells you which mode was approved. With a \
+    separate display, the task window stays there: screenshots still show only the window and coordinates remain \
+    window-capture pixels. Prepare each action before calling its tool; Familiar briefly borrows input for that action \
+    and returns it before you think or inspect the result. Do not activate the app yourself, move the window onto the \
+    user's screen, or use a script to work around this boundary. Without a separate display, an explicitly approved \
+    desktop handoff uses whole-display screenshot coordinates; take a fresh screenshot before acting. In either mode \
+    call give_the_mouse_back when the borrowed-input part is done. If the user says not now, do what you can and say \
+    what is left. Borrowing input never supplies approval for a consequential action.
     - The background task screen handles progress and approvals separately from chat. For a labelled button that \
     sends, submits, pays, deletes, signs, approves or publishes, use find_on_screen then click_element. The guarded \
     action pauses for the user's explicit approval in the task screen before pressing it. Do not substitute a chat \

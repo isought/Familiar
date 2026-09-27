@@ -90,6 +90,19 @@ final class VirtualDisplayWorkspace {
 
     init(adapters: Adapters) { self.adapters = adapters }
 
+    /// Input loans may activate only a window that is still wholly on this workspace.
+    /// Reading through the adapters also keeps permission tests independent of real monitors.
+    func parkedDisplayID(for target: TargetWindow) throws -> CGDirectDisplayID {
+        guard !finished, let display, windows[target.cgWindowID]?.parked == true else {
+            throw Failure.unavailable("The task window is not on its separate display.")
+        }
+        let state = try adapters.readWindow(target)
+        guard !state.isMinimized, !state.isFullScreen, contains(state.frame, in: display.frame) else {
+            throw Failure.unavailable("The task window left its separate display. No input was borrowed.")
+        }
+        return display.handle.id
+    }
+
     /// True when this call moves the target; false when it is already parked in this workspace.
     func park(_ target: TargetWindow) async throws -> Bool {
         let token = generation

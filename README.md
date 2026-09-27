@@ -41,8 +41,10 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    Recent results and their last screenshots are kept for up to 20 tasks until Familiar quits. Ordinary conversational
    answers stay in chat. One desktop task runs at a time; the current request must finish before another is submitted.
    Background `read_screen` and `look_at_screen` read only the selected target window and fail if no target is available.
-   When something needs the real mouse (a drag, a context menu, a ⌘ shortcut) it asks on the task screen first: **Go ahead** lends it your mouse and keyboard with the
-   shimmer border as before. Pause your own input during that step; typing (including ⌘Tab), clicking, scrolling or moving the cursor takes control back.
+   When something needs the real mouse (a drag, a context menu, a ⌘ shortcut) it asks on the task screen first.
+   Without the separate display, this explicitly asks to use your screen, mouse and keyboard, and **Go ahead** begins
+   the desktop handoff with a shimmer border. Pause your own input during that step; typing (including ⌘Tab), clicking,
+   scrolling or moving the cursor takes control back.
    The hand icon on the pad, next to the
    eye, turns background mode off; then it takes the mouse as before (the shimmer border, a caption per step, moving the
    mouse or pressing Esc stops it). Background Send / Submit / Delete / Pay button presses pause for a one-action approval
@@ -52,12 +54,15 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
 
    **Separate display (experimental, off by default):** Settings → "Use a separate display for background tasks"
    lets Familiar move the selected task window onto a temporary virtual monitor when the first action begins.
-   The task card stays on your physical screen. Stop, completion and quitting return borrowed windows; granting
-   the real mouse brings the current window back first. Opening the live preview returns the window and stops
+   The task card stays on your physical screen. If background input needs help, approving the mouse-and-keyboard
+   request keeps the task window on its separate display. Familiar borrows input for each short action and returns
+   it between steps, before the model thinks or inspects another screenshot. Typing or mouse input interrupts a
+   borrowed action. Stop, completion and quitting return borrowed windows. Opening the live preview returns the window and stops
    the background task. Read-only questions never create a display or move a window.
-   This uses private macOS display APIs and is being tested on the `codex/virtual-background-display` branch.
-   It keeps existing app logins, but still uses the native Accessibility/process-event controls: it does not create
-   a separate desktop session or fix every app's background text input. Full-screen windows and mirrored-display
+   This uses private macOS display APIs. The input-borrowing trial is on `codex/offscreen-input-borrow`;
+   see [its scope and verification status](docs/architecture/offscreen-input-borrow.md).
+   It keeps existing app logins and uses native Accessibility/process-event controls, with temporary input borrowing
+   when approved. It does not create a separate desktop session or guarantee every app's text input. Full-screen windows and mirrored-display
    arrangements are not supported by this first version; setup failures stop before task input.
 
 8. **Watch me**: menu bar → **Watch Me** (or the eye on the pad). Do the task the way you normally do, then press ⌃⌥Space or

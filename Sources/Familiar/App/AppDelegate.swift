@@ -371,6 +371,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !panel.isVisible { showBubble() }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard control.isBorrowingOffscreenInput else { return .terminateNow }
+        execution.cancel()
+        Task { @MainActor in
+            await control.endAfterInputReturns()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     /// Quitting mid-recording leaves nothing behind: the unfinished recording and any draft still under review go.
     func applicationWillTerminate(_ notification: Notification) {
         origami.cancel()

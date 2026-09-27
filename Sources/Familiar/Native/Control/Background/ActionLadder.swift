@@ -57,6 +57,36 @@ final class ActionLadder {
         .text("needs_foreground: \(why). This needs the real mouse. Try another way first: a keyboard shortcut without ⌘, find_on_screen and click_element, or typing. If there is no other way, call ask_for_the_mouse with a one-line reason the user will understand; they will answer in the background task screen.")
     }
 
+    /// A loan of physical input does not authorize a protected action. This is
+    /// evaluated before activation; approvals and screenshots never occupy a loan.
+    func borrowedInputRefusal(_ name: String, _ input: [String: Any]) -> ToolResult? {
+        if let gone = refreshTarget() { return gone }
+        if ["left_click", "right_click", "middle_click", "double_click", "triple_click", "scroll"].contains(name) {
+            if let stale = staleViewport() { return stale }
+            guard let point = cgPoint(input["coordinate"]), space.contains(cg: point) else {
+                return .text("No input borrowed: that coordinate is outside the task window. Take a new window screenshot.")
+            }
+            if let element = target.element(atCG: point, pressable: true) {
+                switch IrreversibleGuard.classifyPress(axInfo(element), inSheet: isInSheet(element),
+                                                      declared: declaredIrreversible, warningNoteLabels: warningNoteLabels) {
+                case .safe: break
+                case .confirm(let label):
+                    return .text("No input borrowed: “\(label)” needs its guarded action approval. Use find_on_screen and click_element; permission to borrow input does not approve this action.")
+                case .forbidden(let why): return .text("Not done: \(why).", isError: true)
+                }
+            }
+        }
+        if name == "key", let combo = input["text"] as? String,
+           case .forbidden(let why) = IrreversibleGuard.classifyKey(combo) {
+            return .text("Not done: \(why).", isError: true)
+        }
+        if name == "type", let element = focusedElement(),
+           case .forbidden(let why) = IrreversibleGuard.classifyType(into: axInfo(element)) {
+            return .text("Not done: \(why).", isError: true)
+        }
+        return nil
+    }
+
     // MARK: dispatch
 
     func run(_ name: String, _ input: [String: Any]) async -> ToolResult {
