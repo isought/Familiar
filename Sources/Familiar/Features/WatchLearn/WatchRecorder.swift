@@ -137,7 +137,6 @@ final class WatchRecorder {
     private var captureChain: Task<Void, Never>?
     private var typing: (field: Field, text: String)?
     private var focusedCache: (at: Date, field: Field)?
-    private let hitTester = WandController()   // inert until activate(); only hitTest(at:) is used
 
     private static let stamp: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"; return f }()
     private static let iso = ISO8601DateFormatter()
@@ -219,7 +218,7 @@ final class WatchRecorder {
         let s = session
         let mouse = NSEvent.mouseLocation
         let ctx = watcher.sample() ?? watcher.current
-        let hit = hitTester.hitTest(at: mouse)
+        let hit = ScreenHitTester.hitTest(at: mouse)
         let fakes = [("button", "Synthetic click 1"), ("text field", "Synthetic field"), ("link", "Synthetic link")]
         for i in 0..<3 {
             noteScene(ctx)
@@ -394,7 +393,7 @@ final class WatchRecorder {
         focusedCache = nil          // focus moves with a click: the next keystroke re-samples the field
         flushTyping()
         guard events.count < Self.maxEvents else { return }
-        let target = hitTester.hitTest(at: p)
+        let target = ScreenHitTester.hitTest(at: p)
         let ctx = currentContext()
         var e = WatchEvent(index: 0, t: elapsed, kind: "click",
                            app: target.windowOwner ?? ctx?.appName, title: target.windowTitle ?? ctx?.windowTitle, url: ctx?.url)

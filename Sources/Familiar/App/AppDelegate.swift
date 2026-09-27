@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import Combine
+import FamiliarRuntime
 import SwiftUI
 
 @MainActor
@@ -13,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var runner: ScriptRunner!
     private var registry: ToolRegistry!
     private var assistant: Assistant!
+    private let shell = ShellState()
     private let wand = WandController()
     private let hideHint = HideHint()
     private let origami = OrigamiFlightController()
@@ -20,6 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var savedBubbleFrame: NSRect?
     private var dragOffset: NSPoint?     // cursor position relative to the panel origin while dragging
     private let control = ComputerController()
+    private let activities = NativeActivityGate()
+    private lazy var desktop = DesktopExecutionService(control: control, activities: activities)
+    private let execution = ExecutionCoordinator()
+    private lazy var recorder = WatchRecorder(config: config, watcher: watcher)
+    private lazy var learning = WatchLearnComposition.make(recorder: recorder, registry: registry, activities: activities, config: { [weak self] in self?.config ?? Config() })
     private var bubbleWasVisibleBeforeControl = false
     private var cancellables = Set<AnyCancellable>()
 
@@ -40,11 +47,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Log.info("signing: \(Signing.description); secrets: \(Secrets.store.rawValue)")
         runner = ScriptRunner(config: config)
         registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
-        assistant = Assistant(config: config, watcher: watcher, registry: registry)
+        assistant = Assistant(config: config, watcher: watcher, registry: registry, shell: shell, learning: learning, execution: execution, desktop: desktop)
         assistant.onStartWand = { [weak self] in self?.startWand() }
         assistant.onCancelWand = { [weak self] in if self?.wand.isActive == true { self?.wand.cancel() } }
-        assistant.onHideBubble = { [weak self] in self?.hideBubbleWithHint() }
-        assistant.onDragBubble = { [weak self] phase in
+        shell.onHideBubble = { [weak self] in self?.hideBubbleWithHint() }
+        shell.onDragBubble = { [weak self] phase in
             guard let self else { return }
             let mouse = NSEvent.mouseLocation
             switch phase {
@@ -61,23 +68,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.config.save()
             }
         }
-        assistant.onOpenSettings = { [weak self] in self?.openSettings() }
+        shell.onOpenSettings = { [weak self] in self?.openSettings() }
         if let w = config.cardWidth, let h = config.cardHeight, w >= 340, h >= 400 {
-            BubblePanel.expandedSize = NSSize(width: w, height: h)
+            shell.cardSize = NSSize(width: w, height: h)
         }
-        assistant.cardSize = BubblePanel.expandedSize
-        assistant.onResizeCard = { [weak self] size, done in
+        shell.onResizeCard = { [weak self] size, done in
             guard let self else { return }
-            BubblePanel.expandedSize = size
-            self.assistant.cardSize = size
-            if self.assistant.expanded { self.panel.resizeKeepingTopLeft(to: size) }
+            self.shell.cardSize = size
+            if self.shell.expanded { self.panel.resizeKeepingTopLeft(to: size) }
             if done { self.config.cardWidth = size.width; self.config.cardHeight = size.height; self.config.save() }
         }
-        assistant.onToggleLarge = { [weak self] in
+        shell.onToggleLarge = { [weak self] in
             guard let self else { return }
             let large = BubblePanel.largeExpandedSize
-            let target = self.assistant.cardSize.height >= large.height - 1 ? BubblePanel.defaultExpandedSize : large
-            self.assistant.onResizeCard?(target, true)
+            let target = self.shell.cardSize.height >= large.height - 1 ? BubblePanel.defaultExpandedSize : large
+            self.shell.onResizeCard?(target, true)
         }
         assistant.onSetControlLane = { [weak self] allow, background in
             guard let self else { return }
@@ -87,12 +92,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.assistant.reconfigure(self.config)
             Log.info("control lane: allow=\(allow) background=\(background)")
         }
-        assistant.onPoke = { [weak self] in
+        shell.onPoke = { [weak self] in
             guard let self, self.config.pokeHintsShown < 3 else { return }
             self.config.pokeHintsShown += 1
             self.config.save()
             self.hideHint.show(under: self.panel.frame, title: "Double-click to chat", subtitle: "Hold the note to pick up the pen", seconds: 2.5) { [weak self] in
-                self?.assistant.expanded = true
+                self?.shell.expanded = true
             }
         }
         runner.extraEnv = config.env
@@ -115,31 +120,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return
             }
             self.bubbleWasVisibleBeforeControl = self.panel.isVisible
-            self.assistant.expanded = false
+            self.shell.expanded = false
             self.panel.orderOut(nil)          // keep our own windows out of the way of clicks
         }
         control.onEnd = { [weak self] in
             guard let self else { return }
             if self.control.lane == .background {
-                if self.panel.isVisible, !self.assistant.expanded { self.assistant.expandQuietly() }   // the receipt is in view, focus stays with the user
+                if self.panel.isVisible, !self.shell.expanded { self.shell.expandQuietly() }   // the receipt is in view, focus stays with the user
                 self.assistant.contextLine = self.watcher.current?.summaryLine ?? self.assistant.contextLine
                 return
             }
             if self.bubbleWasVisibleBeforeControl { self.panel.orderFrontRegardless() }
-            self.assistant.expanded = true
+            self.shell.expanded = true
         }
         control.onGrant = { [weak self] entering in
             guard let self else { return }
             if entering {
                 self.bubbleWasVisibleBeforeControl = self.panel.isVisible
-                self.assistant.expanded = false
+                self.shell.expanded = false
                 self.panel.orderOut(nil)
             } else {
                 if self.bubbleWasVisibleBeforeControl { self.panel.orderFrontRegardless() }
-                self.assistant.expandQuietly()
+                self.shell.expandQuietly()
             }
         }
-        assistant.control = control
 
         setupEditMenu()
         setupPanel()
@@ -183,7 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupPanel() {
         panel = BubblePanel(hideFromScreenShare: config.hideFromScreenShare)
-        let host = NSHostingView(rootView: BubbleView(state: assistant, onOrigami: { [weak self] in self?.takeOrigamiFlight() }))
+        let host = NSHostingView(rootView: BubbleView(state: assistant, shell: shell, onOrigami: { [weak self] in self?.takeOrigamiFlight() }))
         host.frame = NSRect(origin: .zero, size: BubblePanel.collapsedSize)
         panel.contentView = host
         if let x = config.bubbleX, let y = config.bubbleY,
@@ -194,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         panel.orderFrontRegardless()
 
-        assistant.$expanded
+        shell.$expanded
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] expanded in
@@ -202,17 +206,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if self.origami.isFlying {
                     if expanded { self.origami.cancel() } else { return }
                 }
-                self.panel.resize(to: expanded ? BubblePanel.expandedSize : BubblePanel.collapsedSize, animate: false)
+                self.panel.resize(to: expanded ? self.shell.cardSize : BubblePanel.collapsedSize, animate: false)
                 if expanded {
-                    if self.assistant.consumeQuietExpand() { self.panel.orderFrontRegardless() } else { self.panel.makeKeyAndOrderFront(nil) }
+                    if self.shell.consumeQuietExpand() { self.panel.orderFrontRegardless() } else { self.panel.makeKeyAndOrderFront(nil) }
                 } else { self.panel.orderFrontRegardless(); self.panel.resignKey() }
             }
             .store(in: &cancellables)
 
-        assistant.$busy.combineLatest(assistant.$watching)
+        assistant.$chatBusy.combineLatest(learning.$phase)
             .receive(on: RunLoop.main)
-            .sink { [weak self] busy, watching in
-                if busy || watching { self?.origami.cancel() }
+            .sink { [weak self] chatBusy, phase in
+                if chatBusy || phase == .recording || phase == .stopping || phase == .summarizing || phase == .saving { self?.origami.cancel() }
             }
             .store(in: &cancellables)
     }
@@ -273,12 +277,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The first background jobs with the bubble collapsed get a callout saying where the work is happening.
     private func showBackgroundHintIfNeeded() {
-        guard config.backgroundHintsShown < 2, !assistant.expanded, panel.isVisible else { return }
+        guard config.backgroundHintsShown < 2, !shell.expanded, panel.isVisible else { return }
         config.backgroundHintsShown += 1
         config.save()
         hideHint.show(under: panel.frame, title: "Working in \(assistant.peek.appName) while you carry on",
                       subtitle: "Click me to watch · \(HotKey.display(config.hotkey)) to stop", seconds: 3) { [weak self] in
-            self?.assistant.expandQuietly()
+            self?.shell.expandQuietly()
         }
     }
 
@@ -307,8 +311,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startWand() {
         origami.cancel()
         guard !assistant.watching else { assistant.startWand(); return }   // no-op with a status line
-        guard !assistant.busy else { assistant.expanded = true; return }
-        assistant.expanded = false
+        guard !assistant.busy else { shell.expanded = true; return }
+        shell.expanded = false
         wand.activate()
     }
 
@@ -369,13 +373,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Quitting mid-recording leaves nothing behind: the unfinished recording and any draft still under review go.
     func applicationWillTerminate(_ notification: Notification) {
         origami.cancel()
+        execution.cancel()
         control.end()          // never leave a ghost cursor behind
         assistant.abortWatching()
     }
     @objc private func openChat() {
         origami.cancel()
         if !panel.isVisible { showBubble() }
-        assistant.expanded = true
+        shell.expanded = true
     }
 
     @objc private func menuHideBubble() { if panel.isVisible || origami.isFlying { hideBubbleWithHint() } }
@@ -388,7 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if origami.isFlying { origami.cancel(); return }
         guard canTakeOrigamiFlight else { return }
         hideHint.dismiss(animated: false)
-        assistant.expanded = false
+        shell.expanded = false
         // Collapse synchronously before measuring home. The published resize skips a flight already in progress.
         panel.resize(to: BubblePanel.collapsedSize, animate: false)
         guard let screen = panel.screen ?? NSScreen.main else { return }
@@ -452,7 +457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Fly the bubble into the menu bar icon, pulse the icon, and show a callout saying where it went.
     private func hideBubbleWithHint() {
         origami.cancel()
-        assistant.expanded = false
+        shell.expanded = false
         wand.deactivate()
         guard let target = statusItemRect else { panel.orderOut(nil); return }
         let start = panel.frame

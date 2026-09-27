@@ -1,69 +1,15 @@
 import AppKit
 import SwiftUI
 
-/// Floating, non-activating panel that stays above everything and follows across Spaces.
-final class BubblePanel: NSPanel {
-    static let collapsedSize = NSSize(width: 84, height: 84)
-    static let defaultExpandedSize = NSSize(width: 400, height: 540)
-    static let largeExpandedSize = NSSize(width: 560, height: 760)
-    nonisolated(unsafe) static var expandedSize = NSSize(width: 400, height: 540)   // current card size (remembered)
-
-    init(hideFromScreenShare: Bool) {
-        super.init(contentRect: NSRect(origin: .zero, size: BubblePanel.collapsedSize),
-                   styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
-                   backing: .buffered, defer: false)
-        level = .floating
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        isOpaque = false
-        backgroundColor = .clear
-        hasShadow = false
-        isMovableByWindowBackground = false   // the orb handles its own drag
-        hidesOnDeactivate = false
-        isReleasedWhenClosed = false
-        sharingType = hideFromScreenShare ? .none : .readOnly
-        animationBehavior = .utilityWindow
-    }
-
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-
-    /// Resize keeping the top-left corner where it is (used by the corner grip).
-    func resizeKeepingTopLeft(to size: NSSize) {
-        var f = frame
-        f.origin.y = f.maxY - size.height
-        f.size = size
-        if let vis = (screen ?? NSScreen.main)?.visibleFrame {
-            f.origin.y = max(f.origin.y, vis.minY)
-        }
-        setFrame(f, display: true)
-    }
-
-    func resize(to size: NSSize, animate: Bool) {
-        var f = frame
-        f.origin.x = f.maxX - size.width
-        f.size = size
-        if let vis = (screen ?? NSScreen.main)?.visibleFrame {
-            f.origin.x = min(max(f.origin.x, vis.minX), vis.maxX - size.width)
-            f.origin.y = min(max(f.origin.y, vis.minY), vis.maxY - size.height)
-        }
-        setFrame(f, display: true, animate: animate)
-    }
-
-    func placeAtBottomRight() {
-        guard let vis = NSScreen.main?.visibleFrame else { return }
-        setFrame(NSRect(x: vis.maxX - BubblePanel.collapsedSize.width - 24, y: vis.minY + 24,
-                        width: BubblePanel.collapsedSize.width, height: BubblePanel.collapsedSize.height), display: true)
-    }
-}
-
 struct BubbleView: View {
     @ObservedObject var state: Assistant
+    @ObservedObject var shell: ShellState
     var onOrigami: (() -> Void)? = nil
     @FocusState private var inputFocused: Bool
 
     var body: some View {
-        Group { if state.expanded { card } else { orb } }
-            .animation(.easeOut(duration: 0.15), value: state.expanded)
+        Group { if shell.expanded { card } else { orb } }
+            .animation(.easeOut(duration: 0.15), value: shell.expanded)
             .onAppear {
                 sense.isControlActive = { [weak state] in state?.control?.active ?? false }
                 sense.begin()
@@ -112,25 +58,25 @@ struct BubbleView: View {
                     if pressOrigin == nil { beginPress(at: v.location) }
                     guard !cast, let o = pressOrigin else { return }
                     if !moving, hypot(v.location.x - o.x, v.location.y - o.y) > 10 { moving = true; cancelCharge() }
-                    if moving { state.onDragBubble?(.moved) }
+                    if moving { shell.onDragBubble?(.moved) }
                 }
                 .onEnded { _ in
                     let wasMoving = moving, wasCast = cast
                     endPress()
-                    if wasMoving { state.onDragBubble?(.ended) }
+                    if wasMoving { shell.onDragBubble?(.ended) }
                     else if !wasCast { click() }                       // released before the ring filled: a click
                 }
         )
         .contextMenu {
-            Button("Open chat") { state.expanded = true }
+            Button("Open chat") { shell.expanded = true }
             Button("Point the pen") { state.startWand() }
             Button(state.watching ? "Stop watching" : "Watch me") { state.toggleWatching() }
             Divider()
             Button("Fold into a crane") { onOrigami?() }
                 .disabled(onOrigami == nil || state.busy || state.watching || sense.controlActive)
             Divider()
-            Button("Settings…") { state.onOpenSettings?() }
-            Button("Hide bubble") { state.onHideBubble?() }
+            Button("Settings…") { shell.onOpenSettings?() }
+            Button("Hide bubble") { shell.onHideBubble?() }
             Button("Quit Familiar") { NSApp.terminate(nil) }
         }
         .help("Double-click: chat  ·  Hold: pick up the pen  ·  ⌃⌥Space: pen")
@@ -141,17 +87,17 @@ struct BubbleView: View {
     /// Single click = a poke (the note reacts, nothing opens). Double click = chat. While a background job runs, a
     /// click opens the pad without taking focus from the app the user is in, so they can watch.
     private func click() {
-        if sense.controlActive, state.peek.isWorking { lastClick = nil; state.expandQuietly(); return }
+        if sense.controlActive, state.peek.isWorking { lastClick = nil; shell.expandQuietly(); return }
         let now = Date()
         if let last = lastClick, now.timeIntervalSince(last) < NSEvent.doubleClickInterval {
             lastClick = nil
             reaction = nil
-            state.expanded = true
+            shell.expanded = true
             return
         }
         lastClick = now
         react(.happy, for: 0.9)
-        state.onPoke?()
+        shell.onPoke?()
     }
 
     private func beginPress(at p: CGPoint) {
@@ -169,7 +115,7 @@ struct BubbleView: View {
             charging = false
             withAnimation(.easeOut(duration: 0.2)) { charge = 0 }
             MainActor.assumeIsolated {   // the pad says why the pen is off while busy or watching
-                if state.busy || state.watching { state.expanded = true } else { state.startWand() }
+                if state.busy || state.watching { shell.expanded = true } else { state.startWand() }
             }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -227,7 +173,7 @@ struct BubbleView: View {
             inputRow
             footer
         }
-        .frame(width: state.cardSize.width - 16, height: state.cardSize.height - 16)
+        .frame(width: shell.cardSize.width - 16, height: shell.cardSize.height - 16)
         .background {
             RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Pad.desk(dark))
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -266,15 +212,15 @@ struct BubbleView: View {
                 .buttonStyle(.borderless).help(state.watching ? "Stop watching" : "Watch me do something, then write it up as a tool pack").disabled(state.busy)
             Button { state.clearConversation() } label: { Image(systemName: "trash") }
                 .buttonStyle(.borderless).help("Clear the pad").disabled(state.transcript.isEmpty)
-            Button { state.onToggleLarge?() } label: { Image(systemName: state.cardSize.height >= BubblePanel.largeExpandedSize.height - 1 ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
+            Button { shell.onToggleLarge?() } label: { Image(systemName: shell.cardSize.height >= BubblePanel.largeExpandedSize.height - 1 ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
                 .buttonStyle(.borderless).help("Large / normal size")
-            Button { state.expanded = false } label: { Image(systemName: "chevron.down") }
+            Button { shell.expanded = false } label: { Image(systemName: "chevron.down") }
                 .buttonStyle(.borderless).help("Collapse")
             Menu {
                 Button("Fold into a crane") { onOrigami?() }
                     .disabled(onOrigami == nil || state.busy || state.watching || sense.controlActive)
-                Button("Settings…") { state.onOpenSettings?() }
-                Button("Hide bubble") { state.onHideBubble?() }
+                Button("Settings…") { shell.onOpenSettings?() }
+                Button("Hide bubble") { shell.onHideBubble?() }
                 Button("Quit Familiar") { NSApp.terminate(nil) }
             } label: { Image(systemName: "ellipsis.circle") }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("More")
@@ -291,8 +237,8 @@ struct BubbleView: View {
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 4, coordinateSpace: .global)
-                .onChanged { _ in state.onDragBubble?(.moved) }
-                .onEnded { _ in state.onDragBubble?(.ended) }
+                .onChanged { _ in shell.onDragBubble?(.moved) }
+                .onEnded { _ in shell.onDragBubble?(.ended) }
         )
     }
 
@@ -413,12 +359,12 @@ struct BubbleView: View {
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { v in
-                        if gripStart == nil { gripStart = CGSize(width: state.cardSize.width, height: state.cardSize.height) }
+                        if gripStart == nil { gripStart = CGSize(width: shell.cardSize.width, height: shell.cardSize.height) }
                         let w = max(340, min(1400, gripStart!.width + v.translation.width))
                         let h = max(400, min(1400, gripStart!.height + v.translation.height))
-                        state.onResizeCard?(NSSize(width: w, height: h), false)
+                        shell.onResizeCard?(NSSize(width: w, height: h), false)
                     }
-                    .onEnded { _ in gripStart = nil; state.onResizeCard?(state.cardSize, true) }
+                    .onEnded { _ in gripStart = nil; shell.onResizeCard?(shell.cardSize, true) }
             )
             .help("Drag to resize")
     }
@@ -426,7 +372,7 @@ struct BubbleView: View {
     private var footer: some View {
         HStack {
             if !state.hasConnection {
-                Button { state.onOpenSettings?() } label: { Label("Connect to Claude — open Settings", systemImage: "key") }
+                Button { shell.onOpenSettings?() } label: { Label("Connect to Claude — open Settings", systemImage: "key") }
                     .buttonStyle(.plain).foregroundStyle(.orange)
             } else if !state.busy, !state.status.isEmpty {
                 Text(state.status)
@@ -437,49 +383,5 @@ struct BubbleView: View {
         }
         .font(.caption2).foregroundStyle(Pad.deskInkSoft(dark))
         .padding(.leading, 14).padding(.trailing, 6).padding(.bottom, 6)
-    }
-}
-
-/// What the collapsed bubble senses about the world, polled at 30 Hz: where the pointer is relative to the panel
-/// (so the eyes can follow it), whether it is hovering close, and whether the computer controller is driving the mouse.
-/// While the panel is ordered out (hidden, or during control) it only tracks visibility, so the mascot can pause its clock.
-@MainActor
-final class BubbleSense: ObservableObject {
-    @Published var visible = true
-    @Published var gaze: CGPoint? = nil
-    @Published var pointerNear = false
-    @Published var proximity: CGFloat = 0      // 0 far away … 1 at the note; drives a gentle brow lift
-    @Published var controlActive = false
-    var isControlActive: () -> Bool = { false }
-    private var timer: Timer?
-
-    func begin() {
-        guard timer == nil else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.sample() }
-        }
-        RunLoop.main.add(timer!, forMode: .common)
-    }
-
-    func end() { timer?.invalidate(); timer = nil }
-
-    private func sample() {
-        guard let panel = NSApp.windows.first(where: { $0 is BubblePanel }) else { return }
-        let active = isControlActive()
-        if active != controlActive { controlActive = active }
-        if panel.isVisible != visible { visible = panel.isVisible }
-        guard visible else { return }
-        let c = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
-        let m = NSEvent.mouseLocation
-        let dx = m.x - c.x, dy = c.y - m.y            // screen y is up; the mascot's y is down
-        let dist = hypot(dx, dy)
-        // full deflection from ~180pt away, eased in so nearby motion is gentle
-        let k = min(1, dist / 180)
-        let g = dist < 1 ? CGPoint.zero : CGPoint(x: dx / dist * k, y: dy / dist * k)
-        if let old = gaze, abs(old.x - g.x) < 0.02, abs(old.y - g.y) < 0.02 {} else { gaze = g }
-        let near = dist < 30            // curious only when the pointer is actually over the note; nearby motion just gets the eyes
-        if near != pointerNear { pointerNear = near }
-        let prox = max(0, 1 - dist / 240)
-        if abs(prox - proximity) > 0.02 { proximity = prox }
     }
 }

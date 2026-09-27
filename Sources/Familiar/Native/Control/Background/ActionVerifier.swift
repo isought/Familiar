@@ -243,7 +243,7 @@ enum ActionVerifier {
         let role = AX.string(el, kAXRoleAttribute) ?? "?"
         let label = AX.string(el, kAXTitleAttribute) ?? AX.string(el, kAXDescriptionAttribute) ?? ""
         let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
-        let frame = WandController.axFrame(of: el, primaryMaxY: primaryMaxY).map {
+        let frame = ScreenHitTester.axFrame(of: el, primaryMaxY: primaryMaxY).map {
             "@\(Int($0.minX.rounded())),\(Int($0.minY.rounded())) \(Int($0.width.rounded()))x\(Int($0.height.rounded()))"
         } ?? ""
         return label.isEmpty ? "\(role) \(frame)" : "\(role) “\(clip(label, 40))” \(frame)"

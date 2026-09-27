@@ -216,13 +216,13 @@ enum AXScan {
         AXUIElementSetMessagingTimeout(axApp, 1)
         guard let win = AX.element(axApp, kAXFocusedWindowAttribute) ?? AX.element(axApp, kAXMainWindowAttribute) else { return out }
         let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
-        out.windowFrame = WandController.axFrame(of: win, primaryMaxY: primaryMaxY)
+        out.windowFrame = ScreenHitTester.axFrame(of: win, primaryMaxY: primaryMaxY)
         var stack: [AXUIElement] = [win]
         var visited = 0
         while let el = stack.popLast(), visited < maxNodes {
             visited += 1
             let role = AX.string(el, kAXRoleAttribute) ?? "AXUnknown"
-            if !structural.contains(role), let frame = WandController.axFrame(of: el, primaryMaxY: primaryMaxY), frame.width > 0, frame.height > 0 {
+            if !structural.contains(role), let frame = ScreenHitTester.axFrame(of: el, primaryMaxY: primaryMaxY), frame.width > 0, frame.height > 0 {
                 let label = [AX.string(el, kAXTitleAttribute), AX.string(el, kAXDescriptionAttribute), AX.string(el, kAXPlaceholderValueAttribute)]
                     .compactMap { $0 }.first { !$0.isEmpty }
                 out.items.append(Item(role: role, label: label, frame: frame))
