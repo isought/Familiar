@@ -80,7 +80,7 @@ import SwiftUI
             return
         }
         let size = expanded ? NSSize(width: 360, height: 400) : NSSize(width: 320, height: 84)
-        let visible = (panel.screen ?? NSScreen.main)?.visibleFrame
+        let visible = presentationScreen?.visibleFrame
         var frame = panel.frame
         if !positioned, let visible {
             frame = NSRect(x: visible.maxX - size.width - 20, y: visible.maxY - size.height - 20,
@@ -97,7 +97,7 @@ import SwiftUI
     }
 
     private func keepOnScreen() {
-        let frame = clamped(panel.frame, to: (panel.screen ?? NSScreen.main)?.visibleFrame)
+        let frame = clamped(panel.frame, to: presentationScreen?.visibleFrame)
         guard frame != panel.frame else { return }
         adjustingFrame = true
         panel.setFrame(frame, display: true)
@@ -112,6 +112,15 @@ import SwiftUI
         result.origin.x = min(max(result.minX, visible.minX), visible.maxX - result.width)
         result.origin.y = min(max(result.minY, visible.minY), visible.maxY - result.height)
         return result
+    }
+
+    /// The preview belongs on a user's display even when the target's key window
+    /// makes AppKit's `main` screen point at Familiar's virtual workspace.
+    private var presentationScreen: NSScreen? {
+        let screens = NSScreen.screens.filter {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value != VirtualDisplayWorkspace.activeDisplayID
+        }
+        return screens.first { $0 === panel.screen } ?? screens.first { $0 === NSScreen.main } ?? screens.first
     }
 }
 

@@ -41,6 +41,7 @@ final class ComputerController {
     var ghostEnabled = true                  // the purple cursor overlay in the background lane (off headless)
     var hideFromScreenShare = false
     var preciseClicks = false                // Config.backgroundPreciseClicks; the SkyLight rung still needs its self-test
+    var virtualDisplayEnabled = false       // Opt-in placement; input still uses the existing background ladder.
     var onCaption: ((String) -> Void)?
     var onBegin: (() -> Void)?
     /// Presentation adopts the request only when it attempts work, independently of native resource setup.
@@ -77,12 +78,13 @@ final class ComputerController {
     private var ghost: GhostCursorPanel?
     private var conflict: ConflictMonitor?
     private var watch: TargetWatch?
-    private var warmUp: TargetWindow.AXWarmUp?
+    private var warmUp: (target: TargetWindow, state: TargetWindow.AXWarmUp)?
     private var userApp: NSRunningApplication?         // the app the human was in when the job started
     private var expectingActivation = false             // we are raising the target on purpose (peek click)
     private var actionRunning = false
     private var peekTimer: Task<Void, Never>?
     private var taskActivation = BackgroundTaskActivation()
+    private var virtualWorkspace: VirtualDisplayWorkspace?
     private let actionApproval = BackgroundActionApproval()
     private var pendingNotice: String?                  // told to the model on its next action
     private var handoff: CheckedContinuation<Bool, Never>?
@@ -98,7 +100,10 @@ final class ComputerController {
 
     // MARK: session
 
-    func reset() { stopped = false; stopReason = ""; taskActivation.reset() }
+    func reset() {
+        virtualWorkspace?.finish(); virtualWorkspace = nil
+        stopped = false; stopReason = ""; taskActivation.reset()
+    }
 
     func begin() {
         guard !active else { return }
@@ -162,18 +167,24 @@ final class ComputerController {
             startPeekTimer()
         }
         if target.toolkit == .chromium || target.toolkit == .electron {
-            Task { [weak self] in
-                guard let self, var t = self.ladder?.target else { return }
+            Task { [weak self, weak l] in
+                guard let self, let l, self.ladder === l else { return }
+                var t = l.target
                 let w = await t.warmUpAccessibility()
-                self.warmUp = w
-                self.ladder?.target = t
+                guard self.active, !self.stopped, self.ladder === l, l.target.cgWindowID == t.cgWindowID else {
+                    t.restoreAccessibility(w)
+                    return
+                }
+                self.warmUp = (t, w)
+                l.target.axDegraded = t.axDegraded
                 if t.axDegraded { Log.info("control: \(t.appName) exposes no web accessibility tree; coordinates only") }
             }
         }
         if preciseClicks {
-            Task { [weak self] in
+            Task { [weak self, weak l] in
                 let ready = await SkyLightClick.shared.prepare(flagOn: true)
-                self?.ladder?.preciseClicks = ready
+                guard let self, let l, self.active, !self.stopped, self.ladder === l else { return }
+                l.preciseClicks = ready
             }
         }
         onBegin?()
@@ -234,6 +245,9 @@ final class ComputerController {
 
     private func raiseTarget() {
         guard let t = ladder?.target else { return }
+        // Opening the real window is an explicit hand-back. Do not activate an app
+        // whose window is still out of reach on the task display.
+        if virtualWorkspace != nil { stop(reason: "you opened the task window") }
         expectingActivation = true
         NSRunningApplication(processIdentifier: t.pid)?.activate()
         AXUIElementPerformAction(t.axWindow, kAXRaiseAction as CFString)
@@ -256,8 +270,11 @@ final class ComputerController {
 
     func end() {
         actionApproval.cancel()
-        guard active else { return }
+        let wasActive = active
         active = false
+        if let t = ladder?.target, SkyLightClick.shared.recordOutstanding { SkyLightClick.shared.abortRecord(target: t) }
+        virtualWorkspace?.finish(); virtualWorkspace = nil
+        guard wasActive else { return }
         if grantActive { leaveGrant(reason: "done") }
         for m in monitors { NSEvent.removeMonitor(m) }
         monitors.removeAll()
@@ -270,9 +287,8 @@ final class ComputerController {
         conflict?.remove(); conflict = nil
         watch?.stop(); watch = nil
         ghost?.hide(); ghost = nil
-        if let w = warmUp, let t = ladder?.target { t.restoreAccessibility(w) }
+        if let w = warmUp { w.target.restoreAccessibility(w.state) }
         warmUp = nil
-        if let t = ladder?.target, SkyLightClick.shared.recordOutstanding { SkyLightClick.shared.abortRecord(target: t) }
         if let peek, lane == .background, ladder != nil { peek.phase = stopped ? .stopped : .done }
         ladder = nil
         pendingNotice = nil
@@ -285,6 +301,8 @@ final class ComputerController {
         guard active, !stopped else { return }
         stopped = true
         stopReason = reason
+        if let t = ladder?.target, SkyLightClick.shared.recordOutstanding { SkyLightClick.shared.abortRecord(target: t) }
+        virtualWorkspace?.finish(); virtualWorkspace = nil
         caption("Stopped (\(reason))")
         ghost?.hide()
         resolveHandoff(false)
@@ -356,7 +374,11 @@ final class ComputerController {
             caption("Carrying on without the mouse")
             return .text("The user said not now. Do what you can in the background, or stop and say what is left to do by hand.", isError: true)
         }
-        enterGrant()
+        do { try enterGrant() }
+        catch {
+            stop(reason: "the task window could not be returned")
+            return .text("I couldn't return the task window to your screen: \(error.localizedDescription). No foreground input was sent.", isError: true)
+        }
         return .text("The user handed you the mouse. Take a screenshot first: coordinates are now pixels of the whole display. Do the foreground part in one go, then call give_the_mouse_back.")
     }
 
@@ -375,13 +397,26 @@ final class ComputerController {
         c.resume(returning: allowed)
     }
 
-    private func enterGrant() {
+    private func enterGrant() throws {
+        let returningFromVirtualDisplay = virtualWorkspace != nil
+        if let target = ladder?.target {
+            try virtualWorkspace?.restore(windowID: target.cgWindowID, forInteraction: true)
+            ladder?.windowPlacementChanged()
+        }
         grantActive = true
         grantRevoked = false
         peek?.phase = .foreground
         conflict?.remove()
         ghost?.setVisible(false)
         screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
+        if returningFromVirtualDisplay, let target = ladder?.target {
+            // The user explicitly lent foreground control; show the returned
+            // target, and capture its physical display rather than an unrelated one.
+            NSRunningApplication(processIdentifier: target.pid)?.activate()
+            AXUIElementPerformAction(target.axWindow, kAXRaiseAction as CFString)
+            let center = CGPoint(x: target.frameCG.midX, y: target.frameCG.midY)
+            screen = NSScreen.screens.first { CaptureSpace.cg($0.frame).contains(center) } ?? screen
+        }
         space = .display(screen, maxLongEdge: maxLongEdge)
         expectedCursor = nil
         beganAt = Date()
@@ -443,6 +478,40 @@ final class ComputerController {
         onBackgroundTaskBegin?()
     }
 
+    nonisolated static var virtualDisplayRelocationNotice: ToolResult {
+        // This is a recoverable precondition, like needs_foreground. A hard error
+        // makes the CLI adapter stop all further computer actions for the request.
+        .text("Action not performed: the task window was moved to Familiar's separate display first. Take a fresh screenshot, find the intended control again, then REPEAT the action you just requested. A requested click did NOT focus its field, so do not type until you repeat that click and confirm focus. Coordinates and element IDs from before the move are invalid. Background input and approval rules still apply.")
+    }
+
+    /// Move only once work begins, never for a read-only question. A move can change
+    /// rendering scale or layout, so the model must observe again before sending input.
+    private func prepareBackgroundWorkspace() async -> ToolResult? {
+        guard virtualDisplayEnabled, taskActivation.hasStarted, active, !stopped,
+              let currentLadder = ladder else { return nil }
+        let workspace = virtualWorkspace ?? VirtualDisplayWorkspace()
+        virtualWorkspace = workspace
+        let windowID = currentLadder.target.cgWindowID
+        do {
+            let moved = try await workspace.park(currentLadder.target)
+            guard active, !stopped, !Task.isCancelled, ladder === currentLadder,
+                  currentLadder.target.cgWindowID == windowID else {
+                workspace.finish()
+                return .text("Stopped before sending input.", isError: true)
+            }
+            guard moved else { return nil }
+            currentLadder.windowPlacementChanged()
+            target = currentLadder.target
+            space = currentLadder.space
+            caption("Working on a separate display")
+            return Self.virtualDisplayRelocationNotice
+        } catch {
+            guard active, !stopped, ladder === currentLadder else { return .text("Stopped.", isError: true) }
+            stop(reason: "the separate display was unavailable")
+            return .text("The separate task display couldn't be used: \(error.localizedDescription). The task stopped before sending input.", isError: true)
+        }
+    }
+
     /// Background built-ins observe the current task target, including a target_window switch.
     /// Reading alone must not install input monitors, show a cursor, or borrow the mouse.
     func readTargetScreen() -> ToolResult {
@@ -478,6 +547,7 @@ final class ComputerController {
         if lane == .background, !grantActive {
             guard let ladder else { return .text("No target window. Call target_window to list the windows and pick one.", isError: true) }
             beginBackgroundTaskIfNeeded(for: name)
+            if let relocation = await prepareBackgroundWorkspace() { return relocation }
             actionRunning = true
             defer { actionRunning = false }
             let r = await ladder.run(name, input)
@@ -585,12 +655,17 @@ final class ComputerController {
     /// Background lane: list the candidate windows, or switch the job to another one.
     func targetWindow(_ input: [String: Any]) async -> ToolResult {
         if let sel = (input["select"] as? NSNumber)?.intValue {
+            guard !grantActive else {
+                return .text("Give the mouse back before switching task windows. The current foreground grant is for the window already returned to your screen.", isError: true)
+            }
             switch await TargetWindow.resolve(windowID: CGWindowID(max(0, sel))) {
             case .failure(let e): return .text(e.localizedDescription, isError: true)
             case .success(var t):
                 t.sharedWithHuman = Self.humanInAnotherWindow(of: t)
                 if active, lane == .background, let ladder {
+                    if let w = warmUp { w.target.restoreAccessibility(w.state); warmUp = nil }
                     ladder.target = t
+                    ladder.windowPlacementChanged()
                     ghost?.attach(targetFrameCG: t.frameCG)
                     bindTarget(t)
                     peek?.appName = t.appName
@@ -618,6 +693,7 @@ final class ComputerController {
         guard let ladder else { return .text("No target window.", isError: true) }
         guard let id = (input["id"] as? NSNumber)?.intValue else { return .text("Missing id.", isError: true) }
         beginBackgroundTaskIfNeeded(for: "click_element")
+        if let relocation = await prepareBackgroundWorkspace() { return relocation }
         actionRunning = true
         defer { actionRunning = false }
         let r = await ladder.clickElement(id: id)

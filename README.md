@@ -49,9 +49,15 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    controls to confirm under `irreversible:` in its SKILL.md. `find_on_screen` gives it labelled controls via Accessibility;
    in the background it presses them by id with `click_element`.
 
-   The task screen separates monitoring from chat; native execution still uses the existing app/window. It does not
-   create a virtual desktop or independent browser session. Minimized-window input and simultaneous use of the same app
-   retain the native controller's current limitations.
+   **Separate display (experimental, off by default):** Settings → "Use a separate display for background tasks"
+   lets Familiar move the selected task window onto a temporary virtual monitor when the first action begins.
+   The task card stays on your physical screen. Stop, completion and quitting return borrowed windows; granting
+   the real mouse brings the current window back first. Opening the live preview returns the window and stops
+   the background task. Read-only questions never create a display or move a window.
+   This uses private macOS display APIs and is being tested on the `codex/virtual-background-display` branch.
+   It keeps existing app logins, but still uses the native Accessibility/process-event controls: it does not create
+   a separate desktop session or fix every app's background text input. Full-screen windows and mirrored-display
+   arrangements are not supported by this first version; setup failures stop before task input.
 
 8. **Watch me**: menu bar → **Watch Me** (or the eye on the pad). Do the task the way you normally do, then press ⌃⌥Space or
    **Stop Watching**. Familiar records clicks (with the real labels of what you clicked, via Accessibility), a crop around each
@@ -191,6 +197,7 @@ The docs were generated from the app's repo and use its real button labels.
 | allowControl | false | let Familiar move the mouse and type when asked |
 | controlInBackground | true | do things in the window you asked from, keeping your mouse and keyboard (the hand icon on the pad) |
 | backgroundPreciseClicks | false | experimental: click exact spots in a background window through a private macOS path (self-tested at first use) |
+| backgroundVirtualDisplay | false | experimental: move task windows onto a temporary virtual monitor; return them on stop/completion |
 | env | {} | non-secret variables handed to every script |
 | bubbleX / bubbleY | | remembered bubble position |
 | watcherEnabled / watcherIntervalSeconds | true / 2 | context polling |

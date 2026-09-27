@@ -25,11 +25,26 @@ final class ActionLadder {
     var viewportDirty = false                    // the human scrolled or resized since the model last looked
     private(set) var lastRaw: RawCapture?
     private var shotFrameSize: CGSize?
+    private var captureGeneration: UInt64 = 0
     private(set) var step = 0
     private var hits: [Int: AXUIElement] = [:]
     private(set) var ghostCG: CGPoint
 
     static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXSecureTextField"]
+
+    struct TypingFocus {
+        let element: AXUIElement
+        let info: IrreversibleGuard.ElementInfo
+        let belongsToTarget: Bool
+    }
+    // Keep the text-entry boundary testable without posting input to a real application.
+    var readTypingFocus: (() -> TypingFocus?)?
+    var makeMainForTyping: (TargetWindow) -> Bool = PidEvents.ensureMain
+    var postTypedText: (pid_t, String, () -> Bool) async -> Void = { pid, text, stopped in
+        await PidEvents.type(pid: pid, text: text, cancelled: stopped)
+    }
+    var captureTypingState: ((AXUIElement?) async -> AXSnapshot)?
+    var refreshWindow: (inout TargetWindow) -> Bool = { $0.refresh() }
 
     init(target: TargetWindow, maxLongEdge: Int) {
         self.target = target
@@ -93,11 +108,29 @@ final class ActionLadder {
 
     // MARK: looking
 
+    /// Window relocation and target switches invalidate both coordinates and AX IDs.
+    /// The next screenshot establishes a fresh capture space before coordinate input.
+    func windowPlacementChanged() {
+        captureGeneration &+= 1
+        hits.removeAll()
+        lastRaw = nil
+        shotFrameSize = nil
+        _ = refreshTarget()
+        viewportDirty = true
+        ghostCG = CGPoint(x: target.frameCG.midX, y: target.frameCG.midY)
+        peek?.frame = nil
+    }
+
     func screenshot() async -> ToolResult {
-        target.setSCWindow(await target.fetchSCWindow())
-        guard let w = target.scWindow else { return .text("The target window is gone.", isError: true) }
+        let generation = captureGeneration
+        let capturedTarget = target
+        let window = await capturedTarget.fetchSCWindow()
+        guard generation == captureGeneration, !isStopped(), !Task.isCancelled else { return staleCapture }
+        target.setSCWindow(window)
+        guard let w = window else { return .text("The target window is gone.", isError: true) }
         do {
-            let raw = try await ScreenCapture.captureWindow(w, backingScale: target.backingScale)
+            let raw = try await ScreenCapture.captureWindow(w, backingScale: capturedTarget.backingScale)
+            guard generation == captureGeneration, !isStopped(), !Task.isCancelled else { return staleCapture }
             lastRaw = raw
             shotFrameSize = target.frameCG.size
             viewportDirty = false
@@ -127,9 +160,15 @@ final class ActionLadder {
     /// A small live frame for the peek note (not sent to the model).
     func peekCapture() async {
         guard let peek, let w = target.scWindow else { return }
+        let generation = captureGeneration
         if let raw = try? await ScreenCapture.captureWindow(w, backingScale: target.backingScale) {
+            guard generation == captureGeneration, !isStopped(), !Task.isCancelled else { return }
             peek.frame = ScreenCapture.downscale(raw.image, maxLongEdge: 640)
         }
+    }
+
+    private var staleCapture: ToolResult {
+        .text("The task stopped or its window moved while capturing. Take a new screenshot if the task is still active.", isError: true)
     }
 
     // MARK: find / click by element
@@ -278,18 +317,24 @@ final class ActionLadder {
 
     private func type(_ text: String) async -> ToolResult {
         caption("Typing “\(text.prefix(40))\(text.count > 40 ? "…" : "")”")
-        let field = focusedElement()
-        let info = field.map(axInfo)
-        if let info, case .forbidden(let why) = IrreversibleGuard.classifyType(into: info) { return .text("Not done: \(why). Familiar never types there.", isError: true) }
-        if let field { ghost?.underline(rectCG: axFrame(field)) }
-        let expecting: ActionVerifier.Expectation = field == nil ? .anyChange : .valueContains(String(text.prefix(24)))
+        guard let focus = typingFocus(), focus.belongsToTarget,
+              let role = focus.info.role, Self.textRoles.contains(role) else { return typingNeedsFocus }
+        let field = focus.element
+        let info = focus.info
+        if case .forbidden(let why) = IrreversibleGuard.classifyType(into: info) { return .text("Not done: \(why). Familiar never types there.", isError: true) }
+        ghost?.underline(rectCG: axFrame(field))
+        let expecting = ActionVerifier.Expectation.valueContains(String(text.prefix(24)))
+        var inputWasPosted = false
         // Rung B first: real keystrokes land at the caret. Not when the human shares the app (keys go to the app's main
         // window, which may be theirs) or the window is minimized (keys are dropped).
-        if !target.sharedWithHuman, !target.isMinimized, PidEvents.ensureMain(target) {
+        if !target.sharedWithHuman, !target.isMinimized, makeMainForTyping(target) {
             guard await clear() else { return busyResult }
-            if target.toolkit == .chromium || target.toolkit == .electron, let field { axSet(field, kAXFocusedAttribute, kCFBooleanTrue) }
-            let before = await snapshot(element: field, cropAroundCG: nil)
-            await PidEvents.type(pid: target.pid, text: text, cancelled: isStopped)
+            if target.toolkit == .chromium || target.toolkit == .electron { axSet(field, kAXFocusedAttribute, kCFBooleanTrue) }
+            let before = await typingSnapshot(field)
+            guard !isStopped(), !Task.isCancelled else { return .text("Stopped.", isError: true) }
+            guard typingFocusStillMatches(focus) else { return typingNeedsFocus }
+            inputWasPosted = true
+            await postTypedText(target.pid, text, isStopped)
             if isStopped() { return .text("Stopped.", isError: true) }
             let v = await verify(before: before, element: field, cropAroundCG: nil, expecting: expecting)
             Log.info("bg: rung=pid.keys \(v)")
@@ -300,11 +345,13 @@ final class ActionLadder {
             }
         }
         // Rung A: write the field through Accessibility. AppKit inserts at the caret; Chromium only accepts a whole value.
-        guard let field, let info else {
-            return .text(target.isMinimized ? "Not done: the window is minimized, so keystrokes are dropped and no field is focused. I can press buttons and set values; ask the user to bring the window back for typing."
-                         : "Not done: no text field has keyboard focus. Click into the field first (find_on_screen, then click_element or left_click).")
+        let before = await typingSnapshot(field)
+        guard !isStopped(), !Task.isCancelled else { return .text("Stopped.", isError: true) }
+        guard typingFocusStillMatches(focus) else {
+            return inputWasPosted
+                ? .text("Typing was attempted, but its result could not be verified and the focused field changed. Inspect the target window before typing again; text may already be present.", isError: true)
+                : typingNeedsFocus
         }
-        let before = await snapshot(element: field, cropAroundCG: nil)
         if target.toolkit == .appKit {
             axSet(field, kAXSelectedTextAttribute, text as CFString)
         } else {
@@ -318,6 +365,29 @@ final class ActionLadder {
         case .unverifiable(let why): return .text("OK — set the field; not verified (\(why)). Screenshot to check.")
         case .noEffect: return .text("Not done: typing did not take in the \(plainName(info)). Click into the field again, or ask_for_the_mouse.")
         }
+    }
+
+    private func typingFocus() -> TypingFocus? {
+        if let readTypingFocus { return readTypingFocus() }
+        guard let field = focusedElement() else { return nil }
+        return TypingFocus(element: field, info: axInfo(field), belongsToTarget: elementBelongsToTarget(field))
+    }
+
+    private var typingNeedsFocus: ToolResult {
+        // No input was attempted, so the caller can recover by focusing the field without disabling computer use.
+        .text("Not done: I couldn't confirm a focused text field in the target window. No text was entered. Click into the intended field first (find_on_screen, then click_element or left_click), then retry typing. If focus still cannot be confirmed, ask_for_the_mouse instead of trying more keys.")
+    }
+
+    private func typingFocusStillMatches(_ expected: TypingFocus) -> Bool {
+        guard let current = typingFocus(), current.belongsToTarget,
+              CFEqual(current.element, expected.element), current.info.role == expected.info.role else { return false }
+        if case .forbidden = IrreversibleGuard.classifyType(into: current.info) { return false }
+        return true
+    }
+
+    private func typingSnapshot(_ field: AXUIElement?) async -> AXSnapshot {
+        if let captureTypingState { return await captureTypingState(field) }
+        return await snapshot(element: field, cropAroundCG: nil)
     }
 
     private func key(_ combo: String, times: Int, hold: Double?) async -> ToolResult {
@@ -485,7 +555,7 @@ final class ActionLadder {
 
     /// Nil when the window is still there; otherwise the result to hand back.
     private func refreshTarget() -> ToolResult? {
-        guard target.refresh() else { return .text("The target window closed. Nothing more was done.", isError: true) }
+        guard refreshWindow(&target) else { return .text("The target window closed. Nothing more was done.", isError: true) }
         space = target.space(maxLongEdge: maxLongEdge)
         monitor?.targetFrameCG = target.frameCG
         ghost?.attach(targetFrameCG: target.frameCG)
@@ -495,7 +565,6 @@ final class ActionLadder {
 
     private func staleViewport() -> ToolResult? {
         guard viewportDirty else { return nil }
-        viewportDirty = false
         return .text("Not done: the window changed since your last screenshot (the user scrolled or resized it). Take a new screenshot before clicking by coordinates.")
     }
 

@@ -27,6 +27,7 @@ final class SettingsModel: ObservableObject {
     @Published var startAtLogin = false
     @Published var allowControl = false
     @Published var controlInBackground = true
+    @Published var backgroundVirtualDisplay = false
     @Published var backgroundPreciseClicks = false
     @Published var mascotStyle = "innocent"
     @Published var packSecrets: [PackSecret] = []
@@ -68,6 +69,7 @@ final class SettingsModel: ObservableObject {
         startAtLogin = SMAppService.mainApp.status == .enabled
         allowControl = config.allowControl
         controlInBackground = config.controlInBackground
+        backgroundVirtualDisplay = config.backgroundVirtualDisplay
         backgroundPreciseClicks = config.backgroundPreciseClicks
         mascotStyle = config.mascotStyle
         toolsDir = config.resolvedToolsDir.path
@@ -125,6 +127,7 @@ final class SettingsModel: ObservableObject {
         c.hideFromScreenShare = hideFromScreenShare
         c.allowControl = allowControl
         c.controlInBackground = controlInBackground
+        c.backgroundVirtualDisplay = backgroundVirtualDisplay
         c.backgroundPreciseClicks = backgroundPreciseClicks
         c.mascotStyle = mascotStyle
         for s in packSecrets where !Secrets.set(s.id, s.value) { message = "Could not save \(s.id) to the Keychain." }
@@ -217,6 +220,10 @@ struct SettingsView: View {
                 Toggle("Allow Familiar to control the mouse and keyboard when asked", isOn: $model.allowControl)
                 Toggle("Do things in the window you asked from, keeping your mouse and keyboard", isOn: $model.controlInBackground)
                     .disabled(!model.allowControl)
+                Toggle("Use a separate display for background tasks (experimental)", isOn: $model.backgroundVirtualDisplay)
+                    .disabled(!model.allowControl || !model.controlInBackground)
+                Text("Moves the task window off your screen while Familiar works. Returns it when the task ends.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Precise clicks in the background (experimental)", isOn: $model.backgroundPreciseClicks)
                     .disabled(!model.allowControl || !model.controlInBackground)
                 Text("Lets Familiar click exact spots in a window behind your work through a private macOS path. Off, it only presses controls it can name and asks for the mouse for anything else.")

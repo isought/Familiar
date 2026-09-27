@@ -106,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         control.maxLongEdge = config.maxImageLongEdge
         control.hideFromScreenShare = config.hideFromScreenShare
         control.preciseClicks = config.backgroundPreciseClicks
+        control.virtualDisplayEnabled = config.backgroundVirtualDisplay
         control.onCaption = { [weak self] c in
             guard let self else { return }
             guard self.control.lane != .background else { return }
@@ -531,6 +532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.control.maxLongEdge = self.config.maxImageLongEdge
             self.control.hideFromScreenShare = self.config.hideFromScreenShare
             self.control.preciseClicks = self.config.backgroundPreciseClicks
+            self.control.virtualDisplayEnabled = self.config.backgroundVirtualDisplay
             Log.info("settings saved (connection: \(self.config.connectionMode), ready: \(self.assistant.hasConnection), hotkey: \(self.config.hotkey))")
         }, onOpenTools: { [weak self] in self?.openTools() }, onReloadTools: { [weak self] in self?.reloadTools() })
     }
