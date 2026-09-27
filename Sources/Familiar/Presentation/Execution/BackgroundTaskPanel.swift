@@ -20,16 +20,23 @@ import SwiftUI
         super.init()
         panel.delegate = self
         panel.contentView = NSHostingView(rootView: BackgroundTaskPanelView(store: store, feed: store.feed))
-        observation = store.$isVisible.combineLatest(store.$isExpanded).sink { [weak self] visible, expanded in
-            guard let self else { return }
-            self.requestedVisible = visible
-            self.expanded = expanded
-            self.updatePanel()
-        }
-        focusObservation = store.explicitOpenRequests.sink { [weak self] in
-            guard let self, self.requestedVisible, !self.hiddenForForegroundGrant else { return }
+        observation = store.$isVisible.combineLatest(store.$isExpanded)
+            // Published emits before storing its value. Resizing synchronously can force SwiftUI
+            // to lay out the old compact body, leaving a completed task blank until another update.
+            .receive(on: RunLoop.main)
+            .sink { [weak self] visible, expanded in
+                guard let self else { return }
+                self.requestedVisible = visible
+                self.expanded = expanded
+                self.updatePanel()
+            }
+        focusObservation = store.explicitOpenRequests.receive(on: RunLoop.main).sink { [weak self] in
+            guard let self, self.store.isVisible, !self.hiddenForForegroundGrant else { return }
             // A deliberate Open can accept keyboard focus without activating Familiar or its chat.
             // Do not retain this intent: restoring the panel after a mouse grant must stay passive.
+            self.requestedVisible = self.store.isVisible
+            self.expanded = self.store.isExpanded
+            self.updatePanel()
             self.panel.makeKeyAndOrderFront(nil)
         }
         screenObservation = NotificationCenter.default.addObserver(
