@@ -23,9 +23,13 @@ enum ExecutionTools {
         }
 
         let root = registry.root
-        for definition in BuiltinTools.definitions {
+        for definition in BuiltinTools.definitions(background: background && control != nil) {
             guard let name = definition["name"] as? String else { continue }
             routes.append(ToolRoute(match: .tool(name: name), definition: definition) { _, input, _ in
+                if background, let control {
+                    if name == "look_at_screen" { return await control.lookAtTargetScreen() }
+                    if name == "read_screen" { return control.readTargetScreen() }
+                }
                 if name == "look_at_screen" { return await lookAtScreen() }
                 return BuiltinTools.execute(name, input, root: root)
             })

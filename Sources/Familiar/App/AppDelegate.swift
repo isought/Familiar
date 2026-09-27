@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var config = Config.load()
     private var statusItem: NSStatusItem!
     private var panel: BubblePanel!
+    private var taskPanel: BackgroundTaskPanelController!
     private var hotKey: HotKey?
     private let watcher = ContextWatcher()
     private var runner: ScriptRunner!
@@ -37,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var toolsMenuItem: NSMenuItem!
     private var watchMenuItem: NSMenuItem!
     private var stopWorkMenuItem: NSMenuItem!
+    private var tasksMenuItem: NSMenuItem!
     private var origamiMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -106,17 +108,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         control.preciseClicks = config.backgroundPreciseClicks
         control.onCaption = { [weak self] c in
             guard let self else { return }
+            guard self.control.lane != .background else { return }
             self.assistant.status = c
-            if self.control.lane == .background, self.control.active {
-                self.assistant.contextLine = "Working in \(self.assistant.peek.appName) · step \(self.assistant.peek.step) · ⌃⌥Space to stop"
-            }
         }
-        // Foreground: our windows get out of the way of the real cursor. Background: the pad stays, showing the peek.
+        // Desktop tasks have their own surface; starting or finishing one never opens chat.
+        control.onBackgroundTaskBegin = { [weak self] in
+            self?.assistant.backgroundTaskDidBegin()
+        }
         control.onBegin = { [weak self] in
             guard let self else { return }
             self.origami.cancel()
             if self.control.lane == .background {
-                self.showBackgroundHintIfNeeded()
                 return
             }
             self.bubbleWasVisibleBeforeControl = self.panel.isVisible
@@ -126,8 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         control.onEnd = { [weak self] in
             guard let self else { return }
             if self.control.lane == .background {
-                if self.panel.isVisible, !self.shell.expanded { self.shell.expandQuietly() }   // the receipt is in view, focus stays with the user
-                self.assistant.contextLine = self.watcher.current?.summaryLine ?? self.assistant.contextLine
+                self.taskPanel.setHiddenForForegroundGrant(false)
                 return
             }
             if self.bubbleWasVisibleBeforeControl { self.panel.orderFrontRegardless() }
@@ -135,18 +136,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         control.onGrant = { [weak self] entering in
             guard let self else { return }
+            self.taskPanel.setHiddenForForegroundGrant(entering)
             if entering {
                 self.bubbleWasVisibleBeforeControl = self.panel.isVisible
-                self.shell.expanded = false
                 self.panel.orderOut(nil)
             } else {
                 if self.bubbleWasVisibleBeforeControl { self.panel.orderFrontRegardless() }
-                self.shell.expandQuietly()
             }
         }
 
         setupEditMenu()
         setupPanel()
+        taskPanel = BackgroundTaskPanelController(store: desktop.tasks, hideFromScreenShare: config.hideFromScreenShare)
         setupStatusItem()
         setupHotKey()
         setupWatcher()
@@ -171,6 +172,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let main = NSMenu()
         let appItem = NSMenuItem(); main.addItem(appItem)
         appItem.submenu = NSMenu()
+        let openTasks = NSMenuItem(title: "Background Tasks…", action: #selector(menuShowTasks), keyEquivalent: "")
+        openTasks.target = self
+        appItem.submenu?.addItem(openTasks)
+        let openChatItem = NSMenuItem(title: "Open Chat", action: #selector(openChat), keyEquivalent: "")
+        openChatItem.target = self
+        appItem.submenu?.addItem(openChatItem)
+        appItem.submenu?.addItem(.separator())
         appItem.submenu?.addItem(NSMenuItem(title: "Quit Familiar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         let editItem = NSMenuItem(); main.addItem(editItem)
         let edit = NSMenu(title: "Edit")
@@ -236,6 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         stopWorkMenuItem = NSMenuItem(title: "Stop Working", action: #selector(menuStopWork), keyEquivalent: "")
         stopWorkMenuItem.isHidden = true
         menu.addItem(stopWorkMenuItem)
+        tasksMenuItem = NSMenuItem(title: "Background Tasks…", action: #selector(menuShowTasks), keyEquivalent: "")
+        menu.addItem(tasksMenuItem)
         menu.addItem(NSMenuItem(title: "Open Chat", action: #selector(openChat), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Show Bubble", action: #selector(menuShowBubble), keyEquivalent: ""))
         hideMenuItem = NSMenuItem(title: "Hide Bubble", action: #selector(menuHideBubble), keyEquivalent: "")
@@ -275,21 +285,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// The first background jobs with the bubble collapsed get a callout saying where the work is happening.
-    private func showBackgroundHintIfNeeded() {
-        guard config.backgroundHintsShown < 2, !shell.expanded, panel.isVisible else { return }
-        config.backgroundHintsShown += 1
-        config.save()
-        hideHint.show(under: panel.frame, title: "Working in \(assistant.peek.appName) while you carry on",
-                      subtitle: "Click me to watch · \(HotKey.display(config.hotkey)) to stop", seconds: 3) { [weak self] in
-            self?.shell.expandQuietly()
-        }
-    }
-
     private func setupWatcher() {
         watcher.onChange = { [weak self] ctx in
             guard let self, !self.assistant.watching else { return }   // the line reads "Watching…" while recording
-            if self.control.active, self.control.lane == .background { return }   // "Working in …" stays put during a job
             self.assistant.contextLine = ctx.summaryLine
         }
         if config.watcherEnabled { watcher.start(interval: config.watcherIntervalSeconds) } else { assistant.contextLine = "Watcher off" }
@@ -346,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let working = control.active && control.lane == .background
         stopWorkMenuItem.isHidden = !working
         stopWorkMenuItem.title = "Stop Working in \(assistant.peek.appName)   \(HotKey.display(config.hotkey))"
+        tasksMenuItem.isEnabled = desktop.tasks.activeTask != nil || !desktop.tasks.history.isEmpty
         hideMenuItem.isEnabled = panel.isVisible || origami.isFlying
         origamiMenuItem.title = origami.isFlying ? "Land Familiar   Esc" : "Fold into a Crane"
         origamiMenuItem.isEnabled = origami.isFlying || canTakeOrigamiFlight
@@ -360,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func menuWand() { startWand() }
     @objc private func menuStopWork() { control.stop(reason: "menu") }
+    @objc private func menuShowTasks() { desktop.tasks.show() }
     @objc private func menuWatch() {
         if assistant.watching { stopWatchingAndShow() } else { assistant.startWatching() }
     }
@@ -375,6 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         origami.cancel()
         execution.cancel()
         control.end()          // never leave a ghost cursor behind
+        taskPanel.close()
         assistant.abortWatching()
     }
     @objc private func openChat() {
@@ -526,6 +527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.setupHotKey()
             MascotStyle.current = MascotStyle(rawValue: self.config.mascotStyle) ?? .innocent
             self.panel.sharingType = self.config.hideFromScreenShare ? .none : .readOnly
+            self.taskPanel.updateSharing(self.config.hideFromScreenShare)
             self.control.maxLongEdge = self.config.maxImageLongEdge
             self.control.hideFromScreenShare = self.config.hideFromScreenShare
             self.control.preciseClicks = self.config.backgroundPreciseClicks

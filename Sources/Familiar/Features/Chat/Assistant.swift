@@ -43,6 +43,10 @@ final class Assistant: ObservableObject {
     let desktop: DesktopExecutionService?
     private let idlePeek = PeekFeed()
     var peek: PeekFeed { desktop?.peek ?? idlePeek }
+    var backgroundTaskRunning: Bool { desktop?.tasks.activeTask != nil }
+    var chatResponding: Bool { chatBusy && !backgroundTaskRunning }
+    var chatPresentationBusy: Bool { chatResponding || learning.busy }
+    private var requestMessageID: UUID?
 
     /// The pad's hand: on = work in the window you asked from. Clicking it while control is off turns control on
     /// (the user is flipping the gate themselves), in the background lane, which never takes the mouse unasked.
@@ -82,6 +86,7 @@ final class Assistant: ObservableObject {
         self.registry = registry
         backgroundControl = config.controlInBackground
         client = ConversationBackend.make(config: config)
+        desktop?.tasks.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         learning.onEvent = { [weak self] in self?.presentLearning($0) }
         learning.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         learning.$phase.scan((wasWatching: false, watching: false)) { previous, phase in
@@ -101,6 +106,19 @@ final class Assistant: ObservableObject {
     }
 
     var hasConnection: Bool { client != nil }
+
+    /// Transfer the submitted instruction to the task screen once desktop work starts.
+    /// The request continues in the coordinator; closing or clearing chat does not own its result.
+    func backgroundTaskDidBegin() {
+        desktop?.backgroundDidBegin()
+        guard backgroundTaskRunning else { return }
+        if let requestMessageID { transcript.removeAll { $0.id == requestMessageID } }
+        status = ""
+        suggestions = []
+        shell.expanded = false
+    }
+
+    func showBackgroundTasks() { desktop?.tasks.show() }
 
     func clearConversation() {
         captureGeneration += 1
@@ -130,7 +148,6 @@ final class Assistant: ObservableObject {
             if s == Self.retryTab { learning.retry(); return }
         }
         if Self.reservedTabs.contains(s) { suggestions = reviewTabs([]); return }   // a stale tab: never a question for Claude
-        if s.hasPrefix("Confirm: ") { control?.confirm(label: String(s.dropFirst("Confirm: ".count))) }   // one irreversible press may go through
         question = s
         ask()
     }
@@ -304,7 +321,7 @@ final class Assistant: ObservableObject {
             guard generation == captureGeneration else { finishRequest(); return }
             let text = Prompt.context(ctx, recent: watcher.history) + packsSection(ctx) + "\n## Question\n\(q)\n"
             content.append(["type": "text", "text": text])
-            await send(content: content, ctx: ctx)
+            await send(content: content, ctx: ctx, title: q, messageID: m.id)
         }
     }
 
@@ -359,7 +376,7 @@ final class Assistant: ObservableObject {
             let text = Prompt.context(ctx, recent: watcher.history) + packsSection(ctx, notes: false) + "\n"
                 + Prompt.wandInstruction(target: target, ctx: ctx) + Prompt.notes(onTarget: target.notes, elsewhere: elsewhere)
             content.append(["type": "text", "text": text])
-            await send(content: content, ctx: ctx)
+            await send(content: content, ctx: ctx, title: target.shortLabel)
         }
     }
 
@@ -445,7 +462,7 @@ final class Assistant: ObservableObject {
     /// Set by the app; nil in headless runs without control.
     var control: ComputerController? { desktop?.control }
 
-    private func send(content: [[String: Any]], ctx: ScreenContext?) async {
+    private func send(content: [[String: Any]], ctx: ScreenContext?, title: String, messageID: UUID? = nil) async {
         guard let client else {
             transcript.append(ChatMessage(role: .error, text: ConversationBackend.setupMessage(config: config)))
             finishRequest()
@@ -457,6 +474,8 @@ final class Assistant: ObservableObject {
         let controlAllowed = config.allowControl && desktop != nil && !watching
         let background = controlAllowed && backgroundControl
         let id = UUID()
+        requestMessageID = messageID
+        defer { requestMessageID = nil }
         let generation = captureGeneration
         var receipt: DesktopExecutionService.Receipt?
         do {
@@ -467,49 +486,65 @@ final class Assistant: ObservableObject {
                 }
                 if controlAllowed, let desktop {
                     return try await desktop.prepare(id: id, registry: registry, context: ctx, background: background,
-                                                     lookAtScreen: capture)
+                                                     title: title, lookAtScreen: capture)
                 }
                 let router = try ExecutionTools.make(registry: registry, context: ctx, control: nil,
                                                      background: false, lookAtScreen: capture)
                 return PreparedExecution(system: Prompt.system, router: router)
             }, stopNative: { [weak desktop] in desktop?.stop(id: id) }, cleanup: { [weak desktop] in
                 receipt = desktop?.finish(id: id)
-            }, onStatus: { [weak self] in self?.status = $0 })
-            if result.accepted {
-                switch result.outcome {
-                case .reply(let reply):
-                    appendReceipt(receipt, background: background, elapsed: result.elapsed)
-                    let (text, tabs) = Self.splitSuggestions(reply.text)
-                    transcript.append(ChatMessage(role: .assistant, text: text))
-                    suggestions = reviewTabs(tabs)
-                    let secs = String(format: "%.1f", result.elapsed)
-                    status = "\(reply.inputTokens) in · \(reply.outputTokens) out · \(reply.toolCalls) tool call\(reply.toolCalls == 1 ? "" : "s") · \(secs)s"
-                    Log.info("reply: \(reply.outputTokens) out, \(reply.inputTokens) in (cache read \(reply.cacheRead)), \(reply.toolCalls) tool calls, \(secs)s")
-                case .cancelled:
-                    appendReceipt(receipt, background: background, elapsed: result.elapsed)
-                    transcript.append(ChatMessage(role: .assistant, text: "Stopped."))
-                    suggestions = reviewTabs([])
-                    status = ""
-                case .failed(let error):
-                    transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
-                    suggestions = reviewTabs([])
-                    status = ""
-                    Log.info("error: \(error.localizedDescription)")
-                }
-            } else { status = "" }
+            }, onStatus: { [weak self] value in
+                guard let self, !self.backgroundTaskRunning else { return }
+                self.status = value
+            })
+            presentExecutionResult(result, requestID: id, receipt: receipt)
         } catch {
-            transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
+            if let tasks = desktop?.tasks, tasks.isTracking(id: id) {
+                tasks.finish(id: id, outcome: .failed, text: error.localizedDescription, elapsed: 0)
+            } else {
+                transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
+            }
             status = ""
         }
         finishRequest()
     }
 
-    private func appendReceipt(_ receipt: DesktopExecutionService.Receipt?, background: Bool, elapsed: TimeInterval) {
-        guard background, let receipt, receipt.steps > 0 else { return }
-        let steps = "\(receipt.steps) step\(receipt.steps == 1 ? "" : "s")"
-        transcript.append(ChatMessage(role: .receipt,
-                                      text: receipt.stopped ? "Stopped after \(steps) in \(receipt.appName)" : "Done in \(receipt.appName) · \(steps) · \(Int(elapsed))s",
-                                      image: peek.frame))
+    /// Task output has its own lifetime, even if the user clears the chat mid-run.
+    func presentExecutionResult(_ result: ExecutionResult, requestID: UUID, receipt: DesktopExecutionService.Receipt?) {
+        if let tasks = desktop?.tasks, tasks.isTracking(id: requestID) {
+            let outcome: BackgroundTaskOutcome
+            let text: String
+            switch result.outcome {
+            case .reply(let reply):
+                outcome = receipt?.stopped == true ? .stopped : .completed
+                text = Self.splitSuggestions(reply.text).0
+            case .cancelled: outcome = .stopped; text = "Stopped."
+            case .failed(let error): outcome = .failed; text = error.localizedDescription
+            }
+            tasks.finish(id: requestID, outcome: outcome, text: text, elapsed: result.elapsed)
+            status = ""
+            suggestions = []
+            return
+        }
+        guard result.accepted else { status = ""; return }
+        switch result.outcome {
+        case .reply(let reply):
+            let (text, tabs) = Self.splitSuggestions(reply.text)
+            transcript.append(ChatMessage(role: .assistant, text: text))
+            suggestions = reviewTabs(tabs)
+            let secs = String(format: "%.1f", result.elapsed)
+            status = "\(reply.inputTokens) in · \(reply.outputTokens) out · \(reply.toolCalls) tool call\(reply.toolCalls == 1 ? "" : "s") · \(secs)s"
+            Log.info("reply: \(reply.outputTokens) out, \(reply.inputTokens) in (cache read \(reply.cacheRead)), \(reply.toolCalls) tool calls, \(secs)s")
+        case .cancelled:
+            transcript.append(ChatMessage(role: .assistant, text: "Stopped."))
+            suggestions = reviewTabs([])
+            status = ""
+        case .failed(let error):
+            transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
+            suggestions = reviewTabs([])
+            status = ""
+            Log.info("error: \(error.localizedDescription)")
+        }
     }
 
     private func finishRequest() {

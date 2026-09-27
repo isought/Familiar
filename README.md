@@ -33,14 +33,25 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
 7. **Control** (off by default, Settings → "Allow Familiar to control the mouse and keyboard"): ask it to do something
    ("type the sum formula for me") and it does it through Claude's computer toolset. By default it works **in the
    background**: it drives the window you were in when you asked through Accessibility and events sent to that app, so
-   your mouse and keyboard stay yours and you can carry on elsewhere. A purple ghost cursor shows what it presses, and the
-   pad shows a live peek of that window with each step and a **Stop** tab (⌃⌥Space stops too). When something needs the
-   real mouse (a drag, a context menu, a ⌘ shortcut) it asks on the note first: **Go ahead** lends it the mouse with the
+   your mouse and keyboard stay yours and you can carry on elsewhere. A purple ghost cursor shows what it presses.
+   Once desktop execution begins, the instruction moves from chat to a compact **background task screen** in the top-right.
+   Expand it for a live window preview, approvals and the result; **Stop** or ⌃⌥Space ends the work. Collapsing or hiding
+   the task screen keeps execution running, and completion respects that choice. Reopen it through the menu bar's
+   **Background Tasks…** entry or by clicking Familiar while a task runs. The task header can be dragged to another spot.
+   Recent results and their last screenshots are kept for up to 20 tasks until Familiar quits. Ordinary conversational
+   answers stay in chat. One desktop task runs at a time; the current request must finish before another is submitted.
+   Background `read_screen` and `look_at_screen` read only the selected target window and fail if no target is available.
+   When something needs the real mouse (a drag, a context menu, a ⌘ shortcut) it asks on the task screen first: **Go ahead** lends it the mouse with the
    shimmer border as before, and moving the mouse or pressing Esc takes it back. The hand icon on the pad, next to the
    eye, turns background mode off; then it takes the mouse as before (the shimmer border, a caption per step, moving the
-   mouse or pressing Esc stops it). It asks before Send / Submit / Delete / Pay either way, and a pack can list more
+   mouse or pressing Esc stops it). Background Send / Submit / Delete / Pay button presses pause for a one-action approval
+   on the task screen; a changed window or control invalidates that approval. A pack can list more
    controls to confirm under `irreversible:` in its SKILL.md. `find_on_screen` gives it labelled controls via Accessibility;
    in the background it presses them by id with `click_element`.
+
+   The task screen separates monitoring from chat; native execution still uses the existing app/window. It does not
+   create a virtual desktop or independent browser session. Minimized-window input and simultaneous use of the same app
+   retain the native controller's current limitations.
 
 8. **Watch me**: menu bar → **Watch Me** (or the eye on the pad). Do the task the way you normally do, then press ⌃⌥Space or
    **Stop Watching**. Familiar records clicks (with the real labels of what you clicked, via Accessibility), a crop around each
@@ -89,6 +100,7 @@ No packs are needed to start: watching creates them. Nothing leaves the machine 
 .build/release/Familiar --render-mascot /tmp/mascot [--style innocent|innocentV1|innocentV3|innocentV4|sharp]   # renders every mood, the quill cursor and the app-icon source as PNGs
 .build/release/Familiar --render-origami /tmp/origami [--style innocentV4]   # folding stages and crane wing poses as PNGs
 .build/release/Familiar --render-card /tmp/card [--states]   # the pad with a pick, a note sticker and answers, as PNGs
+.build/release/Familiar --render-background-task /tmp/tasks # task screen states, fabricated content, no model or desktop capture
 .build/release/Familiar --render-pen /tmp/pen               # the pen overlay over a fake page: stickers and the note editor, as a PNG
 build/Familiar.app/Contents/MacOS/Familiar --ask "question" [url] [--shot] [--control] [--claude-cli]   # headless Claude call, real tool loop
 ```

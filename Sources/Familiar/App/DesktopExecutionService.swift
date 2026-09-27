@@ -12,24 +12,31 @@ final class DesktopExecutionService {
         let stopped: Bool
     }
 
-    let peek = PeekFeed()
+    let peek: PeekFeed
+    let tasks: BackgroundTaskStore
     let control: ComputerController
     private var owner: UUID?
+    private var requestTitle = "Background task"
     private let activities: NativeActivityGate
     private var lease: NativeActivityGate.Lease?
 
     init(control: ComputerController, activities: NativeActivityGate, enablesPeek: Bool = true) {
         self.activities = activities
         self.control = control
+        let feed = PeekFeed()
+        peek = feed
+        tasks = BackgroundTaskStore(feed: feed)
         control.peek = enablesPeek ? peek : nil
     }
 
     func prepare(id: UUID, registry: ToolRegistry, context: ScreenContext?, background: Bool,
                  target: TargetWindow? = nil,
+                 title: String = "Background task",
                  lookAtScreen: @escaping () async -> ToolResult) async throws -> PreparedExecution {
         guard owner == nil else { throw ClaudeError(message: "Another request is using desktop control.") }
         lease = try activities.acquire(.desktop)
         owner = id
+        requestTitle = title
         control.reset()
         // Snapshot all request capabilities and guard labels before target resolution suspends.
         let router = try ExecutionTools.make(registry: registry, context: context, control: control,
@@ -48,6 +55,13 @@ final class DesktopExecutionService {
         }
         return PreparedExecution(system: Prompt.system + Prompt.control + (background ? Prompt.background + laneNote : ""),
                                  router: router, maxToolRounds: 40, shouldStop: { [weak control] in control?.stopped ?? true })
+    }
+
+    /// A chat request only becomes a task when the native controller attempts its first action.
+    /// Ordinary questions keep their answers in chat even when background control is enabled.
+    func backgroundDidBegin() {
+        guard let owner, control.lane == .background else { return }
+        tasks.start(id: owner, title: requestTitle)
     }
 
     func stop(id: UUID) {

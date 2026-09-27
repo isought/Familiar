@@ -8,6 +8,79 @@ import FamiliarRuntime
 @MainActor
 struct ExecutionToolsTests {
     @Test
+    func backgroundScreenshotWithoutTargetDoesNotReadTheHumansDisplay() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let control = ComputerController()
+        control.lane = .background
+        var displayCaptures = 0
+        let router = try ExecutionTools.make(registry: fixture.registry(), context: nil, control: control,
+                                             background: true, lookAtScreen: {
+            displayCaptures += 1
+            return .text("human display fixture")
+        })
+
+        let result = await router.execute("look_at_screen", [:])
+
+        #expect(result.isError)
+        #expect(displayCaptures == 0)
+        #expect((result.content as? String)?.contains("No target window") == true)
+        #expect(!control.active)
+    }
+
+    @Test
+    func backgroundTextWithoutTargetFailsWithoutStartingControl() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let control = ComputerController()
+        control.lane = .background
+        let router = try ExecutionTools.make(registry: fixture.registry(), context: nil, control: control,
+                                             background: true, lookAtScreen: { .text("unused") })
+
+        let result = await router.execute("read_screen", [:])
+
+        #expect(result.isError)
+        #expect((result.content as? String)?.contains("No target window") == true)
+        #expect(!control.active)
+    }
+
+    @Test
+    func foregroundAndNonControlScreenshotsKeepTheirSuppliedCapture() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let control = ComputerController()
+        for (nativeControl, background) in [(control as ComputerController?, false), (nil, true)] {
+            var captures = 0
+            let router = try ExecutionTools.make(registry: fixture.registry(), context: nil, control: nativeControl,
+                                                 background: background, lookAtScreen: {
+                captures += 1
+                return .text("supplied screenshot")
+            })
+
+            let result = await router.execute("look_at_screen", [:])
+
+            #expect(!result.isError)
+            #expect(result.content as? String == "supplied screenshot")
+            #expect(captures == 1)
+        }
+        #expect(!control.active)
+    }
+
+    @Test
+    func backgroundToolDescriptionsIdentifyTheTargetAndCoordinateSpace() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let router = try ExecutionTools.make(registry: fixture.registry(), context: nil, control: ComputerController(),
+                                             background: true, lookAtScreen: { .text("unused") })
+        let screenshot = try #require(router.definitions.first { $0["name"] as? String == "look_at_screen" })
+        let text = try #require(router.definitions.first { $0["name"] as? String == "read_screen" })
+
+        #expect((screenshot["description"] as? String)?.contains("current target window") == true)
+        #expect((screenshot["description"] as? String)?.contains("computer screenshot action for display coordinates") == true)
+        #expect((text["description"] as? String)?.contains("current target window") == true)
+    }
+
+    @Test
     func absentControlOmitsNativeCapabilitiesInBothLanes() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

@@ -84,10 +84,8 @@ struct BubbleView: View {
 
     @State private var lastClick: Date?
 
-    /// Single click = a poke (the note reacts, nothing opens). Double click = chat. While a background job runs, a
-    /// click opens the pad without taking focus from the app the user is in, so they can watch.
+    /// Single click can reopen the task screen; double click always opens chat for a new instruction.
     private func click() {
-        if sense.controlActive, state.peek.isWorking { lastClick = nil; shell.expandQuietly(); return }
         let now = Date()
         if let last = lastClick, now.timeIntervalSince(last) < NSEvent.doubleClickInterval {
             lastClick = nil
@@ -96,6 +94,7 @@ struct BubbleView: View {
             return
         }
         lastClick = now
+        if state.backgroundTaskRunning { state.showBackgroundTasks(); return }
         react(.happy, for: 0.9)
         shell.onPoke?()
     }
@@ -156,9 +155,7 @@ struct BubbleView: View {
     /// brief happy/sad the orb shows; curious over the empty pad; sad while the last word on the pad is an error.
     private var peekMood: MascotMood {
         if state.watching { return .curious }
-        if case .asking = state.peek.phase { return .curious }   // the character looks at the user when it asks
-        if state.peek.isWorking { return .onIt }                 // eyes on the app for the whole job
-        if state.busy { return .thinking }
+        if state.chatPresentationBusy { return .thinking }
         if ledger.isRevealing { return .onIt }
         if let r = reaction { return r }
         if state.transcript.isEmpty { return .curious }
@@ -217,6 +214,7 @@ struct BubbleView: View {
             Button { shell.expanded = false } label: { Image(systemName: "chevron.down") }
                 .buttonStyle(.borderless).help("Collapse")
             Menu {
+                Button("Background tasks…") { state.showBackgroundTasks() }
                 Button("Fold into a crane") { onOrigami?() }
                     .disabled(onOrigami == nil || state.busy || state.watching || sense.controlActive)
                 Button("Settings…") { shell.onOpenSettings?() }
@@ -244,7 +242,7 @@ struct BubbleView: View {
 
     /// The hand's tooltip describes the effective state: a fresh install (control off) never shows a purple hand that does nothing.
     private var handHelp: String {
-        if sense.controlActive && state.backgroundOn { return "Working in the window you asked from — Stop is on the note, or ⌃⌥Space." }
+        if sense.controlActive && state.backgroundOn { return "Working in the background task screen — Stop is there, or ⌃⌥Space." }
         if !state.config.allowControl { return "Control is off. Click to let Familiar do things for you — it works in the window while you carry on." }
         if state.backgroundOn { return "Works in the window you asked about while you carry on — your mouse and keyboard stay yours. Click to have it take the mouse instead." }
         return "Takes the mouse when it does things for you. Click to have it work in the window while you carry on instead."
@@ -260,14 +258,13 @@ struct BubbleView: View {
                     if notes.isEmpty { welcomeNote }
                     ForEach(Array(notes.enumerated()), id: \.element.id) { i, n in
                         let latest = i == notes.count - 1
-                        StickyNoteView(note: n, index: i, isLatest: latest, busy: state.busy && latest, status: state.status,
+                        StickyNoteView(note: n, index: i, isLatest: latest, busy: state.chatPresentationBusy && latest, status: state.status,
                                        suggestions: n.id == tabsOn ? state.suggestions : [], ledger: ledger,
                                        peek: latest ? peekMood : nil, animated: padAnimated,
-                                       peekFeed: latest ? state.peek : nil,
                                        onSuggest: { state.askSuggestion($0) })
                             .id(n.id)
                     }
-                    if state.busy, notes.last?.hasAnswer == true || notes.isEmpty {
+                    if state.chatPresentationBusy, notes.last?.hasAnswer == true || notes.isEmpty {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
                             Text(state.status).font(.caption).foregroundStyle(Pad.deskInkSoft(dark))

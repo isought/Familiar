@@ -1,13 +1,11 @@
 import AppKit
 import SwiftUI
 
-// The peek note: while Familiar works in a background window the newest note on the pad carries a small print of
-// that window (a photo paper-clipped to the sheet) with the ghost cursor drawn over it, a handwritten caption of
-// what it is doing, and paper tabs for Stop / Go ahead / Not now. `PeekFeed` is the model the session writes to;
-// `PeekCadence` decides how often the print is refreshed; `PeekNoteView` is what sits inside the sticky note.
+// A task's live window preview, caption, and controls. The feed belongs to execution; presentation can place
+// this view in the task screen without putting progress or decisions into the chat history.
 
 @MainActor final class PeekFeed: ObservableObject {
-    enum Phase: Equatable { case idle, working, thinking, asking(String), foreground, done, stopped }
+    enum Phase: Equatable { case idle, working, thinking, asking(String), confirming(String), foreground, done, stopped }
     @Published var phase: Phase = .idle
     @Published var frame: CGImage?
     @Published var caption = ""
@@ -22,10 +20,11 @@ import SwiftUI
     var onGoAhead: (() -> Void)?
     var onNotNow: (() -> Void)?
     var onRaise: (() -> Void)?             // click on the print: bring the window forward
+    var approvalRequestID: UUID?           // identifies the owner of confirmation callbacks
 
     var isWorking: Bool {
         switch phase {
-        case .working, .thinking, .asking, .foreground: return true
+        case .working, .thinking, .asking, .confirming, .foreground: return true
         case .idle, .done, .stopped: return false
         }
     }
@@ -39,6 +38,9 @@ import SwiftUI
 
     /// Back to idle with nothing on the print, so the next job starts from a blank photo.
     func reset() {
+        approvalRequestID = nil
+        onGoAhead = nil
+        onNotNow = nil
         phase = .idle
         frame = nil
         caption = ""
@@ -59,7 +61,7 @@ enum PeekCadence {
     static func interval(phase: PeekFeed.Phase, actionRunning: Bool) -> TimeInterval? {
         switch phase {
         case .idle, .done, .stopped, .foreground: return nil
-        case .working, .thinking, .asking: return actionRunning ? 0.25 : 1.0
+        case .working, .thinking, .asking, .confirming: return actionRunning ? 0.25 : 1.0
         }
     }
 }
@@ -73,19 +75,37 @@ struct GhostCursorShape: Shape {
     }
 }
 
-struct PeekNoteView: View {   // rendered inside StickyNoteView.paper in place of the "Writing…" row
+struct PeekNoteView: View {
     @ObservedObject var feed: PeekFeed
+    var decisionFirst = false
+    var showsStop = true
 
     private static let ghostPurple = Color(red: 0.55, green: 0.3, blue: 0.95)
     private static let cursorHeight: CGFloat = 14
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if decisionBeforePrint { details }
             print
                 .padding(.top, 6)      // room for the paperclip's head above the photo
                 .padding(.bottom, 2)
+            if !decisionBeforePrint { details }
+        }
+    }
+
+    private var decisionBeforePrint: Bool {
+        guard decisionFirst else { return false }
+        switch feed.phase {
+        case .asking, .confirming: return true
+        default: return false
+        }
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 8) {
             switch feed.phase {
             case .asking(let reason): asking(reason)
+            case .confirming(let label): confirming(label)
             default: captionBlock
             }
             if !tabs.isEmpty {
@@ -183,7 +203,7 @@ struct PeekNoteView: View {   // rendered inside StickyNoteView.paper in place o
         switch feed.phase {
         case .done: return "Done"
         case .stopped: return "Stopped"
-        case .idle, .working, .thinking, .asking, .foreground: return feed.caption
+        case .idle, .working, .thinking, .asking, .confirming, .foreground: return feed.caption
         }
     }
 
@@ -196,16 +216,32 @@ struct PeekNoteView: View {   // rendered inside StickyNoteView.paper in place o
         }
     }
 
+    private func confirming(_ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Approve “\(label)”?").font(HandFont.font(size: 14)).foregroundStyle(Pad.ink)
+            Text("This action may be irreversible. Approval applies to this control once; it does not give Familiar your mouse.")
+                .font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft)
+            if !feed.metaLine.isEmpty {
+                Text(feed.metaLine).font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft).lineLimit(1)
+            }
+        }
+    }
+
     private struct Tab { var label: String; var action: () -> Void }
 
     /// Stop while anything is going on; the two answers while the note is asking; nothing once the job has ended.
     private var tabs: [Tab] {
+        // Capture the displayed request's callbacks. An already-rendered button must not read a newer request's
+        // callback from the feed when its click is delivered.
+        let approve = feed.onGoAhead, decline = feed.onNotNow, stop = feed.onStop
+        let stopTabs = showsStop ? [Tab(label: "Stop") { stop?() }] : []
         switch feed.phase {
         case .asking:
-            return [Tab(label: "Go ahead") { feed.onGoAhead?() }, Tab(label: "Not now") { feed.onNotNow?() },
-                    Tab(label: "Stop") { feed.onStop?() }]
+            return [Tab(label: "Go ahead") { approve?() }, Tab(label: "Not now") { decline?() }] + stopTabs
+        case .confirming:
+            return [Tab(label: "Approve once") { approve?() }, Tab(label: "Don't") { decline?() }] + stopTabs
         case .working, .thinking, .foreground:
-            return [Tab(label: "Stop") { feed.onStop?() }]
+            return stopTabs
         case .idle, .done, .stopped:
             return []
         }

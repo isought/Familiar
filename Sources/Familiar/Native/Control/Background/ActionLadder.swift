@@ -21,7 +21,7 @@ final class ActionLadder {
     var caption: (String) -> Void = { _ in }
     var declaredIrreversible: [String] = []      // from the matching pack's manifest
     var warningNoteLabels: [String] = []         // sticky warnings anchored on controls in this scene
-    var confirmation: IrreversibleGuard.Confirmation?
+    var requestApproval: ((String) async -> BackgroundActionApproval.Decision)?
     var viewportDirty = false                    // the human scrolled or resized since the model last looked
     private(set) var lastRaw: RawCapture?
     private var shotFrameSize: CGSize?
@@ -39,7 +39,7 @@ final class ActionLadder {
     }
 
     static func needsForeground(_ why: String) -> ToolResult {
-        .text("needs_foreground: \(why). This needs the real mouse. Try another way first: a keyboard shortcut without ⌘, find_on_screen and click_element, or typing. If there is no other way, call ask_for_the_mouse with a one-line reason the user will understand; they will answer on the pad.")
+        .text("needs_foreground: \(why). This needs the real mouse. Try another way first: a keyboard shortcut without ⌘, find_on_screen and click_element, or typing. If there is no other way, call ask_for_the_mouse with a one-line reason the user will understand; they will answer in the background task screen.")
     }
 
     // MARK: dispatch
@@ -226,16 +226,32 @@ final class ActionLadder {
 
     /// Rung A press with the irreversible guard and verification. `then` supplies the fall-through result (nil = try the next rung).
     private func press(_ el: AXUIElement, info: IrreversibleGuard.ElementInfo, then fallback: () -> ToolResult?) async -> ToolResult? {
-        if let blocked = guardPress(el, info: info) { return blocked }
+        let permission = await guardPress(el, info: info)
+        if let blocked = permission.blocked { return blocked }
         ghost?.highlight(rectCG: axFrame(el), label: info.label.isEmpty ? nil : String(info.label.prefix(40)))
         defer { ghost?.highlight(rectCG: nil, label: nil) }
         let point = axFrame(el).map { CGPoint(x: $0.midX, y: $0.midY) }
         let before = await snapshot(element: el, cropAroundCG: point)
+        guard !isStopped(), !Task.isCancelled else { return .text("Stopped before pressing the control.", isError: true) }
+        // Capturing is asynchronous too. Check again immediately before AXPress, with no suspension between
+        // validation and the action, so a target switch or changed control cannot inherit the human's answer.
+        if let approval = permission.approval, !approvalStillValid(approval, element: el) { return staleApproval }
         AXUIElementPerformAction(el, kAXPressAction as CFString)
         ghost?.pulse(count: 1)
         peek?.pulse += 1
         let v = await verify(before: before, element: el, cropAroundCG: point, expecting: .anyChange)
         Log.info("bg: rung=ax.press “\(info.label.prefix(40))” \(v)")
+        if permission.approval != nil {
+            let approved = "The user approved pressing this exact control, “\(info.label)”, once in the background task screen. That approval was consumed by this press."
+            switch v {
+            case .confirmed(let evidence):
+                return .text("\(approved) OK — pressed once and verified a change: \(evidence).")
+            case .unverifiable(let why):
+                return .text("\(approved) One approved press was attempted, but its outcome is not fully verified (\(why)). Inspect the window to check the result; do not press again using this approval.")
+            case .noEffect:
+                return .text("\(approved) One approved press was attempted, but no change was detected. Inspect the window before deciding what to do next; do not press again using this approval.")
+            }
+        }
         switch v {
         case .confirmed: return .text("OK — pressed “\(info.label)”")
         case .unverifiable(let why): return .text("OK — pressed “\(info.label)”; no change seen yet (\(why)). Screenshot to check.")
@@ -373,14 +389,78 @@ final class ActionLadder {
 
     // MARK: guards and verification
 
-    private func guardPress(_ el: AXUIElement, info: IrreversibleGuard.ElementInfo) -> ToolResult? {
+    private struct PressApproval {
+        let pid: pid_t
+        let windowID: CGWindowID
+        let window: AXUIElement
+        let windowTitle: String
+        let windowFrame: CGRect
+        let elementFrame: CGRect
+        let info: IrreversibleGuard.ElementInfo
+        let inSheet: Bool
+    }
+
+    private var staleApproval: ToolResult {
+        .text("Not pressed: the target window or control changed while waiting for approval. Inspect it again before requesting a new approval.", isError: true)
+    }
+
+    private func guardPress(_ el: AXUIElement, info: IrreversibleGuard.ElementInfo) async -> (blocked: ToolResult?, approval: PressApproval?) {
         switch IrreversibleGuard.classifyPress(info, inSheet: isInSheet(el), declared: declaredIrreversible, warningNoteLabels: warningNoteLabels) {
-        case .safe: return nil
-        case .forbidden(let why): return .text("Not done: \(why). Familiar never does that in the background.", isError: true)
+        case .safe: return (nil, nil)
+        case .forbidden(let why): return (.text("Not done: \(why). Familiar never does that in the background.", isError: true), nil)
         case .confirm(let label):
-            if IrreversibleGuard.consume(&confirmation, label: label, now: Date()) { return nil }
-            return .text("Not pressed: this looks irreversible (\((info.role ?? "AXControl").replacingOccurrences(of: "AX", with: "").lowercased()) “\(label)”) and nobody is watching. Ask the user, and end your reply with `Suggestions: Confirm: \(label) | Don't`. When they confirm, press it again.")
+            guard let requestApproval else {
+                return (.text("Not pressed: “\(label)” needs approval in the background task screen, which is unavailable in this session.", isError: true), nil)
+            }
+            guard let frame = axFrame(el), elementBelongsToTarget(el), axActions(el).contains(kAXPressAction) else {
+                return (staleApproval, nil)
+            }
+            let approval = PressApproval(pid: target.pid, windowID: target.cgWindowID, window: target.axWindow,
+                                         windowTitle: target.title, windowFrame: target.frameCG, elementFrame: frame,
+                                         info: info, inSheet: isInSheet(el))
+            let decision = await requestApproval(label)
+            guard !isStopped(), !Task.isCancelled else {
+                return (.text("Stopped before pressing “\(label)”.", isError: true), nil)
+            }
+            switch decision {
+            case .approved:
+                guard approvalStillValid(approval, element: el) else { return (staleApproval, nil) }
+                return (nil, approval)
+            case .denied:
+                return (.text("Not pressed: the user declined “\(label)”. Leave this action undone; do not request it again unless the user asks.", isError: true), nil)
+            case .timedOut:
+                return (.text("Not pressed: approval for “\(label)” timed out. Leave this action undone.", isError: true), nil)
+            case .cancelled:
+                return (.text("Not pressed: approval for “\(label)” was cancelled.", isError: true), nil)
+            case .unavailable:
+                return (.text("Not pressed: no background task approval is available for “\(label)”. Leave this action undone.", isError: true), nil)
+            }
         }
+    }
+
+    private func approvalStillValid(_ approval: PressApproval, element: AXUIElement) -> Bool {
+        guard target.refresh(), target.pid == approval.pid, target.cgWindowID == approval.windowID,
+              CFEqual(target.axWindow, approval.window), target.title == approval.windowTitle,
+              target.frameCG == approval.windowFrame, axFrame(element) == approval.elementFrame,
+              axInfo(element) == approval.info, isInSheet(element) == approval.inSheet,
+              elementBelongsToTarget(element), axActions(element).contains(kAXPressAction) else { return false }
+        var enabled: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXEnabledAttribute as CFString, &enabled) == .success,
+           let enabled = enabled as? NSNumber, !enabled.boolValue { return false }
+        return true
+    }
+
+    /// An element handle surviving a navigation or window switch is insufficient: it must still be attached
+    /// to this exact target. Walk parents as well as AXWindow to accommodate controls inside sheets.
+    private func elementBelongsToTarget(_ element: AXUIElement) -> Bool {
+        if let window = AX.element(element, kAXWindowAttribute), CFEqual(window, target.axWindow) { return true }
+        var current: AXUIElement? = element
+        for _ in 0..<128 {
+            guard let node = current else { return false }
+            if CFEqual(node, target.axWindow) { return true }
+            current = AX.element(node, kAXParentAttribute)
+        }
+        return false
     }
 
     private func snapshot(element: AXUIElement?, cropAroundCG: CGPoint?) async -> AXSnapshot {

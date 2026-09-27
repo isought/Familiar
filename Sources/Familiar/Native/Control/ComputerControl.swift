@@ -24,7 +24,7 @@ final class ComputerController {
     ]
     static let askForMouseDefinition: [String: Any] = [
         "name": "ask_for_the_mouse",
-        "description": "Background lane: ask the user to lend you the real mouse and keyboard for a moment, for something only that can do (a drag, a context menu, a point with nothing pressable, a ⌘ shortcut). First try a keyboard route, find_on_screen with click_element, or typing. Give a one-line reason in the user's own terms, e.g. \"to drag Invoice 8812 onto the Approved column\". Returns when the user answers on the pad (up to 45 s). If they agree, take a screenshot (coordinates become pixels of the whole display), do that part in one go, then call give_the_mouse_back.",
+        "description": "Background lane: ask the user to lend you the real mouse and keyboard for a moment, for something only that can do (a drag, a context menu, a point with nothing pressable, a ⌘ shortcut). First try a keyboard route, find_on_screen with click_element, or typing. Give a one-line reason in the user's own terms, e.g. \"to drag Invoice 8812 onto the Approved column\". Returns when the user answers on the task screen (up to 45 s). If they agree, take a computer screenshot (coordinates become pixels of the whole display), do that part in one go, then call give_the_mouse_back.",
         "input_schema": ["type": "object", "properties": ["reason": ["type": "string"]], "required": ["reason"]],
     ]
     static let giveMouseBackDefinition: [String: Any] = [
@@ -43,6 +43,8 @@ final class ComputerController {
     var preciseClicks = false                // Config.backgroundPreciseClicks; the SkyLight rung still needs its self-test
     var onCaption: ((String) -> Void)?
     var onBegin: (() -> Void)?
+    /// Presentation adopts the request only when it attempts work, independently of native resource setup.
+    var onBackgroundTaskBegin: (() -> Void)?
     var onEnd: (() -> Void)?
     /// The background lane borrows the real mouse for a moment: true when entering the grant, false when leaving.
     var onGrant: ((Bool) -> Void)?
@@ -54,7 +56,7 @@ final class ComputerController {
     var lane: Lane = .foreground
     /// The window the background lane works in. Set by the app before the turn (the window in front when the user asked).
     var target: TargetWindow?
-    /// The pad's live peek of the target window; nil headless.
+    /// The task screen's live peek of the target window; nil headless.
     var peek: PeekFeed?
 
     private(set) var stopped = false
@@ -80,7 +82,8 @@ final class ComputerController {
     private var expectingActivation = false             // we are raising the target on purpose (peek click)
     private var actionRunning = false
     private var peekTimer: Task<Void, Never>?
-    private var pendingConfirmation: IrreversibleGuard.Confirmation?
+    private var taskActivation = BackgroundTaskActivation()
+    private let actionApproval = BackgroundActionApproval()
     private var pendingNotice: String?                  // told to the model on its next action
     private var handoff: CheckedContinuation<Bool, Never>?
     private var handoffTimeout: Task<Void, Never>?
@@ -95,7 +98,7 @@ final class ComputerController {
 
     // MARK: session
 
-    func reset() { stopped = false; stopReason = "" }
+    func reset() { stopped = false; stopReason = ""; taskActivation.reset() }
 
     func begin() {
         guard !active else { return }
@@ -118,6 +121,7 @@ final class ComputerController {
     /// The background lane: no HUD, no real cursor. A ladder per target window, a ghost cursor, a conflict monitor that
     /// only minds the target window, and a watch on the window itself.
     private func beginBackground(_ t: TargetWindow) {
+        taskActivation.reset()
         active = true
         stopped = false
         beganAt = Date()
@@ -125,13 +129,18 @@ final class ComputerController {
         userApp = NSWorkspace.shared.frontmostApplication
         target.sharedWithHuman = Self.humanInAnotherWindow(of: target)
         let l = ActionLadder(target: target, maxLongEdge: maxLongEdge)
-        l.isStopped = { [weak self] in self?.stopped ?? true }
+        l.isStopped = { [weak self, weak l] in
+            guard let self, let l else { return true }
+            return !self.active || self.stopped || self.ladder !== l
+        }
         l.caption = { [weak self] in self?.caption($0) }
         l.peek = peek
         l.declaredIrreversible = declaredIrreversible
         l.warningNoteLabels = warningNoteLabels
-        l.confirmation = pendingConfirmation
-        pendingConfirmation = nil
+        l.requestApproval = { [weak self, weak l] label in
+            guard let self, let l, self.active, !self.stopped, self.ladder === l else { return .cancelled }
+            return await self.actionApproval.request(label: label, on: self.peek)
+        }
         if ghostEnabled {
             let g = GhostCursorPanel(hideFromScreenShare: hideFromScreenShare)
             g.attach(targetFrameCG: target.frameCG)
@@ -246,6 +255,7 @@ final class ComputerController {
     }
 
     func end() {
+        actionApproval.cancel()
         guard active else { return }
         active = false
         if grantActive { leaveGrant(reason: "done") }
@@ -271,6 +281,7 @@ final class ComputerController {
     }
 
     func stop(reason: String) {
+        actionApproval.cancel()
         guard active, !stopped else { return }
         stopped = true
         stopReason = reason
@@ -278,12 +289,6 @@ final class ComputerController {
         ghost?.hide()
         resolveHandoff(false)
         Log.info("control: stop requested: \(reason)")
-    }
-
-    /// The pad's tab "Confirm: <label>" lets exactly one irreversible press through within two minutes.
-    func confirm(label: String) {
-        let c = IrreversibleGuard.Confirmation(label: label, expires: Date().addingTimeInterval(120), usesLeft: 1)
-        if let ladder { ladder.confirmation = c } else { pendingConfirmation = c }
     }
 
     /// Summary for the receipt note.
@@ -329,9 +334,11 @@ final class ComputerController {
     // MARK: the mouse on loan (background lane → a short foreground stint)
 
     func askForMouse(_ input: [String: Any]) async -> ToolResult {
+        if Task.isCancelled || stopped { return .text("Stopped.", isError: true) }
         guard lane == .background, active, ladder != nil else { return .text("You already have the mouse: this is the foreground lane.", isError: true) }
         if grantActive { return .text("You already have the mouse. Do the foreground part now, then give_the_mouse_back.", isError: true) }
-        guard let peek else { return .text("The user said not now (no pad to ask on). Do what you can in the background, or stop and say what is left to do by hand.", isError: true) }
+        guard let peek else { return .text("The user said not now (no task screen to ask on). Do what you can in the background, or stop and say what is left to do by hand.", isError: true) }
+        beginBackgroundTaskIfNeeded(for: "ask_for_the_mouse")
         let reason = (input["reason"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         peek.phase = .asking(reason.isEmpty ? "for something only the real mouse can do" : reason)
         caption("Asking for the mouse")
@@ -430,6 +437,38 @@ final class ComputerController {
 
     // MARK: actions
 
+    private func beginBackgroundTaskIfNeeded(for operation: String) {
+        guard lane == .background, active, !stopped, !Task.isCancelled,
+              taskActivation.beginIfNeeded(for: operation) else { return }
+        onBackgroundTaskBegin?()
+    }
+
+    /// Background built-ins observe the current task target, including a target_window switch.
+    /// Reading alone must not install input monitors, show a cursor, or borrow the mouse.
+    func readTargetScreen() -> ToolResult {
+        if Task.isCancelled || stopped { return .text("Stopped.", isError: true) }
+        guard var current = ladder?.target ?? target else { return missingObservationTarget }
+        guard current.refresh() else { return .text("The target window closed. Nothing more was read.", isError: true) }
+        guard Permissions.accessibilityGranted else { return .text("Accessibility permission is off.", isError: true) }
+        return .text(ScreenText.dumpWindow(current.axWindow, appName: current.appName))
+    }
+
+    func lookAtTargetScreen() async -> ToolResult {
+        if Task.isCancelled || stopped { return .text("Stopped.", isError: true) }
+        guard let current = ladder?.target ?? target else { return missingObservationTarget }
+        // Reuse the action ladder's window-only capture and coordinate cache. Before the
+        // first native action a temporary ladder provides the same capture without begin().
+        let observer = ladder ?? ActionLadder(target: current, maxLongEdge: maxLongEdge)
+        observer.peek = peek
+        let result = await observer.run("screenshot", [:])
+        if Task.isCancelled || stopped { return .text("Stopped.", isError: true) }
+        return result
+    }
+
+    private var missingObservationTarget: ToolResult {
+        .text("No target window. Call target_window to list the windows and pick one.", isError: true)
+    }
+
     func perform(_ name: String, _ input: [String: Any]) async -> ToolResult {
         if Task.isCancelled { return .text("Stopped.", isError: true) }
         if lane == .background, target == nil, !active { return .text("No target window. Call target_window to list the windows and pick one.", isError: true) }
@@ -438,6 +477,7 @@ final class ComputerController {
         if let n = pendingNotice { pendingNotice = nil; return .text(n, isError: true) }
         if lane == .background, !grantActive {
             guard let ladder else { return .text("No target window. Call target_window to list the windows and pick one.", isError: true) }
+            beginBackgroundTaskIfNeeded(for: name)
             actionRunning = true
             defer { actionRunning = false }
             let r = await ladder.run(name, input)
@@ -577,6 +617,7 @@ final class ComputerController {
         if interrupted { return .text("Stopped.", isError: true) }
         guard let ladder else { return .text("No target window.", isError: true) }
         guard let id = (input["id"] as? NSNumber)?.intValue else { return .text("Missing id.", isError: true) }
+        beginBackgroundTaskIfNeeded(for: "click_element")
         actionRunning = true
         defer { actionRunning = false }
         let r = await ladder.clickElement(id: id)
@@ -589,6 +630,7 @@ final class ComputerController {
             if target == nil, !active { return .text("No target window. Call target_window to list the windows and pick one.", isError: true) }
             if !active { begin() }
             guard let ladder else { return .text("No target window.", isError: true) }
+            beginBackgroundTaskIfNeeded(for: "find_on_screen")
             return ladder.find(query)
         }
         if !active { begin() }
