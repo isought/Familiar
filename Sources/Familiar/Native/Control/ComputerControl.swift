@@ -87,6 +87,7 @@ final class ComputerController {
     private var virtualWorkspace: VirtualDisplayWorkspace?
     private let actionApproval = BackgroundActionApproval()
     private var pendingNotice: String?                  // told to the model on its next action
+    private var pendingGrantNotice: String?             // a recoverable hand-back, separate from a task failure
     private var handoff: CheckedContinuation<Bool, Never>?
     private var handoffTimeout: Task<Void, Never>?
     private var grantTask: Task<Void, Never>?
@@ -98,10 +99,31 @@ final class ComputerController {
         return s
     }()
 
+    // Native event dispatch is replaceable for isolated controller transition tests.
+    var dispatchEvent: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
+
+    init() {}
+
+    /// An already prepared, in-memory background session. Native monitors, windows,
+    /// and application activation are owned by begin() in the normal app path.
+    init(backgroundSession: ActionLadder, mouseGranted: Bool) {
+        lane = .background
+        target = backgroundSession.target
+        ladder = backgroundSession
+        space = backgroundSession.space
+        active = true
+        grantActive = mouseGranted
+        backgroundSession.isStopped = { [weak self, weak backgroundSession] in
+            guard let self, let backgroundSession else { return true }
+            return !self.active || self.stopped || self.ladder !== backgroundSession
+        }
+    }
+
     // MARK: session
 
     func reset() {
         virtualWorkspace?.finish(); virtualWorkspace = nil
+        grantRevoked = false; pendingGrantNotice = nil
         stopped = false; stopReason = ""; taskActivation.reset()
     }
 
@@ -272,6 +294,7 @@ final class ComputerController {
         actionApproval.cancel()
         let wasActive = active
         active = false
+        grantRevoked = false; pendingGrantNotice = nil
         if let t = ladder?.target, SkyLightClick.shared.recordOutstanding { SkyLightClick.shared.abortRecord(target: t) }
         virtualWorkspace?.finish(); virtualWorkspace = nil
         guard wasActive else { return }
@@ -339,10 +362,11 @@ final class ComputerController {
         if let l = NSEvent.addLocalMonitorForEvents(matching: [.keyDown], handler: { e in handler(e); return e }) { monitors.append(l) }
     }
 
-    private func humanInput(_ reason: String) {
+    func humanInput(_ reason: String) {
         if grantActive {
             grantRevoked = true
-            pendingNotice = "The user took the mouse back. Continue in the background if you can; otherwise stop and say what is left to do by hand."
+            pendingGrantNotice = "The user took the mouse back (\(reason)); foreground mouse and keyboard control ended. The background task is still active. The previous action may have partly run: do not repeat it automatically. Take a fresh screenshot of the task window before continuing in the background. If the remaining work needs foreground control, explain what is left."
+            Log.info("control: mouse grant revoked (\(reason))")
             leaveGrant(reason: "You took the mouse back")
         } else {
             stop(reason: reason)
@@ -405,6 +429,7 @@ final class ComputerController {
         }
         grantActive = true
         grantRevoked = false
+        pendingGrantNotice = nil
         peek?.phase = .foreground
         conflict?.remove()
         ghost?.setVisible(false)
@@ -426,9 +451,11 @@ final class ComputerController {
         onGrant?(true)
         caption("Has the mouse")
         grantTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            do { try await Task.sleep(nanoseconds: 60_000_000_000) }
+            catch { return }
             guard let self, self.grantActive else { return }
-            self.pendingNotice = "The minute with the mouse is over; it went back to the user. Continue in the background if you can."
+            self.grantRevoked = true
+            self.pendingGrantNotice = "The minute with the mouse is over; foreground mouse and keyboard control ended. The previous action may have partly run: inspect a fresh screenshot of the task window before continuing in the background. Do not repeat it automatically."
             self.leaveGrant(reason: "The minute is up")
         }
         Log.info("control: grant began")
@@ -443,13 +470,28 @@ final class ComputerController {
         for p in huds { p.orderOut(nil) }
         huds.removeAll()
         captions.removeAll()
-        if let ladder { space = ladder.space }
+        if let ladder {
+            // Foreground input may have scrolled, resized, or changed the page
+            // after the last background observation. Discard both coordinates and IDs.
+            ladder.windowPlacementChanged()
+            space = ladder.space
+        }
         conflict?.install()
         if active, !stopped { peek?.phase = .working }
         onGrant?(false)
         if let userApp, NSWorkspace.shared.frontmostApplication?.processIdentifier != userApp.processIdentifier { userApp.activate() }
         caption(reason)
         Log.info("control: grant ended (\(reason))")
+    }
+
+    /// Consume only at a tool boundary, after any in-flight foreground action has
+    /// observed grantRevoked and stopped. A hand-back must not latch the CLI's
+    /// hard computer-error guard or replay input with old display coordinates.
+    func takeGrantNotice() -> ToolResult? {
+        guard !stopped, !Task.isCancelled, let notice = pendingGrantNotice else { return nil }
+        pendingGrantNotice = nil
+        grantRevoked = false
+        return .text(notice)
     }
 
     // MARK: geometry
@@ -539,9 +581,10 @@ final class ComputerController {
     }
 
     func perform(_ name: String, _ input: [String: Any]) async -> ToolResult {
-        if Task.isCancelled { return .text("Stopped.", isError: true) }
+        if Task.isCancelled || stopped { return .text("Stopped.", isError: true) }
         if lane == .background, target == nil, !active { return .text("No target window. Call target_window to list the windows and pick one.", isError: true) }
         if !active { begin() }
+        if let notice = takeGrantNotice() { return notice }
         if interrupted { return .text("Stopped.", isError: true) }
         if let n = pendingNotice { pendingNotice = nil; return .text(n, isError: true) }
         if lane == .background, !grantActive {
@@ -554,7 +597,8 @@ final class ComputerController {
             return stopped ? .text("Stopped.", isError: true) : r
         }
         let r = await performForeground(name, input)
-        if grantRevoked { grantRevoked = false; if let n = pendingNotice { pendingNotice = nil; return .text(n, isError: true) } }
+        if stopped || Task.isCancelled { return .text("Stopped.", isError: true) }
+        if let notice = takeGrantNotice() { return notice }
         return r
     }
 
@@ -685,10 +729,11 @@ final class ComputerController {
 
     /// Background lane: press a control by the id from find_on_screen.
     func clickElement(_ input: [String: Any]) async -> ToolResult {
-        if Task.isCancelled { return .text("Stopped.", isError: true) }
+        if Task.isCancelled || stopped { return .text("Stopped.", isError: true) }
         guard lane == .background else { return .text("click_element works in the background lane; click by coordinates here.", isError: true) }
         if target == nil, !active { return .text("No target window. Call target_window to list the windows and pick one.", isError: true) }
         if !active { begin() }
+        if let notice = takeGrantNotice() { return notice }
         if interrupted { return .text("Stopped.", isError: true) }
         guard let ladder else { return .text("No target window.", isError: true) }
         guard let id = (input["id"] as? NSNumber)?.intValue else { return .text("Missing id.", isError: true) }
@@ -784,7 +829,7 @@ final class ComputerController {
     private func post(_ e: CGEvent?) {
         guard let e else { return }
         e.setIntegerValueField(.eventSourceUserData, value: Self.tag)
-        e.post(tap: .cghidEventTap)
+        dispatchEvent(e)
     }
 
     private func mouse(_ type: CGEventType, _ p: CGPoint, _ button: CGMouseButton, flags: CGEventFlags = []) -> CGEvent? {

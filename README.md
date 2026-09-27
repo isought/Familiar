@@ -41,8 +41,9 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    Recent results and their last screenshots are kept for up to 20 tasks until Familiar quits. Ordinary conversational
    answers stay in chat. One desktop task runs at a time; the current request must finish before another is submitted.
    Background `read_screen` and `look_at_screen` read only the selected target window and fail if no target is available.
-   When something needs the real mouse (a drag, a context menu, a ⌘ shortcut) it asks on the task screen first: **Go ahead** lends it the mouse with the
-   shimmer border as before, and moving the mouse or pressing Esc takes it back. The hand icon on the pad, next to the
+   When something needs the real mouse (a drag, a context menu, a ⌘ shortcut) it asks on the task screen first: **Go ahead** lends it your mouse and keyboard with the
+   shimmer border as before. Pause your own input during that step; typing (including ⌘Tab), clicking, scrolling or moving the cursor takes control back.
+   The hand icon on the pad, next to the
    eye, turns background mode off; then it takes the mouse as before (the shimmer border, a caption per step, moving the
    mouse or pressing Esc stops it). Background Send / Submit / Delete / Pay button presses pause for a one-action approval
    on the task screen; a changed window or control invalidates that approval. A pack can list more

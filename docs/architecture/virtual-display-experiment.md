@@ -90,9 +90,42 @@ On 2026-09-27, macOS 26.6.2 on Apple silicon:
 This evidence supports window placement and capture with the existing browser
 controller. It does not establish reliable Discord typing, simultaneous use of
 two windows of the same app, or compatibility across macOS versions.
-Completion and Stop were tested live; foreground-grant restoration and other
-failure/cancellation cases have automated lifecycle coverage. Graceful quit is
-wired to the same controller cleanup, but was not tested mid-task in this run.
+Completion and Stop were tested live. A later Discord run also exercised
+foreground-grant restoration, as recorded below. Other failure/cancellation
+cases have automated lifecycle coverage. Graceful quit is wired to the same
+controller cleanup, but was not tested mid-task in this run.
+
+### Discord trial and foreground hand-back
+
+The user's run at 21:28–21:29 UTC on 2026-09-27 moved Discord to the virtual
+display and kept capturing it. Accessibility warm-up did not find a web area,
+pressing the message composer produced no verified change, and the typing guard
+refused input because it could not confirm a focused text field. The virtual
+display therefore did not resolve Discord's background-input limitation.
+
+At 21:29:10 the user granted foreground control. Familiar restored the Discord
+window to its original `(0, 34, 1710, 997)` rectangle. About one second later the
+input monitor revoked the grant; the user confirmed they continued using both
+mouse and keyboard and switched away with ⌘Tab. This was an expected hand-back:
+foreground grants temporarily require the user's physical input, even when the
+task normally uses the virtual display. No successful typing was recorded.
+
+The run also exposed a separate controller defect: revocation between tool
+calls was checked as a generic interruption before its explanatory notice could
+be delivered. The flag survived cleanup and could affect later requests. The
+CLI adapter treated the resulting hard error as terminal. Recoverable hand-back
+must abort any in-flight foreground action, deliver its explanation once, and
+allow fresh background observation without carrying stale grant state into the
+next request. A genuine Stop or request cancellation must still halt execution.
+
+That recovery now has nine isolated controller tests. The initial test reproduced
+the stuck hard error on consecutive tool calls; a second regression reproduced
+acceptance of stale coordinates after hand-back. Both pass after separating the
+recoverable grant notice from hard failures, clearing it on reset/end, and
+invalidating the previous window observation on hand-back. Tests also cover
+partly interrupted typing, key release, and real Stop/cancellation precedence.
+The full suite passes 205 tests in 33 suites with an isolated `FAMILIAR_HOME`.
+These tests dispatch no native input and do not send a Discord message.
 
 ## References
 

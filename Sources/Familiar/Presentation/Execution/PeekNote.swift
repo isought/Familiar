@@ -209,9 +209,9 @@ struct PeekNoteView: View {
 
     private func asking(_ reason: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Can I have the mouse for a moment?").font(HandFont.font(size: 14)).foregroundStyle(Pad.ink)
+            Text("Can I borrow your mouse and keyboard?").font(HandFont.font(size: 14)).foregroundStyle(Pad.ink)
             if !reason.isEmpty { Text(reason).font(Pad.body).lineSpacing(Pad.lineSpacing).foregroundStyle(Pad.ink) }
-            Text("Your cursor jumps to \(feed.appName.isEmpty ? "the window" : feed.appName) and comes back. Move it or press Esc to take it back.")
+            Text("This step uses your screen. Please pause your mouse and keyboard while I work. Typing, clicking, scrolling or pressing Esc takes control back.")
                 .font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft)
         }
     }
