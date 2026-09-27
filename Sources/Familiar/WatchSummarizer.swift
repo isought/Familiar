@@ -1,3 +1,4 @@
+import FamiliarContracts
 import Foundation
 
 /// What Claude proposes after watching: enough to write a tool-pack entry. `parsed == false` means the reply was

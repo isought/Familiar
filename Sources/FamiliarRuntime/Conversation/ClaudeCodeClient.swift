@@ -1,24 +1,27 @@
 import Foundation
+import FamiliarContracts
 
 /// Runs the user's unmodified, signed-in Claude Code executable. Familiar owns
 /// conversation history and all tools; the CLI owns authentication and its loop.
-final class ClaudeCodeClient: ConversationClient {
-    var effort: String
-    var maxTokens: Int
-    var maxToolRounds = 8
-    var shouldStop: () -> Bool = { false }
-    var requestTimeout: TimeInterval = 300
-    private let config: Config
+package final class ClaudeCodeClient: ConversationClient {
+    package var effort: String
+    package var maxTokens: Int
+    package var maxToolRounds = 8
+    package var shouldStop: () -> Bool = { false }
+    package var requestTimeout: TimeInterval = 300
+    private let options: ClaudeCodeOptions
+    private let pythonRuntime: PythonRuntime
 
-    init(config: Config) {
-        self.config = config
-        effort = config.effort
-        maxTokens = config.maxTokens
+    package init(options: ClaudeCodeOptions, pythonRuntime: PythonRuntime) {
+        self.options = options
+        self.pythonRuntime = pythonRuntime
+        effort = options.effort
+        maxTokens = options.maxTokens
     }
 
-    static func executable(config: Config) -> String? {
+    package static func executable(path: String) -> String? {
         let fm = FileManager.default
-        let specified = config.claudePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let specified = path.trimmingCharacters(in: .whitespacesAndNewlines)
         let home = fm.homeDirectoryForCurrentUser.path
         let directories = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
             + (ProcessInfo.processInfo.environment["PATH"] ?? "").components(separatedBy: ":")
@@ -33,8 +36,8 @@ final class ClaudeCodeClient: ConversationClient {
     }
 
     /// Never inspect or export credentials: ask the installed CLI about its login.
-    static func authenticationStatus(config: Config) async -> String {
-        guard let executable = executable(config: config) else { return "Claude Code not found. Install it, or set its executable path." }
+    package static func authenticationStatus(path: String) async -> String {
+        guard let executable = executable(path: path) else { return "Claude Code not found. Install it, or set its executable path." }
         do {
             let workspace = try CLIWorkspace()
             defer { workspace.close() }
@@ -67,9 +70,9 @@ final class ClaudeCodeClient: ConversationClient {
         }
     }
 
-    func converse(system: String, tools: [[String: Any]], messages: inout [[String: Any]],
+    package func converse(system: String, tools: [[String: Any]], messages: inout [[String: Any]],
                   executor: @escaping ToolExecutor, onStatus: @escaping (String) -> Void) async throws -> ClaudeReply {
-        guard let executable = Self.executable(config: config) else {
+        guard let executable = Self.executable(path: options.executablePath) else {
             throw ClaudeError(message: "Claude Code was not found. Install it, sign in with claude auth login, then set its path in Familiar Settings if needed.")
         }
         let workspace = try CLIWorkspace()
@@ -81,17 +84,16 @@ final class ClaudeCodeClient: ConversationClient {
         if bindings.isEmpty {
             mcp = ["mcpServers": [String: Any]()]
         } else {
-            let runner = ScriptRunner(config: config)
-            let helper = runner.helpers.appendingPathComponent("claude_mcp.py").path
+            let helper = pythonRuntime.helpers.appendingPathComponent("claude_mcp.py").path
             guard FileManager.default.fileExists(atPath: helper) else {
                 throw ClaudeError(message: "Familiar's Claude Code tool bridge is missing. Rebuild or reinstall Familiar.")
             }
             let command: String
             let args: [String]
-            if let uv = runner.uv {
+            if let uv = pythonRuntime.uv {
                 command = uv
                 args = ["run", "--no-project", "--quiet", helper, workspace.root.path]
-            } else if let python = runner.python {
+            } else if let python = pythonRuntime.python {
                 command = python
                 args = [helper, workspace.root.path]
             } else {
@@ -111,7 +113,7 @@ final class ClaudeCodeClient: ConversationClient {
                     "--permission-mode", "dontAsk", "--max-turns", String(max(1, maxToolRounds + 1)),
                     "--system-prompt", system + "\n\nYou are running inside Familiar. Use only the supplied Familiar tools. Tool names are prefixed with mcp__familiar__; computer actions are named computer__screenshot, computer__left_click, etc. Earlier conversation is historical context. Answer the latest user request."]
         if !bindings.isEmpty { args += ["--allowedTools", "mcp__familiar__*"] }
-        let model = config.claudeModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = options.model.trimmingCharacters(in: .whitespacesAndNewlines)
         if !model.isEmpty { args += ["--model", model] }
         args += ["--effort", effort == "low" ? "low" : effort == "medium" ? "medium" : "high"]
         var environment = Self.environment()

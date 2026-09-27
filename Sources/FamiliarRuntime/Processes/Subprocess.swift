@@ -1,16 +1,16 @@
 import Foundation
 
-struct SubprocessResult {
-    let code: Int32
-    let stdout: String
-    let stderr: String
-    let timedOut: Bool
+package struct SubprocessResult {
+    package let code: Int32
+    package let stdout: String
+    package let stderr: String
+    package let timedOut: Bool
 }
 
-enum Subprocess {
+package enum Subprocess {
     private final class Box { var out = Data(); var err = Data(); var resumed = false; var timedOut = false; let lock = NSLock() }
 
-    static func run(_ exe: String, _ args: [String], stdin: Data? = nil, cwd: URL? = nil,
+    package static func run(_ exe: String, _ args: [String], stdin: Data? = nil, cwd: URL? = nil,
                     env extra: [String: String] = [:], timeout: TimeInterval = 60) async throws -> SubprocessResult {
         try await withCheckedThrowingContinuation { cont in
             let p = Process()

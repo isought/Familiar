@@ -1,58 +1,42 @@
 import Foundation
-
-struct ClaudeError: LocalizedError {
-    let message: String
-    var errorDescription: String? { message }
-}
-
-struct ClaudeReply {
-    let text: String
-    let inputTokens: Int
-    let outputTokens: Int
-    let cacheRead: Int
-    let toolCalls: Int
-}
-
-/// A tool's result: plain text, or content blocks (e.g. an image) for the model.
-struct ToolResult {
-    var content: Any          // String or [[String: Any]] blocks
-    var isError = false
-    static func text(_ s: String, isError: Bool = false) -> ToolResult { ToolResult(content: s, isError: isError) }
-    static func blocks(_ b: [[String: Any]]) -> ToolResult { ToolResult(content: b) }
-}
-
-typealias ToolExecutor = (_ name: String, _ input: [String: Any], _ toolset: String?) async -> ToolResult
+import FamiliarContracts
 
 /// Raw HTTP client for the Claude Messages API with a manual tool-use loop.
-final class ClaudeClient: ConversationClient {
-    var apiKey: String
-    var model: String
-    var effort: String
-    var maxTokens: Int
-    var baseURL: URL
-    var extraHeaders: [String: String]
-    var maxToolRounds = 8
-    var betas: [String] = ["server-side-fallback-2026-07-01"]
+package final class ClaudeClient: ConversationClient {
+    package var apiKey: String
+    package var model: String
+    package var effort: String
+    package var maxTokens: Int
+    package var baseURL: URL
+    package var extraHeaders: [String: String]
+    package var maxToolRounds = 8
+    package var betas: [String] = ["server-side-fallback-2026-07-01"]
     /// Checked before every tool round; when true the loop ends gracefully (pending tool calls get an error result).
-    var shouldStop: () -> Bool = { false }
+    package var shouldStop: () -> Bool = { false }
 
-    private let session: URLSession = {
-        let c = URLSessionConfiguration.default
-        c.timeoutIntervalForRequest = 240
-        return URLSession(configuration: c)
-    }()
+    private let session: URLSession
+    private let logger: (String) -> Void
 
-    init(config: Config, apiKey: String) {
-        self.apiKey = apiKey
-        self.model = config.model
-        self.effort = config.effort
-        self.maxTokens = config.maxTokens
-        self.baseURL = URL(string: config.apiBaseURL.isEmpty ? "https://api.anthropic.com" : config.apiBaseURL) ?? URL(string: "https://api.anthropic.com")!
-        self.extraHeaders = config.apiHeaders
+    package init(options: ClaudeAPIOptions, session: URLSession? = nil,
+                 logger: @escaping (String) -> Void = { _ in }) {
+        self.apiKey = options.apiKey
+        self.model = options.model
+        self.effort = options.effort
+        self.maxTokens = options.maxTokens
+        self.baseURL = URL(string: options.baseURL.isEmpty ? "https://api.anthropic.com" : options.baseURL) ?? URL(string: "https://api.anthropic.com")!
+        self.extraHeaders = options.headers
+        self.logger = logger
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.default
+            configuration.timeoutIntervalForRequest = 240
+            self.session = URLSession(configuration: configuration)
+        }
     }
 
     /// Runs the conversation until Claude stops calling tools. `messages` is updated in place with every turn.
-    func converse(system: String, tools: [[String: Any]], messages: inout [[String: Any]],
+    package func converse(system: String, tools: [[String: Any]], messages: inout [[String: Any]],
                   executor: @escaping ToolExecutor, onStatus: @escaping (String) -> Void) async throws -> ClaudeReply {
         var totalIn = 0, totalOut = 0, cacheRead = 0, toolCalls = 0
         var rounds = 0
@@ -97,7 +81,7 @@ final class ClaudeClient: ConversationClient {
                         block["is_error"] = true
                     } else {
                         if toolset == nil { onStatus("Running \(name.replacingOccurrences(of: "__", with: "/"))…") }
-                        Log.info("tool call: \(toolset.map { "\($0)." } ?? "")\(name) \(Self.describe(input))")
+                        logger("tool call: \(toolset.map { "\($0)." } ?? "")\(name) \(Self.describe(input))")
                         let r = await executor(name, input, toolset)
                         toolCalls += 1
                         block["content"] = r.content
@@ -121,7 +105,7 @@ final class ClaudeClient: ConversationClient {
     }
 
     /// Short, secret-free description of a tool input for the log.
-    static func describe(_ input: [String: Any]) -> String {
+    package static func describe(_ input: [String: Any]) -> String {
         let s = input.map { k, v in "\(k)=\(String(describing: v).prefix(60))" }.sorted().joined(separator: " ")
         return String(s.prefix(200))
     }

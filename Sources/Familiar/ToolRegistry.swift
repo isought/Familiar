@@ -1,3 +1,4 @@
+import FamiliarContracts
 import Foundation
 
 struct MatchRules {

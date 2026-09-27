@@ -1,4 +1,5 @@
 import Foundation
+import FamiliarRuntime
 
 struct ScriptSchema {
     let description: String
@@ -18,21 +19,10 @@ final class ScriptRunner {
     let helpers: URL
 
     init(config: Config) {
-        let fm = FileManager.default
-        var candidates: [String] = []
-        if !config.uvPath.isEmpty { candidates.append((config.uvPath as NSString).expandingTildeInPath) }
-        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("bin/uv").path { candidates.append(bundled) }
-        let home = fm.homeDirectoryForCurrentUser.path
-        candidates += ["\(home)/.local/bin/uv", "/opt/homebrew/bin/uv", "/usr/local/bin/uv"]
-        uv = candidates.first { fm.isExecutableFile(atPath: $0) }
-        python = ["/usr/bin/python3", "/opt/homebrew/bin/python3", "/usr/local/bin/python3"].first { fm.isExecutableFile(atPath: $0) }
-
-        if let r = Bundle.main.resourceURL?.appendingPathComponent("py"), fm.fileExists(atPath: r.appendingPathComponent("run_tool.py").path) {
-            helpers = r
-        } else {
-            // Running from the repo (swift run / selftest): Resources/py next to Package.swift
-            helpers = URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent("Resources/py")
-        }
+        let runtime = PythonRuntime(config: config)
+        uv = runtime.uv
+        python = runtime.python
+        helpers = runtime.helpers
     }
 
     var available: Bool { uv != nil || python != nil }
