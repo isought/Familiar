@@ -1,0 +1,540 @@
+import AppKit
+import Carbon.HIToolbox
+import Combine
+import FamiliarRuntime
+import SwiftUI
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private var config = Config.load()
+    private var statusItem: NSStatusItem!
+    private var panel: BubblePanel!
+    private var hotKey: HotKey?
+    private let watcher = ContextWatcher()
+    private var runner: ScriptRunner!
+    private var registry: ToolRegistry!
+    private var assistant: Assistant!
+    private let shell = ShellState()
+    private let wand = WandController()
+    private let hideHint = HideHint()
+    private let origami = OrigamiFlightController()
+    private let settings = SettingsWindowController()
+    private var savedBubbleFrame: NSRect?
+    private var dragOffset: NSPoint?     // cursor position relative to the panel origin while dragging
+    private let control = ComputerController()
+    private let activities = NativeActivityGate()
+    private lazy var desktop = DesktopExecutionService(control: control, activities: activities)
+    private let execution = ExecutionCoordinator()
+    private lazy var recorder = WatchRecorder(config: config, watcher: watcher)
+    private lazy var learning = WatchLearnComposition.make(recorder: recorder, registry: registry, activities: activities, config: { [weak self] in self?.config ?? Config() })
+    private var bubbleWasVisibleBeforeControl = false
+    private var cancellables = Set<AnyCancellable>()
+
+    private var watcherMenuItem: NSMenuItem!
+    private var hideMenuItem: NSMenuItem!
+    private var screenPermItem: NSMenuItem!
+    private var axPermItem: NSMenuItem!
+    private var toolsMenuItem: NSMenuItem!
+    private var watchMenuItem: NSMenuItem!
+    private var stopWorkMenuItem: NSMenuItem!
+    private var origamiMenuItem: NSMenuItem!
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Log.info("Familiar launching (bundle: \(Bundle.main.bundleIdentifier ?? "none"), config: \(Config.file.path))")
+        seedToolsIfMissing()
+        MascotStyle.current = MascotStyle(rawValue: config.mascotStyle) ?? .innocent
+        Secrets.store = Secrets.Store(rawValue: config.secretsStore) ?? (Signing.isDeveloperID ? .keychain : .file)
+        Log.info("signing: \(Signing.description); secrets: \(Secrets.store.rawValue)")
+        runner = ScriptRunner(config: config)
+        registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
+        assistant = Assistant(config: config, watcher: watcher, registry: registry, shell: shell, learning: learning, execution: execution, desktop: desktop)
+        assistant.onStartWand = { [weak self] in self?.startWand() }
+        assistant.onCancelWand = { [weak self] in if self?.wand.isActive == true { self?.wand.cancel() } }
+        shell.onHideBubble = { [weak self] in self?.hideBubbleWithHint() }
+        shell.onDragBubble = { [weak self] phase in
+            guard let self else { return }
+            let mouse = NSEvent.mouseLocation
+            switch phase {
+            case .moved:
+                if self.dragOffset == nil {
+                    self.dragOffset = NSPoint(x: mouse.x - self.panel.frame.origin.x, y: mouse.y - self.panel.frame.origin.y)
+                }
+                let o = self.dragOffset!
+                self.panel.setFrameOrigin(NSPoint(x: mouse.x - o.x, y: mouse.y - o.y))
+            case .ended:
+                self.dragOffset = nil
+                self.config.bubbleX = self.panel.frame.origin.x
+                self.config.bubbleY = self.panel.frame.origin.y
+                self.config.save()
+            }
+        }
+        shell.onOpenSettings = { [weak self] in self?.openSettings() }
+        if let w = config.cardWidth, let h = config.cardHeight, w >= 340, h >= 400 {
+            shell.cardSize = NSSize(width: w, height: h)
+        }
+        shell.onResizeCard = { [weak self] size, done in
+            guard let self else { return }
+            self.shell.cardSize = size
+            if self.shell.expanded { self.panel.resizeKeepingTopLeft(to: size) }
+            if done { self.config.cardWidth = size.width; self.config.cardHeight = size.height; self.config.save() }
+        }
+        shell.onToggleLarge = { [weak self] in
+            guard let self else { return }
+            let large = BubblePanel.largeExpandedSize
+            let target = self.shell.cardSize.height >= large.height - 1 ? BubblePanel.defaultExpandedSize : large
+            self.shell.onResizeCard?(target, true)
+        }
+        assistant.onSetControlLane = { [weak self] allow, background in
+            guard let self else { return }
+            self.config.allowControl = allow
+            self.config.controlInBackground = background
+            self.config.save()
+            self.assistant.reconfigure(self.config)
+            Log.info("control lane: allow=\(allow) background=\(background)")
+        }
+        shell.onPoke = { [weak self] in
+            guard let self, self.config.pokeHintsShown < 3 else { return }
+            self.config.pokeHintsShown += 1
+            self.config.save()
+            self.hideHint.show(under: self.panel.frame, title: "Double-click to chat", subtitle: "Hold the note to pick up the pen", seconds: 2.5) { [weak self] in
+                self?.shell.expanded = true
+            }
+        }
+        runner.extraEnv = config.env
+        control.maxLongEdge = config.maxImageLongEdge
+        control.hideFromScreenShare = config.hideFromScreenShare
+        control.preciseClicks = config.backgroundPreciseClicks
+        control.onCaption = { [weak self] c in
+            guard let self else { return }
+            self.assistant.status = c
+            if self.control.lane == .background, self.control.active {
+                self.assistant.contextLine = "Working in \(self.assistant.peek.appName) · step \(self.assistant.peek.step) · ⌃⌥Space to stop"
+            }
+        }
+        // Foreground: our windows get out of the way of the real cursor. Background: the pad stays, showing the peek.
+        control.onBegin = { [weak self] in
+            guard let self else { return }
+            self.origami.cancel()
+            if self.control.lane == .background {
+                self.showBackgroundHintIfNeeded()
+                return
+            }
+            self.bubbleWasVisibleBeforeControl = self.panel.isVisible
+            self.shell.expanded = false
+            self.panel.orderOut(nil)          // keep our own windows out of the way of clicks
+        }
+        control.onEnd = { [weak self] in
+            guard let self else { return }
+            if self.control.lane == .background {
+                if self.panel.isVisible, !self.shell.expanded { self.shell.expandQuietly() }   // the receipt is in view, focus stays with the user
+                self.assistant.contextLine = self.watcher.current?.summaryLine ?? self.assistant.contextLine
+                return
+            }
+            if self.bubbleWasVisibleBeforeControl { self.panel.orderFrontRegardless() }
+            self.shell.expanded = true
+        }
+        control.onGrant = { [weak self] entering in
+            guard let self else { return }
+            if entering {
+                self.bubbleWasVisibleBeforeControl = self.panel.isVisible
+                self.shell.expanded = false
+                self.panel.orderOut(nil)
+            } else {
+                if self.bubbleWasVisibleBeforeControl { self.panel.orderFrontRegardless() }
+                self.shell.expandQuietly()
+            }
+        }
+
+        setupEditMenu()
+        setupPanel()
+        setupStatusItem()
+        setupHotKey()
+        setupWatcher()
+        setupWand()
+        requestPermissionsOnFirstRun()
+        Task {
+            await registry.reload()
+            Secrets.migrateKeychainToFile(keys: (config.connectionMode == "api" ? ["ANTHROPIC_API_KEY"] : []) + registry.packs.flatMap(\.requires))
+            if !assistant.hasConnection { assistant.reconfigure(config) }   // pick up a migrated key
+        }
+
+        if !assistant.hasConnection {
+            Log.info(ConversationBackend.setupMessage(config: config))
+        }
+    }
+
+    // MARK: setup
+
+    /// A menu-bar-less app has no Edit menu, and macOS routes ⌘C/⌘V/⌘X/⌘A/⌘Z through the menu, so text fields
+    /// silently ignore them. An invisible main menu with the standard items restores them everywhere.
+    private func setupEditMenu() {
+        let main = NSMenu()
+        let appItem = NSMenuItem(); main.addItem(appItem)
+        appItem.submenu = NSMenu()
+        appItem.submenu?.addItem(NSMenuItem(title: "Quit Familiar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        let editItem = NSMenuItem(); main.addItem(editItem)
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+        let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z"); redo.keyEquivalentModifierMask = [.command, .shift]; edit.addItem(redo)
+        edit.addItem(.separator())
+        edit.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        edit.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        edit.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        edit.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        editItem.submenu = edit
+        NSApp.mainMenu = main
+    }
+
+    private func setupPanel() {
+        panel = BubblePanel(hideFromScreenShare: config.hideFromScreenShare)
+        let host = NSHostingView(rootView: BubbleView(state: assistant, shell: shell, onOrigami: { [weak self] in self?.takeOrigamiFlight() }))
+        host.frame = NSRect(origin: .zero, size: BubblePanel.collapsedSize)
+        panel.contentView = host
+        if let x = config.bubbleX, let y = config.bubbleY,
+           NSScreen.screens.contains(where: { $0.visibleFrame.insetBy(dx: -20, dy: -20).contains(NSPoint(x: x + 42, y: y + 42)) }) {
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+        } else {
+            panel.placeAtBottomRight()
+        }
+        panel.orderFrontRegardless()
+
+        shell.$expanded
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] expanded in
+                guard let self else { return }
+                if self.origami.isFlying {
+                    if expanded { self.origami.cancel() } else { return }
+                }
+                self.panel.resize(to: expanded ? self.shell.cardSize : BubblePanel.collapsedSize, animate: false)
+                if expanded {
+                    if self.shell.consumeQuietExpand() { self.panel.orderFrontRegardless() } else { self.panel.makeKeyAndOrderFront(nil) }
+                } else { self.panel.orderFrontRegardless(); self.panel.resignKey() }
+            }
+            .store(in: &cancellables)
+
+        assistant.$chatBusy.combineLatest(learning.$phase)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] chatBusy, phase in
+                if chatBusy || phase == .recording || phase == .stopping || phase == .summarizing || phase == .saving { self?.origami.cancel() }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func setupStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let img = NSImage(systemSymbolName: "pencil.tip", accessibilityDescription: "Familiar") {
+            img.isTemplate = true
+            statusItem.button?.image = img
+        }
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.autoenablesItems = false
+        menu.addItem(NSMenuItem(title: "Point the Pen   ⌃⌥Space", action: #selector(menuWand), keyEquivalent: ""))
+        watchMenuItem = NSMenuItem(title: "Watch Me", action: #selector(menuWatch), keyEquivalent: "")
+        menu.addItem(watchMenuItem)
+        stopWorkMenuItem = NSMenuItem(title: "Stop Working", action: #selector(menuStopWork), keyEquivalent: "")
+        stopWorkMenuItem.isHidden = true
+        menu.addItem(stopWorkMenuItem)
+        menu.addItem(NSMenuItem(title: "Open Chat", action: #selector(openChat), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Show Bubble", action: #selector(menuShowBubble), keyEquivalent: ""))
+        hideMenuItem = NSMenuItem(title: "Hide Bubble", action: #selector(menuHideBubble), keyEquivalent: "")
+        menu.addItem(hideMenuItem)
+        origamiMenuItem = NSMenuItem(title: "Fold into a Crane", action: #selector(takeOrigamiFlight), keyEquivalent: "")
+        menu.addItem(origamiMenuItem)
+        menu.addItem(.separator())
+        watcherMenuItem = NSMenuItem(title: "Watcher: On", action: #selector(toggleWatcher), keyEquivalent: "")
+        menu.addItem(watcherMenuItem)
+        toolsMenuItem = NSMenuItem(title: "Tools: …", action: #selector(reloadTools), keyEquivalent: "")
+        menu.addItem(toolsMenuItem)
+        menu.addItem(NSMenuItem(title: "Open Tools Folder", action: #selector(openTools), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Open Config File", action: #selector(openConfig), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Open Log", action: #selector(openLog), keyEquivalent: ""))
+        menu.addItem(.separator())
+        screenPermItem = NSMenuItem(title: "Screen Recording: …", action: #selector(fixScreenPermission), keyEquivalent: "")
+        axPermItem = NSMenuItem(title: "Accessibility: …", action: #selector(fixAXPermission), keyEquivalent: "")
+        menu.addItem(screenPermItem)
+        menu.addItem(axPermItem)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit Familiar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        statusItem.menu = menu
+    }
+
+    private func setupHotKey() {
+        hotKey?.unregister()
+        hotKey = nil
+        let spec = config.hotkey.isEmpty ? "control+option+space" : config.hotkey
+        guard let (code, mods) = HotKey.parse(spec) else { Log.info("hotkey: cannot parse \"\(spec)\""); return }
+        hotKey = HotKey(keyCode: code, modifiers: mods) { [weak self] in
+            guard let self else { return }
+            if self.assistant.watching { self.stopWatchingAndShow() }
+            else if self.control.active, self.control.lane == .background { self.control.stop(reason: HotKey.display(self.config.hotkey)) }
+            else if self.wand.isActive { self.wand.cancel() }
+            else { self.startWand() }
+        }
+    }
+
+    /// The first background jobs with the bubble collapsed get a callout saying where the work is happening.
+    private func showBackgroundHintIfNeeded() {
+        guard config.backgroundHintsShown < 2, !shell.expanded, panel.isVisible else { return }
+        config.backgroundHintsShown += 1
+        config.save()
+        hideHint.show(under: panel.frame, title: "Working in \(assistant.peek.appName) while you carry on",
+                      subtitle: "Click me to watch · \(HotKey.display(config.hotkey)) to stop", seconds: 3) { [weak self] in
+            self?.shell.expandQuietly()
+        }
+    }
+
+    private func setupWatcher() {
+        watcher.onChange = { [weak self] ctx in
+            guard let self, !self.assistant.watching else { return }   // the line reads "Watching…" while recording
+            if self.control.active, self.control.lane == .background { return }   // "Working in …" stays put during a job
+            self.assistant.contextLine = ctx.summaryLine
+        }
+        if config.watcherEnabled { watcher.start(interval: config.watcherIntervalSeconds) } else { assistant.contextLine = "Watcher off" }
+    }
+
+    private func setupWand() {
+        wand.onPick = { [weak self] target in
+            guard let self else { return }
+            if !self.panel.isVisible { self.showBubble() }
+            self.assistant.wandPick(target)
+        }
+        wand.sceneProvider = { [weak self] in self?.watcher.sample() ?? self?.watcher.current }
+        wand.notesProvider = { [weak self] ctx in self?.registry.notes(for: ctx) ?? [] }
+        wand.author = { [weak self] in self.map { NoteStore.author($0.config) } ?? NSFullUserName() }
+        wand.onNoteSave = { [weak self] note in self?.assistant.saveNote(note) }
+        wand.onNoteDelete = { [weak self] id in self?.assistant.deleteNote(id) }
+    }
+
+    private func startWand() {
+        origami.cancel()
+        guard !assistant.watching else { assistant.startWand(); return }   // no-op with a status line
+        guard !assistant.busy else { shell.expanded = true; return }
+        shell.expanded = false
+        wand.activate()
+    }
+
+    private func requestPermissionsOnFirstRun() {
+        if !Permissions.accessibilityGranted { Permissions.requestAccessibility() }
+        if !Permissions.screenRecordingGranted { Permissions.requestScreenRecording() }
+        Log.info("permissions: screen=\(Permissions.screenRecordingGranted) accessibility=\(Permissions.accessibilityGranted)")
+    }
+
+    /// First run: copy the bundled example tool packs to ~/.familiar/tools and retire the old knowledge folder.
+    private func seedToolsIfMissing() {
+        let fm = FileManager.default
+        let dir = config.resolvedToolsDir
+        if !fm.fileExists(atPath: dir.path), let bundled = Bundle.main.resourceURL?.appendingPathComponent("tools"), fm.fileExists(atPath: bundled.path) {
+            try? fm.copyItem(at: bundled, to: dir)
+            Log.info("seeded example tool packs into \(dir.path)")
+        }
+        let legacy = Config.dir.appendingPathComponent("knowledge")
+        let seededNames: Set<String> = ["expense-reports.md", "hr-portal.md", "vpn-and-access.md"]
+        if let files = try? fm.contentsOfDirectory(atPath: legacy.path), !files.isEmpty, Set(files).isSubset(of: seededNames) {
+            try? fm.removeItem(at: legacy)
+            Log.info("removed old example knowledge folder (docs now live in tools/<pack>/docs)")
+        }
+    }
+
+    // MARK: menu
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        watcherMenuItem.title = watcher.isRunning ? "Watcher: On" : "Watcher: Off"
+        watchMenuItem.title = assistant.watching ? "Stop Watching   ⌃⌥Space" : "Watch Me"
+        let working = control.active && control.lane == .background
+        stopWorkMenuItem.isHidden = !working
+        stopWorkMenuItem.title = "Stop Working in \(assistant.peek.appName)   \(HotKey.display(config.hotkey))"
+        hideMenuItem.isEnabled = panel.isVisible || origami.isFlying
+        origamiMenuItem.title = origami.isFlying ? "Land Familiar   Esc" : "Fold into a Crane"
+        origamiMenuItem.isEnabled = origami.isFlying || canTakeOrigamiFlight
+        let scripts = registry.packs.reduce(0) { $0 + $1.scripts.count }
+        let missing = registry.missingRequirements(for: registry.packs)
+        toolsMenuItem.title = missing.isEmpty
+            ? "Tools: \(registry.packs.count) packs, \(scripts) scripts — Reload"
+            : "Tools: \(missing.map { "\($0.pack.name) needs \($0.keys.joined(separator: ", "))" }.joined(separator: "; ")) — open Settings"
+        screenPermItem.title = "Screen Recording: " + (Permissions.screenRecordingGranted ? "granted ✓" : "not granted — click to fix")
+        axPermItem.title = "Accessibility: " + (Permissions.accessibilityGranted ? "granted ✓" : "not granted — click to fix")
+    }
+
+    @objc private func menuWand() { startWand() }
+    @objc private func menuStopWork() { control.stop(reason: "menu") }
+    @objc private func menuWatch() {
+        if assistant.watching { stopWatchingAndShow() } else { assistant.startWatching() }
+    }
+
+    /// The pad comes back for the "what were you doing?" note even when the bubble was hidden in the menu bar.
+    private func stopWatchingAndShow() {
+        assistant.stopWatching()
+        if !panel.isVisible { showBubble() }
+    }
+
+    /// Quitting mid-recording leaves nothing behind: the unfinished recording and any draft still under review go.
+    func applicationWillTerminate(_ notification: Notification) {
+        origami.cancel()
+        execution.cancel()
+        control.end()          // never leave a ghost cursor behind
+        assistant.abortWatching()
+    }
+    @objc private func openChat() {
+        origami.cancel()
+        if !panel.isVisible { showBubble() }
+        shell.expanded = true
+    }
+
+    @objc private func menuHideBubble() { if panel.isVisible || origami.isFlying { hideBubbleWithHint() } }
+
+    private var canTakeOrigamiFlight: Bool {
+        !assistant.busy && !assistant.watching && !control.active && !wand.isActive
+    }
+
+    @objc private func takeOrigamiFlight() {
+        if origami.isFlying { origami.cancel(); return }
+        guard canTakeOrigamiFlight else { return }
+        hideHint.dismiss(animated: false)
+        shell.expanded = false
+        // Collapse synchronously before measuring home. The published resize skips a flight already in progress.
+        panel.resize(to: BubblePanel.collapsedSize, animate: false)
+        guard let screen = panel.screen ?? NSScreen.main else { return }
+        let home = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
+        let started = origami.start(home: home, screen: screen, hideFromScreenShare: config.hideFromScreenShare) { [weak self] in
+            guard let self else { return }
+            // A disconnected/resized display must not leave even part of the note beyond the desktop.
+            let center = CGPoint(x: self.panel.frame.midX, y: self.panel.frame.midY)
+            let screens = NSScreen.screens
+            let destination = screens.first { $0.visibleFrame.contains(center) } ?? screens.min {
+                hypot($0.visibleFrame.midX - center.x, $0.visibleFrame.midY - center.y)
+                    < hypot($1.visibleFrame.midX - center.x, $1.visibleFrame.midY - center.y)
+            }
+            if let bounds = destination?.visibleFrame {
+                let frame = self.panel.frame
+                self.panel.setFrameOrigin(CGPoint(
+                    x: min(max(frame.minX, bounds.minX), max(bounds.minX, bounds.maxX - frame.width)),
+                    y: min(max(frame.minY, bounds.minY), max(bounds.minY, bounds.maxY - frame.height))
+                ))
+            }
+            self.panel.orderFrontRegardless()
+            Log.info("origami: returned home")
+        }
+        if started {
+            panel.orderOut(nil)
+            Log.info("origami: folding for a flight")
+        }
+    }
+
+    /// Always available: bring the bubble back, or if it is already on screen, bring it to the front and hop.
+    @objc private func menuShowBubble() {
+        origami.cancel()
+        if panel.isVisible {
+            panel.orderFrontRegardless()
+            hop()
+        } else {
+            showBubble()
+        }
+    }
+
+    private func hop() {
+        let home = panel.frame
+        var up = home; up.origin.y += 18
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.16; ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            self.panel.animator().setFrame(up, display: true)
+        }, completionHandler: {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.22; ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                self.panel.animator().setFrame(home, display: true)
+            }
+        })
+    }
+
+    /// Screen rect of the menu bar icon, if it is on screen.
+    private var statusItemRect: NSRect? {
+        guard let b = statusItem.button, let w = b.window else { return nil }
+        return w.convertToScreen(b.convert(b.bounds, to: nil))
+    }
+
+    /// Fly the bubble into the menu bar icon, pulse the icon, and show a callout saying where it went.
+    private func hideBubbleWithHint() {
+        origami.cancel()
+        shell.expanded = false
+        wand.deactivate()
+        guard let target = statusItemRect else { panel.orderOut(nil); return }
+        let start = panel.frame
+        savedBubbleFrame = start
+        let end = NSRect(x: target.midX - 10, y: target.minY - 6, width: 20, height: 20)
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.4
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            self.panel.animator().setFrame(end, display: true)
+            self.panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            self.panel.orderOut(nil)
+            self.panel.alphaValue = 1
+            self.panel.setFrame(start, display: false)
+            self.hideHint.show(under: target) { [weak self] in self?.showBubble() }
+            self.pulseStatusItem(remaining: 3)
+        })
+    }
+
+    private func showBubble() {
+        origami.cancel()
+        hideHint.dismiss(animated: true)
+        guard !panel.isVisible else { return }
+        let dest = savedBubbleFrame ?? panel.frame
+        if let target = statusItemRect {
+            panel.setFrame(NSRect(x: target.midX - 10, y: target.minY - 6, width: 20, height: 20), display: false)
+            panel.alphaValue = 0
+            panel.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.4
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                self.panel.animator().setFrame(dest, display: true)
+                self.panel.animator().alphaValue = 1
+            }
+        } else {
+            panel.setFrame(dest, display: true)
+            panel.orderFrontRegardless()
+        }
+    }
+
+    private func pulseStatusItem(remaining: Int) {
+        guard remaining > 0, let b = statusItem.button else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in ctx.duration = 0.22; b.animator().alphaValue = 0.15 }, completionHandler: {
+            NSAnimationContext.runAnimationGroup({ ctx in ctx.duration = 0.22; b.animator().alphaValue = 1 }, completionHandler: { [weak self] in
+                self?.pulseStatusItem(remaining: remaining - 1)
+            })
+        })
+    }
+
+    @objc private func toggleWatcher() {
+        if watcher.isRunning { watcher.stop(); assistant.contextLine = "Watcher off" } else { watcher.start(interval: config.watcherIntervalSeconds) }
+        config.watcherEnabled = watcher.isRunning
+        config.save()
+    }
+
+    @objc private func reloadTools() { Task { await registry.reload() } }
+
+    @objc private func openSettings() {
+        origami.cancel()
+        settings.show(config: config, packs: registry.packs, onSave: { [weak self] in
+            guard let self else { return }
+            self.config = self.settings.model.save(into: self.config)
+            self.assistant.reconfigure(self.config)
+            self.runner.extraEnv = self.config.env
+            self.setupHotKey()
+            MascotStyle.current = MascotStyle(rawValue: self.config.mascotStyle) ?? .innocent
+            self.panel.sharingType = self.config.hideFromScreenShare ? .none : .readOnly
+            self.control.maxLongEdge = self.config.maxImageLongEdge
+            self.control.hideFromScreenShare = self.config.hideFromScreenShare
+            self.control.preciseClicks = self.config.backgroundPreciseClicks
+            Log.info("settings saved (connection: \(self.config.connectionMode), ready: \(self.assistant.hasConnection), hotkey: \(self.config.hotkey))")
+        }, onOpenTools: { [weak self] in self?.openTools() }, onReloadTools: { [weak self] in self?.reloadTools() })
+    }
+    @objc private func openTools() { NSWorkspace.shared.open(config.resolvedToolsDir) }
+    @objc private func openConfig() { NSWorkspace.shared.open(Config.file) }
+    @objc private func openLog() { NSWorkspace.shared.open(Config.dir.appendingPathComponent("familiar.log")) }
+    @objc private func fixScreenPermission() { if !Permissions.requestScreenRecording() { Permissions.openScreenRecordingSettings() } }
+    @objc private func fixAXPermission() { Permissions.requestAccessibility(); Permissions.openAccessibilitySettings() }
+}

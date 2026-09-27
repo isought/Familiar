@@ -202,11 +202,14 @@ and `.pkg` (signed too if a **Developer ID Installer** certificate exists). `scr
 automatically when present; Developer ID builds keep secrets in the Keychain (`secretsStore: auto`).
 IT can push the .pkg via MDM with a PPPC profile that pre-approves Accessibility; Screen Recording cannot be
 pre-approved, so the user clicks one prompt on first launch, once per install.
-- Layout, `Sources/Familiar/`: `WandOverlay` (overlay, hit test, ink, stickers, note editor, cursor), `Notes` (note anchors and store,
-  Accessibility scan), `ScreenCapture` (ScreenCaptureKit, annotate, crop),
-  `WatchRecorder` + `WatchSummarizer` (Watch me: passive recording, write-up, pack writer),
-  `ContextWatcher` (Accessibility), `ToolRegistry` + `ScriptRunner` + `BuiltinTools` (packs), `ClaudeClient` (raw HTTP, tool loop), `ClaudeCodeClient` (local CLI and tool bridge),
-  `Assistant` (flows, history), `BubblePanel` (NSPanel + SwiftUI), `AppDelegate` (menu bar, hotkey).
+- Source layout:
+  - `Sources/FamiliarContracts`: shared conversation/tool interfaces and results.
+  - `Sources/FamiliarRuntime`: API/CLI providers, conversation history, execution lifecycle, tool routing, and process helpers; no app/native imports.
+  - `Sources/Familiar/App`: composition, desktop activity ownership, shell state, app entry point, and headless/render commands.
+  - `Sources/Familiar/Features`: Chat, WatchLearn, ContextNotes, Companion, and Settings. Each workflow keeps its own state; chat presents Watch events without owning recordings.
+  - `Sources/Familiar/Native`: Accessibility context/hit testing, screen capture, control mechanics, and permissions/hotkeys.
+  - `Sources/Familiar/Presentation`: shared shell surfaces and execution preview; `Configuration`, `ToolPacks`, and `Knowledge` retain current settings, pack storage, and context assembly.
+- Cleanup goals and integration boundaries: [architecture plan](docs/architecture/next-phase-structure.md).
 - Python helpers in `Resources/py/`: `introspect.py` (ast-only schema extraction), `run_tool.py` (executes `run(**args)`), `claude_mcp.py` (private CLI tool bridge).
 
 ## License
