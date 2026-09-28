@@ -15,7 +15,8 @@ struct MorningLauncherView: View {
     let people: () -> Void
     private var count: Int { store.cards.filter { $0.disposition == .unreviewed }.count }
     var body: some View {
-        Button(action: open) {
+        ZStack {
+            WindowDragHandle(onClick: open)
             VStack(spacing: 0) {
                 ZStack(alignment: .topTrailing) {
                     MorningFolderDrawing().frame(width: 61, height: 46)
@@ -28,11 +29,14 @@ struct MorningLauncherView: View {
                 }
                 Text("Morning").font(.system(size: 11, weight: .medium)).foregroundStyle(Pad.ink)
                     .padding(.horizontal, 6).padding(.vertical, 3).background(Pad.fieldPaper.opacity(0.92), in: Capsule())
-            }.frame(width: 86, height: 78)
+            }.allowsHitTesting(false)
         }
-        .buttonStyle(.plain)
+        .frame(width: 86, height: 78)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Open morning folders, \(count) files to review")
-        .help("Open your morning files")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { open() }
+        .help("Click to open. Drag to move.")
         .contextMenu { Button("Open morning folders", action: open); Button("Who’s Who", action: people) }
     }
 }
@@ -107,9 +111,15 @@ struct MorningFilesView: View {
             if navigation.route != .folders {
                 Button { back() } label: { Image(systemName: "chevron.left") }.buttonStyle(.plain).accessibilityLabel("Back")
             }
-            Image(systemName: "folder").foregroundStyle(Pad.inkSoft)
-            Text(heading).font(HandFont.font(size: 18)).lineLimit(1)
-            Spacer()
+            WindowDragHandle()
+                .overlay {
+                    HStack(spacing: 10) {
+                        Image(systemName: "folder").foregroundStyle(Pad.inkSoft)
+                        Text(heading).font(HandFont.font(size: 18)).lineLimit(1)
+                        Spacer()
+                    }.allowsHitTesting(false)
+                }
+                .frame(height: 24)
             Menu {
                 Button("Create a note") { createNote() }
                 Button("Who’s Who") { navigation.route = .people }
@@ -166,7 +176,7 @@ struct MorningFilesView: View {
                 if store.cards.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Your morning starts small.").font(HandFont.font(size: 24))
-                        Text("Keep a note here, add the people behind it, and decide what you’d like Familiar to help with.")
+                        Text("Keep a note here, review what needs your attention, and decide what you’d like Familiar to help with.")
                             .font(.system(size: 14)).foregroundStyle(Pad.inkSoft).fixedSize(horizontal: false, vertical: true)
                         HStack {
                             Button("Create a note") { createNote() }.buttonStyle(MorningActionButton(primary: true))
@@ -187,7 +197,6 @@ struct MorningFilesView: View {
                 HStack {
                     Button { createNote() } label: { Label("New note", systemImage: "plus") }
                     Spacer()
-                    Button { navigation.route = .people } label: { Label("Who’s Who", systemImage: "person.2") }
                 }.buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundStyle(Pad.penInk)
             }.padding(22)
         }

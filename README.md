@@ -92,7 +92,9 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
 9. **Morning Files**: a small folder in the upper-left opens categorized folders and a spread of files. Choose any file
    to read its sources, people, reasoning, unknowns and exact proposed action. **Ignore** files it away, **I'll do it**
    keeps it yours, and handing it to Familiar saves the action before the file flies to the background task screen.
-   Add your own folders and files, and keep roles, relationships and identities in **Who's Who**. The retrieval menu
+   Drag the small folder itself or a window's header to move it; the morning windows and background task list remember
+   their positions. Add your own folders and files, and configure roles, relationships and identities through
+   **… → Who's Who**. The retrieval menu
    brings back filed items and completed results. Everything is stored privately under `~/.familiar/morning/`.
    **Try sample files** adds explicitly fictional examples; these can only prepare local drafts and analysis.
    Preparation uses your configured Claude connection with no tools. **Work in an app** uses existing desktop control

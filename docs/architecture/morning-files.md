@@ -3,9 +3,13 @@
 ## Product boundary
 
 Morning Files is an independent entry point for reviewing and handing over work.
-A small folder sits at the upper-left of a physical display. Opening it reveals
+A small folder starts at the upper-left of a physical display. Opening it reveals
 categories, then freely selectable paper files. Reading or closing a file does not
 make a decision. Who's Who supplies editable relationships and working context.
+Its management entry stays inside the options menu. The launcher can be dragged,
+and morning windows and the task list move by their headers. Their preferred
+positions persist in native window preferences, independently of card storage;
+layout changes keep them within a connected physical display.
 
 This version provides local authoring, persistence, and execution of explicitly
 chosen actions. It does not ingest Outlook or Jira, generate a daily briefing,

@@ -14,15 +14,21 @@ import SwiftUI
     private var expanded = false
     private var positioned = false
     private var adjustingFrame = false
+    private let placement = FloatingWindowPlacement("backgroundTasks", anchor: .topRight)
 
     init(store: BackgroundTaskStore, hideFromScreenShare: Bool, morning: MorningStore? = nil,
          onCancelQueued: ((UUID) -> Void)? = nil, onOpenCard: ((UUID) -> Void)? = nil) {
         self.store = store
         panel = BackgroundTaskPanel(hideFromScreenShare: hideFromScreenShare)
         super.init()
+        if let frame = placement.restore(size: panel.frame.size) {
+            panel.setFrame(frame, display: false)
+            positioned = true
+        }
         panel.delegate = self
         panel.contentView = NSHostingView(rootView: BackgroundTaskPanelView(store: store, feed: store.feed,
-            onCancelQueued: onCancelQueued, onOpenCard: onOpenCard))
+            onCancelQueued: onCancelQueued, onOpenCard: onOpenCard,
+            onDragFinished: { [weak self] _ in self?.finishedDragging() }))
         if let morning {
             store.syncMorning(morning.workItems, message: morning.queueMessage)
             morningObservation = morning.$workspace.combineLatest(morning.$queueMessage)
@@ -88,10 +94,13 @@ import SwiftUI
     func windowDidMove(_ notification: Notification) {
         // Allow the drag to cross between displays; constrain the final position after mouse-up.
         guard !adjustingFrame, NSEvent.pressedMouseButtons == 0 else { return }
-        keepOnScreen()
+        finishedDragging()
     }
 
-    fileprivate func finishedDragging() { keepOnScreen() }
+    private func finishedDragging() {
+        keepOnScreen()
+        placement.save(panel.frame)
+    }
 
     private func updatePanel() {
         guard requestedVisible, !hiddenForForegroundGrant else {
@@ -125,21 +134,13 @@ import SwiftUI
 
     private func clamped(_ frame: NSRect, to visible: NSRect?) -> NSRect {
         guard let visible else { return frame }
-        var result = frame
-        result.size.width = min(result.width, visible.width)
-        result.size.height = min(result.height, visible.height)
-        result.origin.x = min(max(result.minX, visible.minX), visible.maxX - result.width)
-        result.origin.y = min(max(result.minY, visible.minY), visible.maxY - result.height)
-        return result
+        return FloatingWindowPlacement.clamped(frame, to: visible)
     }
 
     /// The preview belongs on a user's display even when the target's key window
     /// makes AppKit's `main` screen point at Familiar's virtual workspace.
     private var presentationScreen: NSScreen? {
-        let screens = NSScreen.screens.filter {
-            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value != VirtualDisplayWorkspace.activeDisplayID
-        }
-        return screens.first { $0 === panel.screen } ?? screens.first { $0 === NSScreen.main } ?? screens.first
+        FloatingWindowPlacement.screen(for: positioned ? panel.frame : .zero, fallback: NSScreen.main)
     }
 }
 
@@ -171,6 +172,7 @@ struct BackgroundTaskPanelView: View {
     @ObservedObject var feed: PeekFeed
     var onCancelQueued: ((UUID) -> Void)? = nil
     var onOpenCard: ((UUID) -> Void)? = nil
+    var onDragFinished: ((NSWindow) -> Void)? = nil
 
     private var showingLive: Bool { store.isShowingActiveTask }
     private var needsDecision: Bool {
@@ -249,12 +251,18 @@ struct BackgroundTaskPanelView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles").font(.system(size: 11)).foregroundStyle(Pad.penInk)
-                Text("Background task").font(HandFont.font(size: 13))
-                Spacer(minLength: 0)
-            }
-            .background(TaskPanelDragArea())
+            WindowDragHandle { window in onDragFinished?(window) }
+                .overlay(alignment: .leading) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles").font(.system(size: 11)).foregroundStyle(Pad.penInk)
+                        Text("Background task").font(HandFont.font(size: 13))
+                        Spacer(minLength: 0)
+                    }
+                    .allowsHitTesting(false)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 18)
+                .help("Drag to move background tasks")
             historyMenu
             Button { store.toggleExpanded() } label: {
                 Image(systemName: store.isExpanded ? "chevron.up" : "chevron.down")
@@ -422,18 +430,5 @@ private struct TaskActionStyle: ButtonStyle {
             .background(accent ? Pad.penInk : Pad.paperDeep.opacity(configuration.isPressed ? 0.6 : 0.3),
                         in: RoundedRectangle(cornerRadius: 6))
             .opacity(configuration.isPressed ? 0.75 : 1)
-    }
-}
-
-private struct TaskPanelDragArea: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { DragView() }
-    func updateNSView(_ nsView: NSView, context: Context) {}
-
-    private final class DragView: NSView {
-        override func mouseDown(with event: NSEvent) {
-            guard let window else { return }
-            window.performDrag(with: event)
-            (window.delegate as? BackgroundTaskPanelController)?.finishedDragging()
-        }
     }
 }

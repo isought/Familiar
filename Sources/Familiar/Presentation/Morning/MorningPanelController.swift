@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 import QuartzCore
 
-@MainActor final class MorningPanelController: NSObject {
+@MainActor final class MorningPanelController: NSObject, NSWindowDelegate, WindowDragHandling {
     private let store: MorningStore
     private let navigation = MorningNavigation()
     private let launcher: MorningPanel
@@ -13,6 +13,12 @@ import QuartzCore
     private var flight: NSPanel?
     private var hiddenForForegroundGrant = false
     private var contentsRequested = false
+    private let launcherPlacement = FloatingWindowPlacement("morningLauncher")
+    private let filesPlacement = FloatingWindowPlacement("morningFiles")
+    private var launcherPositioned = false
+    private var filesTopLeft: NSPoint?
+    private var adjustingFrame = false
+    private weak var draggedWindow: NSWindow?
     var onHandoff: ((MorningWorkItem) -> Void)?
     var handoffDestination: (() -> NSRect?)?
 
@@ -22,6 +28,8 @@ import QuartzCore
         launcher = MorningPanel(title: "Morning folder", hideFromScreenShare: hideFromScreenShare)
         panel = MorningPanel(title: "Morning files", hideFromScreenShare: hideFromScreenShare)
         super.init()
+        launcher.delegate = self
+        panel.delegate = self
         launcher.hasShadow = false
         launcher.contentView = NSHostingView(rootView: MorningLauncherView(store: store, open: { [weak self] in
             guard let self else { return }
@@ -100,20 +108,56 @@ import QuartzCore
 
     private func hideContents() { contentsRequested = false; panel.orderOut(nil) }
 
-    private var userScreen: NSScreen? {
-        let screens = NSScreen.screens.filter {
-            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value != VirtualDisplayWorkspace.activeDisplayID
+    private func position() {
+        guard draggedWindow == nil else { return }
+        guard let initialScreen = FloatingWindowPlacement.screen(for: launcher.frame, fallback: NSScreen.main) else { return }
+        let visible = initialScreen.visibleFrame
+        let iconSize = NSSize(width: 86, height: 78)
+        let icon = launcherPositioned ? launcher.frame : launcherPlacement.restore(size: iconSize)
+            ?? NSRect(x: visible.minX + 18, y: visible.maxY - 92, width: iconSize.width, height: iconSize.height)
+        let launcherScreen = FloatingWindowPlacement.screen(for: icon, fallback: initialScreen) ?? initialScreen
+        adjustingFrame = true
+        defer { adjustingFrame = false }
+        launcher.setFrame(FloatingWindowPlacement.clamped(icon, to: launcherScreen.visibleFrame), display: true)
+        launcherPositioned = true
+
+        if filesTopLeft == nil {
+            if let saved = filesPlacement.restore(size: NSSize(width: 650, height: 380)) {
+                filesTopLeft = NSPoint(x: saved.minX, y: saved.maxY)
+            } else {
+                filesTopLeft = NSPoint(x: launcher.frame.minX, y: launcher.frame.minY - 8)
+            }
         }
-        return screens.first { $0 === launcher.screen } ?? screens.first { $0 === NSScreen.main } ?? screens.first
+        guard let anchor = filesTopLeft else { return }
+        let height = Self.preferredHeight(for: navigation.route, isEmpty: store.cards.isEmpty)
+        let requested = NSRect(x: anchor.x, y: anchor.y - height, width: 650, height: height)
+        let screen = FloatingWindowPlacement.screen(for: requested, fallback: launcherScreen) ?? launcherScreen
+        panel.setFrame(FloatingWindowPlacement.clamped(requested, to: screen.visibleFrame), display: true)
     }
 
-    private func position() {
-        guard let visible = userScreen?.visibleFrame else { return }
-        let icon = NSRect(x: visible.minX + 18, y: visible.maxY - 92, width: 86, height: 78)
-        launcher.setFrame(icon, display: true)
-        let width = min(CGFloat(650), visible.width - 36)
-        let height = min(Self.preferredHeight(for: navigation.route, isEmpty: store.cards.isEmpty), visible.height - 118)
-        panel.setFrame(NSRect(x: visible.minX + 18, y: icon.minY - height - 8, width: width, height: height), display: true)
+    func windowDidMove(_ notification: Notification) {
+        guard !adjustingFrame, draggedWindow == nil, NSEvent.pressedMouseButtons == 0,
+              let window = notification.object as? NSWindow else { return }
+        finishedDragging(window)
+    }
+
+    func beganDragging(_ window: NSWindow) { draggedWindow = window }
+
+    func finishedDragging(_ window: NSWindow) {
+        guard !adjustingFrame, window === launcher || window === panel,
+              let screen = FloatingWindowPlacement.screen(for: window.frame) else { return }
+        draggedWindow = nil
+        adjustingFrame = true
+        window.setFrame(FloatingWindowPlacement.clamped(window.frame, to: screen.visibleFrame), display: true)
+        adjustingFrame = false
+        if window === launcher {
+            launcherPositioned = true
+            launcherPlacement.save(window.frame)
+        } else {
+            filesTopLeft = NSPoint(x: window.frame.minX, y: window.frame.maxY)
+            filesPlacement.save(window.frame)
+        }
+        position()
     }
 
     static func preferredHeight(for route: MorningNavigation.Route, isEmpty: Bool = false) -> CGFloat {
@@ -185,6 +229,7 @@ private final class MorningPanel: NSPanel {
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = true
         isReleasedWhenClosed = false
+        isMovableByWindowBackground = false
         sharingType = hideFromScreenShare ? .none : .readOnly
         animationBehavior = .utilityWindow
     }
