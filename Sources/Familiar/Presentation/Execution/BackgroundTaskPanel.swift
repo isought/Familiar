@@ -7,6 +7,7 @@ import SwiftUI
     private let panel: BackgroundTaskPanel
     private var observation: AnyCancellable?
     private var focusObservation: AnyCancellable?
+    private var morningObservation: AnyCancellable?
     private var screenObservation: NSObjectProtocol?
     private var hiddenForForegroundGrant = false
     private var requestedVisible = false
@@ -14,12 +15,21 @@ import SwiftUI
     private var positioned = false
     private var adjustingFrame = false
 
-    init(store: BackgroundTaskStore, hideFromScreenShare: Bool) {
+    init(store: BackgroundTaskStore, hideFromScreenShare: Bool, morning: MorningStore? = nil,
+         onCancelQueued: ((UUID) -> Void)? = nil, onOpenCard: ((UUID) -> Void)? = nil) {
         self.store = store
         panel = BackgroundTaskPanel(hideFromScreenShare: hideFromScreenShare)
         super.init()
         panel.delegate = self
-        panel.contentView = NSHostingView(rootView: BackgroundTaskPanelView(store: store, feed: store.feed))
+        panel.contentView = NSHostingView(rootView: BackgroundTaskPanelView(store: store, feed: store.feed,
+            onCancelQueued: onCancelQueued, onOpenCard: onOpenCard))
+        if let morning {
+            store.syncMorning(morning.workItems, message: morning.queueMessage)
+            morningObservation = morning.$workspace.combineLatest(morning.$queueMessage)
+                .receive(on: RunLoop.main).sink { [weak store] workspace, message in
+                    store?.syncMorning(workspace.workItems, message: message)
+                }
+        }
         observation = store.$isVisible.combineLatest(store.$isExpanded)
             // Published emits before storing its value. Resizing synchronously can force SwiftUI
             // to lay out the old compact body, leaving a completed task blank until another update.
@@ -55,11 +65,20 @@ import SwiftUI
         panel.sharingType = hideFromScreenShare ? .none : .readOnly
     }
 
+    /// A handoff can animate toward the dock before the visibility subscriber runs.
+    var landingFrame: NSRect? {
+        guard let visible = presentationScreen?.visibleFrame else { return nil }
+        if positioned { return clamped(panel.frame, to: visible) }
+        return NSRect(x: visible.maxX - 340, y: visible.maxY - 104, width: 320, height: 84)
+    }
+
     func close() {
         observation?.cancel()
         observation = nil
         focusObservation?.cancel()
         focusObservation = nil
+        morningObservation?.cancel()
+        morningObservation = nil
         if let screenObservation { NotificationCenter.default.removeObserver(screenObservation) }
         screenObservation = nil
         panel.orderOut(nil)
@@ -150,6 +169,8 @@ private final class BackgroundTaskPanel: NSPanel {
 struct BackgroundTaskPanelView: View {
     @ObservedObject var store: BackgroundTaskStore
     @ObservedObject var feed: PeekFeed
+    var onCancelQueued: ((UUID) -> Void)? = nil
+    var onOpenCard: ((UUID) -> Void)? = nil
 
     private var showingLive: Bool { store.isShowingActiveTask }
     private var needsDecision: Bool {
@@ -159,9 +180,14 @@ struct BackgroundTaskPanelView: View {
         default: return false
         }
     }
-    private var title: String { showingLive ? store.activeTask?.title ?? "Background task" : store.selectedRecord?.title ?? "Background tasks" }
+    private var title: String {
+        showingLive ? store.activeTask?.title ?? "Background task"
+            : store.selectedRecord?.title ?? store.selectedMorningWork?.action.title ?? "Background tasks"
+    }
     private var state: String {
-        guard showingLive else { return store.selectedRecord?.outcome.label ?? "Ready" }
+        guard showingLive else {
+            return store.selectedRecord?.outcome.label ?? store.selectedMorningWork?.status.label ?? "Ready"
+        }
         switch feed.phase {
         case .asking, .confirming: return "Needs you"
         case .thinking: return "Thinking"
@@ -189,6 +215,15 @@ struct BackgroundTaskPanelView: View {
                             PeekNoteView(feed: feed, decisionFirst: true, showsStop: false)
                         } else if let record = store.selectedRecord {
                             result(record)
+                        } else if let work = store.selectedMorningWork {
+                            savedWork(work)
+                        }
+                        if let message = store.queueMessage {
+                            Text(message).font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if store.queuedCount > 0 {
+                            queue
                         }
                     }
                     .padding(.horizontal, 14)
@@ -248,6 +283,9 @@ struct BackgroundTaskPanelView: View {
                     } else if let record = store.selectedRecord {
                         Text("· \(duration(record.elapsed))").foregroundStyle(Pad.inkSoft)
                     }
+                    if store.queuedCount > 0 {
+                        Text("· \(store.queuedCount) waiting").foregroundStyle(Pad.inkSoft)
+                    }
                 }
                 .font(.system(size: 10.5, weight: .medium))
                 .lineLimit(1)
@@ -278,6 +316,15 @@ struct BackgroundTaskPanelView: View {
             ForEach(store.history) { record in
                 Button("\(record.outcome.label) · \(menuTitle(record.title))") { store.selectTask(id: record.id) }
             }
+            let saved = store.morningWork.reversed().filter { item in
+                item.id != store.activeTask?.id && !store.history.contains(where: { $0.id == item.id })
+            }
+            if !saved.isEmpty {
+                Divider()
+                ForEach(saved) { item in
+                    Button("\(item.status.label) · \(menuTitle(item.action.title))") { store.selectTask(id: item.id) }
+                }
+            }
             if !store.hasTasks { Text("No recent tasks") }
         } label: { Image(systemName: "clock.arrow.circlepath") }
         .menuStyle(.borderlessButton)
@@ -289,7 +336,7 @@ struct BackgroundTaskPanelView: View {
 
     private func result(_ record: BackgroundTaskRecord) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            resultText(record)
+            TaskResultText(text: record.text.isEmpty ? record.outcome.label : record.text)
                 .font(.system(size: 12.5)).lineSpacing(3)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -302,9 +349,57 @@ struct BackgroundTaskPanelView: View {
             if !record.metaLine.isEmpty {
                 Text(record.metaLine).font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft)
             }
-            Text("Recent tasks are kept until Familiar quits.")
-                .font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
+            if let work = store.morningWork.first(where: { $0.id == record.id }) {
+                openCardButton(work)
+                Text(!work.status.isPending && work.result == record.text
+                     ? "The result is saved with your file."
+                     : "This result is available in this session. It has not been saved with your file.")
+                    .font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
+            } else {
+                Text("Recent tasks are kept until Familiar quits.")
+                    .font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
+            }
         }
+    }
+
+    private var queue: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Divider()
+            Text("Waiting for Familiar").font(.system(size: 11, weight: .semibold)).foregroundStyle(Pad.inkSoft)
+            ForEach(store.morningWork.filter { $0.status == .queued }) { item in
+                HStack(alignment: .top, spacing: 8) {
+                    Button { store.selectTask(id: item.id) } label: {
+                        Text(item.action.title).font(.system(size: 11)).multilineTextAlignment(.leading)
+                    }.buttonStyle(.plain)
+                    Spacer(minLength: 0)
+                    Button { onCancelQueued?(item.id) } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).font(.system(size: 9, weight: .semibold))
+                        .accessibilityLabel("Cancel queued task: \(item.action.title)")
+                }
+            }
+        }
+    }
+
+    private func savedWork(_ item: MorningWorkItem) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TaskResultText(text: item.result.isEmpty ? item.action.instruction : item.result)
+                .font(.system(size: 12.5)).lineSpacing(3).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if item.status == .queued {
+                Text("Saved in the queue. Familiar runs one task at a time when it’s ready.")
+                    .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
+                Button("Cancel this task") { onCancelQueued?(item.id) }
+                    .buttonStyle(TaskActionStyle(accent: false))
+            }
+            openCardButton(item)
+        }
+    }
+
+    private func openCardButton(_ item: MorningWorkItem) -> some View {
+        Button { onOpenCard?(item.cardID) } label: {
+            Label("Open original file", systemImage: "doc.text")
+                .font(.system(size: 11, weight: .medium))
+        }.buttonStyle(.plain).foregroundStyle(Pad.penInk)
     }
 
     private func duration(_ elapsed: TimeInterval) -> String {
@@ -316,13 +411,6 @@ struct BackgroundTaskPanelView: View {
         title.count > 46 ? String(title.prefix(45)) + "…" : title
     }
 
-    private func resultText(_ record: BackgroundTaskRecord) -> Text {
-        let text = record.text.isEmpty ? record.outcome.label : record.text
-        if let attributed = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-            return Text(attributed)
-        }
-        return Text(text)
-    }
 }
 
 private struct TaskActionStyle: ButtonStyle {

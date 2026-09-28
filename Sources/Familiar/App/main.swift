@@ -35,6 +35,11 @@ if CommandLine.arguments.contains("--record-synthetic") {
         do { try BackgroundTaskRender.render(to: URL(fileURLWithPath: CommandLine.arguments[index + 1])) }
         catch { print("Background task render failed: \(error)"); exit(1) }
     }
+} else if let index = CommandLine.arguments.firstIndex(of: "--render-morning"), index + 1 < CommandLine.arguments.count {
+    MainActor.assumeIsolated {
+        do { try MorningRender.render(to: URL(fileURLWithPath: CommandLine.arguments[index + 1])) }
+        catch { print("Morning files render failed: \(error)"); exit(1) }
+    }
 } else if CommandLine.arguments.contains("--render-pen") {
     MainActor.assumeIsolated { runRenderPen() }
 } else if CommandLine.arguments.contains("--ask") {

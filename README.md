@@ -39,7 +39,8 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    the task screen keeps execution running, and completion respects that choice. Reopen it through the menu bar's
    **Background Tasks…** entry or by clicking Familiar while a task runs. The task header can be dragged to another spot.
    Recent results and their last screenshots are kept for up to 20 tasks until Familiar quits. Ordinary conversational
-   answers stay in chat. One desktop task runs at a time; the current request must finish before another is submitted.
+   answers stay in chat. One desktop task runs at a time. Chat waits for its current request to finish; Morning Files can
+   hand off several actions to a saved queue, which runs them one at a time.
    Background `read_screen` and `look_at_screen` read only the selected target window and fail if no target is available.
    When something needs the real mouse (a drag, a context menu, a ⌘ shortcut) it asks on the task screen first.
    Without the separate display, this explicitly asks to use your screen, mouse and keyboard, and **Go ahead** begins
@@ -88,6 +89,17 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    Headless: `--record-synthetic <dir>` (a fake recording from the current screen) and
    `--summarize-recording <dir> ["purpose"] [--tools-root <dir>] [--keep] [--claude-cli]` (prints the draft JSON; keeps into a temp folder by default).
 
+9. **Morning Files**: a small folder in the upper-left opens categorized folders and a spread of files. Choose any file
+   to read its sources, people, reasoning, unknowns and exact proposed action. **Ignore** files it away, **I'll do it**
+   keeps it yours, and handing it to Familiar saves the action before the file flies to the background task screen.
+   Add your own folders and files, and keep roles, relationships and identities in **Who's Who**. The retrieval menu
+   brings back filed items and completed results. Everything is stored privately under `~/.familiar/morning/`.
+   **Try sample files** adds explicitly fictional examples; these can only prepare local drafts and analysis.
+   Preparation uses your configured Claude connection with no tools. **Work in an app** uses existing desktop control
+   and approvals. Queue entries survive restarts; interrupted work returns for review rather than replaying actions.
+   This first version is entered locally: email/Jira imports, automatic morning generation and knowledge-base connections
+   are not connected yet. See [the implementation boundaries](docs/architecture/morning-files.md).
+
 ## Try it on another Mac (5 minutes)
 ```bash
 xcode-select --install                      # Command Line Tools, if `swift --version` fails
@@ -101,7 +113,8 @@ Then, once:
 2. Right-click the note → **Settings…** → choose **API key** and paste an Anthropic API key, or choose **Local Claude CLI** to use your installed, signed-in Claude Code → **Save**.
 3. Menu bar → **Watch Me**, do a short task in the app you want it to learn, then **Stop Watching** (or ⌃⌥Space). Answer "what were you doing?" or skip it, read the draft, **Keep it**. It becomes a tool pack under `~/.familiar/tools/`.
 
-No packs are needed to start: watching creates them. Nothing leaves the machine except the write-up request you trigger.
+No packs are needed to start: watching creates them. Chat, recording write-ups, and delegated actions send their selected
+context to your configured Claude connection. Creating and editing Morning Files or Who’s Who entries stays local.
 
 ## Requirements
 - macOS 14+, Xcode Command Line Tools (Swift 5.9+). No Xcode needed.
@@ -118,6 +131,7 @@ No packs are needed to start: watching creates them. Nothing leaves the machine 
 .build/release/Familiar --render-origami /tmp/origami [--style innocentV4]   # folding stages and crane wing poses as PNGs
 .build/release/Familiar --render-card /tmp/card [--states]   # the pad with a pick, a note sticker and answers, as PNGs
 .build/release/Familiar --render-background-task /tmp/tasks # task screen states, fabricated content, no model or desktop capture
+.build/release/Familiar --render-morning /tmp/morning      # native folder, files, people and queue with fictional local data
 .build/release/Familiar --render-pen /tmp/pen               # the pen overlay over a fake page: stickers and the note editor, as a PNG
 build/Familiar.app/Contents/MacOS/Familiar --ask "question" [url] [--shot] [--control] [--claude-cli]   # headless Claude call, real tool loop
 ```

@@ -20,6 +20,8 @@ final class DesktopExecutionService {
     private let activities: NativeActivityGate
     private var lease: NativeActivityGate.Lease?
 
+    var isBusy: Bool { owner != nil }
+
     init(control: ComputerController, activities: NativeActivityGate, enablesPeek: Bool = true) {
         self.activities = activities
         self.control = control
@@ -32,8 +34,11 @@ final class DesktopExecutionService {
     func prepare(id: UUID, registry: ToolRegistry, context: ScreenContext?, background: Bool,
                  target: TargetWindow? = nil,
                  title: String = "Background task",
+                 resolveFrontmost: Bool = true,
                  lookAtScreen: @escaping () async -> ToolResult) async throws -> PreparedExecution {
-        guard owner == nil else { throw ClaudeError(message: "Another request is using desktop control.") }
+        guard owner == nil, tasks.activeTask == nil || tasks.activeTask?.id == id else {
+            throw ClaudeError(message: "Another request is using desktop control.")
+        }
         lease = try activities.acquire(.desktop)
         owner = id
         requestTitle = title
@@ -46,12 +51,14 @@ final class DesktopExecutionService {
         control.declaredIrreversible = registry.select(for: context).active.flatMap(\.irreversible)
         control.warningNoteLabels = registry.notes(for: context).filter(\.isWarning).compactMap(\.anchor.label)
         var laneNote = ""
-        if background, target == nil {
+        if background, target == nil, resolveFrontmost {
             switch await TargetWindow.resolveFrontmost() {
             case .success(let target): control.target = target
             case .failure(let error):
                 laneNote = "\n\nNo target window right now: \(error.localizedDescription) Call target_window to pick one before acting."
             }
+        } else if background, target == nil {
+            laneNote = "\n\nThis is a queued task. No window has been selected. Call target_window to list windows and explicitly choose the application/window required by the accepted task. Never infer the task target from the person's current foreground window. If the intended target is ambiguous, stop and explain what is missing."
         }
         return PreparedExecution(system: Prompt.system + Prompt.control + (background ? Prompt.background + laneNote : ""),
                                  router: router, maxToolRounds: 40, shouldStop: { [weak control] in control?.stopped ?? true })

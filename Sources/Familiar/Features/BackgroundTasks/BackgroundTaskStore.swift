@@ -50,6 +50,9 @@ struct BackgroundTaskRecord: Identifiable {
     @Published private(set) var selectedTaskID: UUID?
     @Published private(set) var isVisible = false
     @Published private(set) var isExpanded = false
+    /// Persisted morning work is projected here without retaining another copy of its screenshots.
+    @Published private(set) var morningWork: [MorningWorkItem] = []
+    @Published private(set) var queueMessage: String?
 
     private let historyLimit = 20
     private var phaseObservation: AnyCancellable?
@@ -81,7 +84,22 @@ struct BackgroundTaskRecord: Identifiable {
         activeTask != nil && selectedTaskID == activeTask?.id
     }
 
-    var hasTasks: Bool { activeTask != nil || !history.isEmpty }
+    var hasTasks: Bool { activeTask != nil || !history.isEmpty || !morningWork.isEmpty }
+    var queuedCount: Int { morningWork.filter { $0.status == .queued }.count }
+    var selectedMorningWork: MorningWorkItem? { morningWork.first { $0.id == selectedTaskID } }
+
+    /// A saved handoff reveals only the compact receipt. It never requests keyboard focus.
+    func syncMorning(_ work: [MorningWorkItem], message: String?) {
+        let oldIDs = Set(morningWork.map(\.id))
+        let arrived = work.contains { $0.status == .queued && !oldIDs.contains($0.id) }
+        morningWork = work
+        queueMessage = message
+        if arrived {
+            if activeTask == nil { selectedTaskID = work.first(where: { $0.status == .queued })?.id }
+            if !isVisible { isExpanded = false }
+            isVisible = true
+        }
+    }
 
     func isTracking(id: UUID) -> Bool { activeTask?.id == id }
 
@@ -115,13 +133,13 @@ struct BackgroundTaskRecord: Identifiable {
 
     func show() {
         guard hasTasks else { return }
-        if selectedTaskID == nil { selectedTaskID = activeTask?.id ?? history.first?.id }
+        if selectedTaskID == nil { selectedTaskID = activeTask?.id ?? history.first?.id ?? morningWork.last?.id }
         isVisible = true
         explicitOpen.send()
     }
 
     func showLatest() {
-        selectedTaskID = activeTask?.id ?? history.first?.id
+        selectedTaskID = activeTask?.id ?? history.first?.id ?? morningWork.last?.id
         show()
     }
 
@@ -134,7 +152,7 @@ struct BackgroundTaskRecord: Identifiable {
     }
 
     func selectTask(id: UUID) {
-        guard activeTask?.id == id || history.contains(where: { $0.id == id }) else { return }
+        guard activeTask?.id == id || history.contains(where: { $0.id == id }) || morningWork.contains(where: { $0.id == id }) else { return }
         selectedTaskID = id
         isExpanded = true
         isVisible = true
