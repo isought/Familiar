@@ -133,7 +133,6 @@ struct StickyNoteView: View {
     let ledger: RevealLedger
     var peek: MascotMood? = nil     // the character looking over the top edge (the newest note only)
     var animated = true
-    var peekFeed: PeekFeed? = nil   // the live print of the window a background job works in (the newest note only)
     let onSuggest: (String) -> Void
     @Environment(\.colorScheme) private var scheme
 
@@ -157,9 +156,7 @@ struct StickyNoteView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let h = note.heading { heading(h) }
             ForEach(note.answers) { a in answer(a) }
-            if let feed = peekFeed {
-                PeekSlot(feed: feed, busy: busy && !note.hasAnswer, status: status)
-            } else if busy && !note.hasAnswer {
+            if busy && !note.hasAnswer {
                 HStack(spacing: 7) {
                     ProgressView().controlSize(.small)
                     Text(status.isEmpty ? "Writing…" : status).font(.callout).foregroundStyle(Pad.inkSoft)
@@ -253,27 +250,6 @@ struct StickyNoteView: View {
         }
         .padding(.leading, 14).padding(.trailing, 12).padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// The slot under the heading of the newest note: the live peek while a background job runs, else the busy row.
-/// Observes the feed itself so the rest of the pad does not redraw with every frame.
-struct PeekSlot: View {
-    @ObservedObject var feed: PeekFeed
-    let busy: Bool
-    let status: String
-
-    var body: some View {
-        if feed.phase != .idle {
-            PeekNoteView(feed: feed).padding(.top, 4)
-        } else if busy {
-            HStack(spacing: 7) {
-                ProgressView().controlSize(.small)
-                Text(status.isEmpty ? "Writing…" : status).font(.callout).foregroundStyle(Pad.inkSoft)
-            }
-            .padding(.top, 2)
-            .id("busy")
-        }
     }
 }
 

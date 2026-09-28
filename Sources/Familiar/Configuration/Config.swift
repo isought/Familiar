@@ -25,6 +25,7 @@ struct Config: Codable {
     var hotkey: String = "control+option+space"
     var allowControl: Bool = false           // let Familiar move the mouse and type when asked to do something
     var controlInBackground: Bool = true     // do things in the window you asked from, keeping your mouse and keyboard yours
+    var backgroundVirtualDisplay: Bool = false // opt in to moving the task window onto a separate display while it runs
     var backgroundPreciseClicks: Bool = false // experimental: click exact spots in a background window through a private macOS path
     var backgroundHintsShown: Int = 0        // the "working behind you" callout shows on the first background jobs
     var env: [String: String] = [:]          // non-secret variables handed to every script (secrets go to the Keychain)
@@ -92,6 +93,7 @@ struct Config: Codable {
         hotkey = try c.decodeIfPresent(String.self, forKey: .hotkey) ?? d.hotkey
         allowControl = try c.decodeIfPresent(Bool.self, forKey: .allowControl) ?? d.allowControl
         controlInBackground = try c.decodeIfPresent(Bool.self, forKey: .controlInBackground) ?? d.controlInBackground
+        backgroundVirtualDisplay = try c.decodeIfPresent(Bool.self, forKey: .backgroundVirtualDisplay) ?? d.backgroundVirtualDisplay
         backgroundPreciseClicks = try c.decodeIfPresent(Bool.self, forKey: .backgroundPreciseClicks) ?? d.backgroundPreciseClicks
         backgroundHintsShown = try c.decodeIfPresent(Int.self, forKey: .backgroundHintsShown) ?? d.backgroundHintsShown
         env = try c.decodeIfPresent([String: String].self, forKey: .env) ?? d.env

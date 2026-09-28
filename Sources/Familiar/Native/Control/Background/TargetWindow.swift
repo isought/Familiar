@@ -93,7 +93,7 @@ struct TargetWindow {
     let axApp: AXUIElement
     let axWindow: AXUIElement
     let toolkit: Toolkit
-    let backingScale: CGFloat
+    private(set) var backingScale: CGFloat
     private(set) var scWindow: SCWindow?
     private(set) var frameCG: CGRect        // last known, CG global (top-left origin)
     private(set) var title: String
@@ -209,6 +209,14 @@ struct TargetWindow {
         default: break   // a timeout is not "gone"; keep the last known frame
         }
         if let t = AX.string(axWindow, kAXTitleAttribute) { title = t }
+        // A task may move between a Retina monitor and a virtual display. Reusing
+        // its old scale would map fresh screenshot coordinates to the wrong point.
+        func overlap(_ screen: NSScreen) -> CGFloat {
+            let rect = frameCG.intersection(CaptureSpace.cg(screen.frame))
+            return rect.isNull ? 0 : rect.width * rect.height
+        }
+        let screen = NSScreen.screens.max { overlap($0) < overlap($1) }
+        if let screen, frameCG.intersects(CaptureSpace.cg(screen.frame)) { backingScale = screen.backingScaleFactor }
         return true
     }
 

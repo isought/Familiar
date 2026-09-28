@@ -7,7 +7,9 @@ import Foundation
 enum BuiltinTools {
     static let names: Set<String> = ["read_file", "grep", "read_screen", "look_at_screen"]
 
-    static var definitions: [[String: Any]] {
+    static var definitions: [[String: Any]] { definitions(background: false) }
+
+    static func definitions(background: Bool) -> [[String: Any]] {
         [
             ["name": "read_file",
              "description": "Read a documentation file from the tools folder. Paths are relative to the tools root, as listed in the prompt (e.g. \"expenses/docs/expense-reports.md\").",
@@ -19,10 +21,14 @@ enum BuiltinTools {
                 "path": ["type": "string", "description": "Optional sub-folder to limit the search, e.g. \"expenses\""],
              ], "required": ["pattern"]]],
             ["name": "look_at_screen",
-             "description": "Take a fresh screenshot of the display the user is working on and return it. Use only when the question is about what is on screen and no current screenshot was provided.",
+             "description": background
+                ? "Take a fresh screenshot of the task's current target window. Follows target_window selections and never captures the user's other windows. Coordinates are pixels of this window capture; while borrowing the real mouse, use the computer screenshot action for display coordinates."
+                : "Take a fresh screenshot of the display the user is working on and return it. Use only when the question is about what is on screen and no current screenshot was provided.",
              "input_schema": ["type": "object", "properties": [:]]],
             ["name": "read_screen",
-             "description": "Return the text content of the user's current window via Accessibility (labels, values, buttons, links). Use it to read small text, dropdown values or error messages precisely.",
+             "description": background
+                ? "Read text from the task's current target window via Accessibility (labels, values, buttons, links). Follows target_window selections and never reads the user's other windows."
+                : "Return the text content of the user's current window via Accessibility (labels, values, buttons, links). Use it to read small text, dropdown values or error messages precisely.",
              "input_schema": ["type": "object", "properties": [:]]],
         ]
     }
@@ -79,7 +85,12 @@ enum ScreenText {
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(axApp, 1)
         guard let win = AX.element(axApp, kAXFocusedWindowAttribute) ?? AX.element(axApp, kAXMainWindowAttribute) else { return "" }
-        var out = "Window: \(AX.string(win, kAXTitleAttribute) ?? "") (\(app.localizedName ?? ""))\n"
+        return dumpWindow(win, appName: app.localizedName ?? "", maxNodes: maxNodes, maxChars: maxChars)
+    }
+
+    /// Read only the supplied window. The caller owns target selection and liveness checks.
+    static func dumpWindow(_ win: AXUIElement, appName: String, maxNodes: Int = 2000, maxChars: Int = 14_000) -> String {
+        var out = "Window: \(AX.string(win, kAXTitleAttribute) ?? "") (\(appName))\n"
         var visited = 0
         var stack: [(AXUIElement, Int)] = [(win, 0)]
         while let (el, depth) = stack.popLast(), visited < maxNodes, out.count < maxChars {

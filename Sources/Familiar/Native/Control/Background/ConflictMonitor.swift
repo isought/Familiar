@@ -105,7 +105,9 @@ import AppKit
         ) { [weak self] n in
             let pid = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
             MainActor.assumeIsolated {
-                guard let self, let pid else { return }
+                // Activation notifications can be queued while a short input loan
+                // already restored the user's app. Do not stop on that stale event.
+                guard let self, let pid, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
                 self.handle(Input(kind: .appActivated(pid), locationCG: .zero, isOurs: false))
             }
         }

@@ -23,9 +23,13 @@ enum ExecutionTools {
         }
 
         let root = registry.root
-        for definition in BuiltinTools.definitions {
+        for definition in BuiltinTools.definitions(background: background && control != nil) {
             guard let name = definition["name"] as? String else { continue }
             routes.append(ToolRoute(match: .tool(name: name), definition: definition) { _, input, _ in
+                if background, let control {
+                    if name == "look_at_screen" { return await control.lookAtTargetScreen() }
+                    if name == "read_screen" { return control.readTargetScreen() }
+                }
                 if name == "look_at_screen" { return await lookAtScreen() }
                 return BuiltinTools.execute(name, input, root: root)
             })
@@ -45,6 +49,7 @@ enum ExecutionTools {
                         switch name {
                         case "target_window": return await control.targetWindow(input)
                         case "click_element": return await control.clickElement(input)
+                        case "send_message": return await control.sendMessage(input)
                         case "ask_for_the_mouse": return await control.askForMouse(input)
                         case "give_the_mouse_back": return control.giveMouseBack()
                         default: return .text("Unknown tool \(name)", isError: true)

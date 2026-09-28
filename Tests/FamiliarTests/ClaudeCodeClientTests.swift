@@ -161,6 +161,77 @@ struct ClaudeCodeClientTests {
         try fixture.assertWorkingDirectoryRemoved()
     }
 
+    @Test(arguments: [false, true])
+    func testRelocationRecoveryPreservesComputerToolSequence(hardFailure: Bool) async throws {
+        let fixture = try FakeClaude(script: #"""
+        config_file = Path(args[args.index("--mcp-config") + 1])
+        server = json.loads(config_file.read_text())["mcpServers"]["familiar"]
+        bridge_env = os.environ.copy()
+        bridge_env.update(server.get("env", {}))
+        bridge = subprocess.Popen([server["command"], *server.get("args", [])], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=bridge_env)
+        def rpc(identifier, method, params):
+            bridge.stdin.write(json.dumps({"jsonrpc": "2.0", "id": identifier, "method": method, "params": params}) + "\n")
+            bridge.stdin.flush()
+            line = bridge.stdout.readline()
+            if not line:
+                raise RuntimeError("MCP bridge closed: " + bridge.stderr.read())
+            return json.loads(line)
+        results = {}
+        try:
+            rpc(1, "initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+                                   "clientInfo": {"name": "test-cli", "version": "1"}})
+            click = {"name": "computer__left_click", "arguments": {"coordinate": [120, 80]}}
+            results["initial"] = rpc(2, "tools/call", click)
+            results["screenshot"] = rpc(3, "tools/call", {"name": "computer__screenshot", "arguments": {}})
+            results["retry"] = rpc(4, "tools/call", click)
+            (capture_file.parent / "relocation-results.json").write_text(json.dumps(results))
+        finally:
+            bridge.stdin.close()
+            bridge.wait(timeout=10)
+        print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                          "result": "Computer tool sequence complete.", "usage": {}}))
+        """#)
+        defer { fixture.remove() }
+        let client = ClaudeCodeClient(config: fixture.config)
+        let definitions: [[String: Any]] = [["type": "computer_toolset_20260801"]]
+        var invoked: [String] = []
+        var messages: [[String: Any]] = [["role": "user", "content": "Click the target after refreshing its relocated screenshot."]]
+
+        let reply = try await client.converse(system: "Use the supplied computer tools.", tools: definitions, messages: &messages,
+                                              executor: { name, input, toolset in
+            invoked.append(name)
+            #expect(toolset == "computer")
+            if name == "left_click" { #expect(input["coordinate"] as? [Int] == [120, 80]) }
+            if invoked.count == 1 {
+                #expect(name == "left_click")
+                return hardFailure ? .text("Computer action failed.", isError: true)
+                                   : ComputerController.virtualDisplayRelocationNotice
+            }
+            if name == "screenshot" {
+                return .blocks([["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": "c2NyZWVuc2hvdA=="]]])
+            }
+            return .text("OK")
+        }, onStatus: { _ in })
+
+        #expect(invoked == (hardFailure ? ["left_click"] : ["left_click", "screenshot", "left_click"]))
+        #expect(reply.toolCalls == (hardFailure ? 1 : 3))
+        #expect(reply.text == "Computer tool sequence complete.")
+        let results = try fixture.jsonFile("relocation-results.json")
+        for key in ["initial", "screenshot", "retry"] {
+            let result = try #require((results[key] as? [String: Any])?["result"] as? [String: Any])
+            #expect(result["isError"] as? Bool == hardFailure, "Unexpected MCP error status for \(key)")
+            let content = try #require(result["content"] as? [[String: Any]])
+            if hardFailure && key != "initial" {
+                #expect(content.first?["text"] as? String == "Not executed: an earlier computer action failed. Stop and explain the failure.")
+            } else if !hardFailure && key == "screenshot" {
+                #expect(content.first?["mimeType"] as? String == "image/png")
+                #expect(content.first?["data"] as? String == "c2NyZWVuc2hvdA==")
+            }
+        }
+        try fixture.assertWorkingDirectoryRemoved()
+    }
+
     @Test
     func testFailedCLIRequestSurfacesActionableErrorAndCleansUp() async throws {
         let fixture = try FakeClaude(script: #"""

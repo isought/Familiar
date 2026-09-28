@@ -21,15 +21,31 @@ final class ActionLadder {
     var caption: (String) -> Void = { _ in }
     var declaredIrreversible: [String] = []      // from the matching pack's manifest
     var warningNoteLabels: [String] = []         // sticky warnings anchored on controls in this scene
-    var confirmation: IrreversibleGuard.Confirmation?
+    var requestApproval: ((String) async -> BackgroundActionApproval.Decision)?
     var viewportDirty = false                    // the human scrolled or resized since the model last looked
     private(set) var lastRaw: RawCapture?
     private var shotFrameSize: CGSize?
+    private var captureGeneration: UInt64 = 0
     private(set) var step = 0
     private var hits: [Int: AXUIElement] = [:]
     private(set) var ghostCG: CGPoint
 
     static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXSecureTextField"]
+
+    struct TypingFocus {
+        let element: AXUIElement
+        let info: IrreversibleGuard.ElementInfo
+        let belongsToTarget: Bool
+    }
+    // Keep the text-entry boundary testable without posting input to a real application.
+    var readTypingFocus: (() -> TypingFocus?)?
+    var makeMainForTyping: (TargetWindow) -> Bool = PidEvents.ensureMain
+    var postTypedText: (pid_t, String, () -> Bool) async -> Void = { pid, text, stopped in
+        await PidEvents.type(pid: pid, text: text, cancelled: stopped)
+    }
+    var captureTypingState: ((AXUIElement?) async -> AXSnapshot)?
+    var refreshWindow: (inout TargetWindow) -> Bool = { $0.refresh() }
+    var postMessageReturn: (pid_t) -> Void = { PidEvents.press(pid: $0, code: 36, flags: []) }
 
     init(target: TargetWindow, maxLongEdge: Int) {
         self.target = target
@@ -39,7 +55,37 @@ final class ActionLadder {
     }
 
     static func needsForeground(_ why: String) -> ToolResult {
-        .text("needs_foreground: \(why). This needs the real mouse. Try another way first: a keyboard shortcut without ⌘, find_on_screen and click_element, or typing. If there is no other way, call ask_for_the_mouse with a one-line reason the user will understand; they will answer on the pad.")
+        .text("needs_foreground: \(why). This needs the real mouse. Try another way first: a keyboard shortcut without ⌘, find_on_screen and click_element, or typing. If there is no other way, call ask_for_the_mouse with a one-line reason the user will understand; they will answer in the background task screen.")
+    }
+
+    /// A loan of physical input does not authorize a protected action. This is
+    /// evaluated before activation; approvals and screenshots never occupy a loan.
+    func borrowedInputRefusal(_ name: String, _ input: [String: Any]) -> ToolResult? {
+        if let gone = refreshTarget() { return gone }
+        if ["left_click", "right_click", "middle_click", "double_click", "triple_click", "scroll"].contains(name) {
+            if let stale = staleViewport() { return stale }
+            guard let point = cgPoint(input["coordinate"]), space.contains(cg: point) else {
+                return .text("No input borrowed: that coordinate is outside the task window. Take a new window screenshot.")
+            }
+            if let element = target.element(atCG: point, pressable: true) {
+                switch IrreversibleGuard.classifyPress(axInfo(element), inSheet: isInSheet(element),
+                                                      declared: declaredIrreversible, warningNoteLabels: warningNoteLabels) {
+                case .safe: break
+                case .confirm(let label):
+                    return .text("No input borrowed: “\(label)” needs its guarded action approval. Use find_on_screen and click_element; permission to borrow input does not approve this action.")
+                case .forbidden(let why): return .text("Not done: \(why).", isError: true)
+                }
+            }
+        }
+        if name == "key", let combo = input["text"] as? String,
+           case .forbidden(let why) = IrreversibleGuard.classifyKey(combo) {
+            return .text("Not done: \(why).", isError: true)
+        }
+        if name == "type", let element = focusedElement(),
+           case .forbidden(let why) = IrreversibleGuard.classifyType(into: axInfo(element)) {
+            return .text("Not done: \(why).", isError: true)
+        }
+        return nil
     }
 
     // MARK: dispatch
@@ -93,11 +139,29 @@ final class ActionLadder {
 
     // MARK: looking
 
+    /// Window relocation and target switches invalidate both coordinates and AX IDs.
+    /// The next screenshot establishes a fresh capture space before coordinate input.
+    func windowPlacementChanged() {
+        captureGeneration &+= 1
+        hits.removeAll()
+        lastRaw = nil
+        shotFrameSize = nil
+        _ = refreshTarget()
+        viewportDirty = true
+        ghostCG = CGPoint(x: target.frameCG.midX, y: target.frameCG.midY)
+        peek?.frame = nil
+    }
+
     func screenshot() async -> ToolResult {
-        target.setSCWindow(await target.fetchSCWindow())
-        guard let w = target.scWindow else { return .text("The target window is gone.", isError: true) }
+        let generation = captureGeneration
+        let capturedTarget = target
+        let window = await capturedTarget.fetchSCWindow()
+        guard generation == captureGeneration, !isStopped(), !Task.isCancelled else { return staleCapture }
+        target.setSCWindow(window)
+        guard let w = window else { return .text("The target window is gone.", isError: true) }
         do {
-            let raw = try await ScreenCapture.captureWindow(w, backingScale: target.backingScale)
+            let raw = try await ScreenCapture.captureWindow(w, backingScale: capturedTarget.backingScale)
+            guard generation == captureGeneration, !isStopped(), !Task.isCancelled else { return staleCapture }
             lastRaw = raw
             shotFrameSize = target.frameCG.size
             viewportDirty = false
@@ -127,9 +191,15 @@ final class ActionLadder {
     /// A small live frame for the peek note (not sent to the model).
     func peekCapture() async {
         guard let peek, let w = target.scWindow else { return }
+        let generation = captureGeneration
         if let raw = try? await ScreenCapture.captureWindow(w, backingScale: target.backingScale) {
+            guard generation == captureGeneration, !isStopped(), !Task.isCancelled else { return }
             peek.frame = ScreenCapture.downscale(raw.image, maxLongEdge: 640)
         }
+    }
+
+    private var staleCapture: ToolResult {
+        .text("The task stopped or its window moved while capturing. Take a new screenshot if the task is still active.", isError: true)
     }
 
     // MARK: find / click by element
@@ -226,16 +296,32 @@ final class ActionLadder {
 
     /// Rung A press with the irreversible guard and verification. `then` supplies the fall-through result (nil = try the next rung).
     private func press(_ el: AXUIElement, info: IrreversibleGuard.ElementInfo, then fallback: () -> ToolResult?) async -> ToolResult? {
-        if let blocked = guardPress(el, info: info) { return blocked }
+        let permission = await guardPress(el, info: info)
+        if let blocked = permission.blocked { return blocked }
         ghost?.highlight(rectCG: axFrame(el), label: info.label.isEmpty ? nil : String(info.label.prefix(40)))
         defer { ghost?.highlight(rectCG: nil, label: nil) }
         let point = axFrame(el).map { CGPoint(x: $0.midX, y: $0.midY) }
         let before = await snapshot(element: el, cropAroundCG: point)
+        guard !isStopped(), !Task.isCancelled else { return .text("Stopped before pressing the control.", isError: true) }
+        // Capturing is asynchronous too. Check again immediately before AXPress, with no suspension between
+        // validation and the action, so a target switch or changed control cannot inherit the human's answer.
+        if let approval = permission.approval, !approvalStillValid(approval, element: el) { return staleApproval }
         AXUIElementPerformAction(el, kAXPressAction as CFString)
         ghost?.pulse(count: 1)
         peek?.pulse += 1
         let v = await verify(before: before, element: el, cropAroundCG: point, expecting: .anyChange)
         Log.info("bg: rung=ax.press “\(info.label.prefix(40))” \(v)")
+        if permission.approval != nil {
+            let approved = "The user approved pressing this exact control, “\(info.label)”, once in the background task screen. That approval was consumed by this press."
+            switch v {
+            case .confirmed(let evidence):
+                return .text("\(approved) OK — pressed once and verified a change: \(evidence).")
+            case .unverifiable(let why):
+                return .text("\(approved) One approved press was attempted, but its outcome is not fully verified (\(why)). Inspect the window to check the result; do not press again using this approval.")
+            case .noEffect:
+                return .text("\(approved) One approved press was attempted, but no change was detected. Inspect the window before deciding what to do next; do not press again using this approval.")
+            }
+        }
         switch v {
         case .confirmed: return .text("OK — pressed “\(info.label)”")
         case .unverifiable(let why): return .text("OK — pressed “\(info.label)”; no change seen yet (\(why)). Screenshot to check.")
@@ -262,18 +348,24 @@ final class ActionLadder {
 
     private func type(_ text: String) async -> ToolResult {
         caption("Typing “\(text.prefix(40))\(text.count > 40 ? "…" : "")”")
-        let field = focusedElement()
-        let info = field.map(axInfo)
-        if let info, case .forbidden(let why) = IrreversibleGuard.classifyType(into: info) { return .text("Not done: \(why). Familiar never types there.", isError: true) }
-        if let field { ghost?.underline(rectCG: axFrame(field)) }
-        let expecting: ActionVerifier.Expectation = field == nil ? .anyChange : .valueContains(String(text.prefix(24)))
+        guard let focus = typingFocus(), focus.belongsToTarget,
+              let role = focus.info.role, Self.textRoles.contains(role) else { return typingNeedsFocus }
+        let field = focus.element
+        let info = focus.info
+        if case .forbidden(let why) = IrreversibleGuard.classifyType(into: info) { return .text("Not done: \(why). Familiar never types there.", isError: true) }
+        ghost?.underline(rectCG: axFrame(field))
+        let expecting = ActionVerifier.Expectation.valueContains(String(text.prefix(24)))
+        var inputWasPosted = false
         // Rung B first: real keystrokes land at the caret. Not when the human shares the app (keys go to the app's main
         // window, which may be theirs) or the window is minimized (keys are dropped).
-        if !target.sharedWithHuman, !target.isMinimized, PidEvents.ensureMain(target) {
+        if !target.sharedWithHuman, !target.isMinimized, makeMainForTyping(target) {
             guard await clear() else { return busyResult }
-            if target.toolkit == .chromium || target.toolkit == .electron, let field { axSet(field, kAXFocusedAttribute, kCFBooleanTrue) }
-            let before = await snapshot(element: field, cropAroundCG: nil)
-            await PidEvents.type(pid: target.pid, text: text, cancelled: isStopped)
+            if target.toolkit == .chromium || target.toolkit == .electron { axSet(field, kAXFocusedAttribute, kCFBooleanTrue) }
+            let before = await typingSnapshot(field)
+            guard !isStopped(), !Task.isCancelled else { return .text("Stopped.", isError: true) }
+            guard typingFocusStillMatches(focus) else { return typingNeedsFocus }
+            inputWasPosted = true
+            await postTypedText(target.pid, text, isStopped)
             if isStopped() { return .text("Stopped.", isError: true) }
             let v = await verify(before: before, element: field, cropAroundCG: nil, expecting: expecting)
             Log.info("bg: rung=pid.keys \(v)")
@@ -284,11 +376,13 @@ final class ActionLadder {
             }
         }
         // Rung A: write the field through Accessibility. AppKit inserts at the caret; Chromium only accepts a whole value.
-        guard let field, let info else {
-            return .text(target.isMinimized ? "Not done: the window is minimized, so keystrokes are dropped and no field is focused. I can press buttons and set values; ask the user to bring the window back for typing."
-                         : "Not done: no text field has keyboard focus. Click into the field first (find_on_screen, then click_element or left_click).")
+        let before = await typingSnapshot(field)
+        guard !isStopped(), !Task.isCancelled else { return .text("Stopped.", isError: true) }
+        guard typingFocusStillMatches(focus) else {
+            return inputWasPosted
+                ? .text("Typing was attempted, but its result could not be verified and the focused field changed. Inspect the target window before typing again; text may already be present.", isError: true)
+                : typingNeedsFocus
         }
-        let before = await snapshot(element: field, cropAroundCG: nil)
         if target.toolkit == .appKit {
             axSet(field, kAXSelectedTextAttribute, text as CFString)
         } else {
@@ -302,6 +396,44 @@ final class ActionLadder {
         case .unverifiable(let why): return .text("OK — set the field; not verified (\(why)). Screenshot to check.")
         case .noEffect: return .text("Not done: typing did not take in the \(plainName(info)). Click into the field again, or ask_for_the_mouse.")
         }
+    }
+
+    private func typingFocus() -> TypingFocus? {
+        if let readTypingFocus { return readTypingFocus() }
+        guard let field = focusedElement() else { return nil }
+        return TypingFocus(element: field, info: axInfo(field), belongsToTarget: elementBelongsToTarget(field))
+    }
+
+    private var typingNeedsFocus: ToolResult {
+        // No input was attempted, so the caller can recover by focusing the field without disabling computer use.
+        .text("Not done: I couldn't confirm a focused text field in the target window. No text was entered. Click into the intended field first (find_on_screen, then click_element or left_click), then retry typing. If focus still cannot be confirmed, ask_for_the_mouse instead of trying more keys.")
+    }
+
+    private func typingFocusStillMatches(_ expected: TypingFocus) -> Bool {
+        guard let current = typingFocus(), current.belongsToTarget,
+              CFEqual(current.element, expected.element), current.info.role == expected.info.role else { return false }
+        if case .forbidden = IrreversibleGuard.classifyType(into: current.info) { return false }
+        return true
+    }
+
+    private func typingSnapshot(_ field: AXUIElement?) async -> AXSnapshot {
+        if let captureTypingState { return await captureTypingState(field) }
+        return await snapshot(element: field, cropAroundCG: nil)
+    }
+
+    /// Called only by the suspended, approved send action. A native state check
+    /// immediately precedes the one down/up pair, with no model or retry in between.
+    func sendApprovedMessage(validation: () -> Bool) async -> ToolResult {
+        if let refusal = refreshTarget() { return refusal }
+        guard !target.sharedWithHuman, !target.isMinimized, makeMainForTyping(target) else {
+            return Self.needsForeground("the approved conversation cannot receive a background Return; request input access, then fresh send approval")
+        }
+        guard await clear(), !Task.isCancelled, !isStopped(), validation() else {
+            return .text("Not sent: input is busy or the approved draft/conversation changed. No Return was pressed.")
+        }
+        caption("Sending the approved message")
+        postMessageReturn(target.pid)
+        return .text("Return was pressed once for the approved draft. Delivery is not yet verified; inspect the conversation and do not automatically repeat the send.")
     }
 
     private func key(_ combo: String, times: Int, hold: Double?) async -> ToolResult {
@@ -373,14 +505,78 @@ final class ActionLadder {
 
     // MARK: guards and verification
 
-    private func guardPress(_ el: AXUIElement, info: IrreversibleGuard.ElementInfo) -> ToolResult? {
+    private struct PressApproval {
+        let pid: pid_t
+        let windowID: CGWindowID
+        let window: AXUIElement
+        let windowTitle: String
+        let windowFrame: CGRect
+        let elementFrame: CGRect
+        let info: IrreversibleGuard.ElementInfo
+        let inSheet: Bool
+    }
+
+    private var staleApproval: ToolResult {
+        .text("Not pressed: the target window or control changed while waiting for approval. Inspect it again before requesting a new approval.", isError: true)
+    }
+
+    private func guardPress(_ el: AXUIElement, info: IrreversibleGuard.ElementInfo) async -> (blocked: ToolResult?, approval: PressApproval?) {
         switch IrreversibleGuard.classifyPress(info, inSheet: isInSheet(el), declared: declaredIrreversible, warningNoteLabels: warningNoteLabels) {
-        case .safe: return nil
-        case .forbidden(let why): return .text("Not done: \(why). Familiar never does that in the background.", isError: true)
+        case .safe: return (nil, nil)
+        case .forbidden(let why): return (.text("Not done: \(why). Familiar never does that in the background.", isError: true), nil)
         case .confirm(let label):
-            if IrreversibleGuard.consume(&confirmation, label: label, now: Date()) { return nil }
-            return .text("Not pressed: this looks irreversible (\((info.role ?? "AXControl").replacingOccurrences(of: "AX", with: "").lowercased()) “\(label)”) and nobody is watching. Ask the user, and end your reply with `Suggestions: Confirm: \(label) | Don't`. When they confirm, press it again.")
+            guard let requestApproval else {
+                return (.text("Not pressed: “\(label)” needs approval in the background task screen, which is unavailable in this session.", isError: true), nil)
+            }
+            guard let frame = axFrame(el), elementBelongsToTarget(el), axActions(el).contains(kAXPressAction) else {
+                return (staleApproval, nil)
+            }
+            let approval = PressApproval(pid: target.pid, windowID: target.cgWindowID, window: target.axWindow,
+                                         windowTitle: target.title, windowFrame: target.frameCG, elementFrame: frame,
+                                         info: info, inSheet: isInSheet(el))
+            let decision = await requestApproval(label)
+            guard !isStopped(), !Task.isCancelled else {
+                return (.text("Stopped before pressing “\(label)”.", isError: true), nil)
+            }
+            switch decision {
+            case .approved:
+                guard approvalStillValid(approval, element: el) else { return (staleApproval, nil) }
+                return (nil, approval)
+            case .denied:
+                return (.text("Not pressed: the user declined “\(label)”. Leave this action undone; do not request it again unless the user asks.", isError: true), nil)
+            case .timedOut:
+                return (.text("Not pressed: approval for “\(label)” timed out. Leave this action undone.", isError: true), nil)
+            case .cancelled:
+                return (.text("Not pressed: approval for “\(label)” was cancelled.", isError: true), nil)
+            case .unavailable:
+                return (.text("Not pressed: no background task approval is available for “\(label)”. Leave this action undone.", isError: true), nil)
+            }
         }
+    }
+
+    private func approvalStillValid(_ approval: PressApproval, element: AXUIElement) -> Bool {
+        guard target.refresh(), target.pid == approval.pid, target.cgWindowID == approval.windowID,
+              CFEqual(target.axWindow, approval.window), target.title == approval.windowTitle,
+              target.frameCG == approval.windowFrame, axFrame(element) == approval.elementFrame,
+              axInfo(element) == approval.info, isInSheet(element) == approval.inSheet,
+              elementBelongsToTarget(element), axActions(element).contains(kAXPressAction) else { return false }
+        var enabled: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXEnabledAttribute as CFString, &enabled) == .success,
+           let enabled = enabled as? NSNumber, !enabled.boolValue { return false }
+        return true
+    }
+
+    /// An element handle surviving a navigation or window switch is insufficient: it must still be attached
+    /// to this exact target. Walk parents as well as AXWindow to accommodate controls inside sheets.
+    private func elementBelongsToTarget(_ element: AXUIElement) -> Bool {
+        if let window = AX.element(element, kAXWindowAttribute), CFEqual(window, target.axWindow) { return true }
+        var current: AXUIElement? = element
+        for _ in 0..<128 {
+            guard let node = current else { return false }
+            if CFEqual(node, target.axWindow) { return true }
+            current = AX.element(node, kAXParentAttribute)
+        }
+        return false
     }
 
     private func snapshot(element: AXUIElement?, cropAroundCG: CGPoint?) async -> AXSnapshot {
@@ -405,7 +601,7 @@ final class ActionLadder {
 
     /// Nil when the window is still there; otherwise the result to hand back.
     private func refreshTarget() -> ToolResult? {
-        guard target.refresh() else { return .text("The target window closed. Nothing more was done.", isError: true) }
+        guard refreshWindow(&target) else { return .text("The target window closed. Nothing more was done.", isError: true) }
         space = target.space(maxLongEdge: maxLongEdge)
         monitor?.targetFrameCG = target.frameCG
         ghost?.attach(targetFrameCG: target.frameCG)
@@ -415,7 +611,6 @@ final class ActionLadder {
 
     private func staleViewport() -> ToolResult? {
         guard viewportDirty else { return nil }
-        viewportDirty = false
         return .text("Not done: the window changed since your last screenshot (the user scrolled or resized it). Take a new screenshot before clicking by coordinates.")
     }
 

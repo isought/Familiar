@@ -33,14 +33,43 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
 7. **Control** (off by default, Settings → "Allow Familiar to control the mouse and keyboard"): ask it to do something
    ("type the sum formula for me") and it does it through Claude's computer toolset. By default it works **in the
    background**: it drives the window you were in when you asked through Accessibility and events sent to that app, so
-   your mouse and keyboard stay yours and you can carry on elsewhere. A purple ghost cursor shows what it presses, and the
-   pad shows a live peek of that window with each step and a **Stop** tab (⌃⌥Space stops too). When something needs the
-   real mouse (a drag, a context menu, a ⌘ shortcut) it asks on the note first: **Go ahead** lends it the mouse with the
-   shimmer border as before, and moving the mouse or pressing Esc takes it back. The hand icon on the pad, next to the
+   your mouse and keyboard stay yours and you can carry on elsewhere. A purple ghost cursor shows what it presses.
+   Once desktop execution begins, the instruction moves from chat to a compact **background task screen** in the top-right.
+   Expand it for a live window preview, approvals and the result; **Stop** or ⌃⌥Space ends the work. Collapsing or hiding
+   the task screen keeps execution running, and completion respects that choice. Reopen it through the menu bar's
+   **Background Tasks…** entry or by clicking Familiar while a task runs. The task header can be dragged to another spot.
+   Recent results and their last screenshots are kept for up to 20 tasks until Familiar quits. Ordinary conversational
+   answers stay in chat. One desktop task runs at a time. Chat waits for its current request to finish; Morning Files can
+   hand off several actions to a saved queue, which runs them one at a time.
+   Background `read_screen` and `look_at_screen` read only the selected target window and fail if no target is available.
+   When something needs the real mouse (a drag, a context menu, a ⌘ shortcut) it asks on the task screen first.
+   Without the separate display, this explicitly asks to use your screen, mouse and keyboard, and **Go ahead** begins
+   the desktop handoff with a shimmer border. Pause your own input during that step; typing (including ⌘Tab), clicking,
+   scrolling or moving the cursor takes control back.
+   The hand icon on the pad, next to the
    eye, turns background mode off; then it takes the mouse as before (the shimmer border, a caption per step, moving the
-   mouse or pressing Esc stops it). It asks before Send / Submit / Delete / Pay either way, and a pack can list more
+   mouse or pressing Esc stops it). Background Send / Submit / Delete / Pay button presses pause for a one-action approval
+   on the task screen; a changed window or control invalidates that approval. A pack can list more
    controls to confirm under `irreversible:` in its SKILL.md. `find_on_screen` gives it labelled controls via Accessibility;
    in the background it presses them by id with `click_element`.
+   Chat composers that send with Return can use `send_message`: the task screen shows the recipient, observed
+   app/window/composer context and complete typed draft for one-action approval. Familiar rechecks the focused
+   composer and exact draft, then presses Return once. Input permission is separate and must still be active for
+   a separate-display send. Unreadable or changed drafts are not sent; uncertain delivery is inspected without
+   automatically retrying. The offscreen input runner still rejects raw Return; send approval is handled by this dedicated tool.
+
+   **Separate display (experimental, off by default):** Settings → "Use a separate display for background tasks"
+   lets Familiar move the selected task window onto a temporary virtual monitor when the first action begins.
+   The task card stays on your physical screen. If background input needs help, approving the mouse-and-keyboard
+   request keeps the task window on its separate display. Familiar borrows input for each short action and returns
+   it between steps, before the model thinks or inspects another screenshot. Typing or mouse input interrupts a
+   borrowed action. Stop, completion and quitting return borrowed windows. Opening the live preview returns the window and stops
+   the background task. Read-only questions never create a display or move a window.
+   This uses private macOS display APIs. The input-borrowing trial is on `codex/offscreen-input-borrow`;
+   see [its scope and verification status](docs/architecture/offscreen-input-borrow.md).
+   It keeps existing app logins and uses native Accessibility/process-event controls, with temporary input borrowing
+   when approved. It does not create a separate desktop session or guarantee every app's text input. Full-screen windows and mirrored-display
+   arrangements are not supported by this first version; setup failures stop before task input.
 
 8. **Watch me**: menu bar → **Watch Me** (or the eye on the pad). Do the task the way you normally do, then press ⌃⌥Space or
    **Stop Watching**. Familiar records clicks (with the real labels of what you clicked, via Accessibility), a crop around each
@@ -60,6 +89,19 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    Headless: `--record-synthetic <dir>` (a fake recording from the current screen) and
    `--summarize-recording <dir> ["purpose"] [--tools-root <dir>] [--keep] [--claude-cli]` (prints the draft JSON; keeps into a temp folder by default).
 
+9. **Morning Files**: a small folder in the upper-left opens categorized folders and a spread of files. Choose any file
+   to read its sources, people, reasoning, unknowns and exact proposed action. **Ignore** files it away, **I'll do it**
+   keeps it yours, and handing it to Familiar saves the action before the file flies to the background task screen.
+   Drag the small folder itself or a window's header to move it; the morning windows and background task list remember
+   their positions. Add your own folders and files, and configure roles, relationships and identities through
+   **… → Who's Who**. The retrieval menu
+   brings back filed items and completed results. Everything is stored privately under `~/.familiar/morning/`.
+   **Try sample files** adds explicitly fictional examples; these can only prepare local drafts and analysis.
+   Preparation uses your configured Claude connection with no tools. **Work in an app** uses existing desktop control
+   and approvals. Queue entries survive restarts; interrupted work returns for review rather than replaying actions.
+   This first version is entered locally: email/Jira imports, automatic morning generation and knowledge-base connections
+   are not connected yet. See [the implementation boundaries](docs/architecture/morning-files.md).
+
 ## Try it on another Mac (5 minutes)
 ```bash
 xcode-select --install                      # Command Line Tools, if `swift --version` fails
@@ -73,7 +115,8 @@ Then, once:
 2. Right-click the note → **Settings…** → choose **API key** and paste an Anthropic API key, or choose **Local Claude CLI** to use your installed, signed-in Claude Code → **Save**.
 3. Menu bar → **Watch Me**, do a short task in the app you want it to learn, then **Stop Watching** (or ⌃⌥Space). Answer "what were you doing?" or skip it, read the draft, **Keep it**. It becomes a tool pack under `~/.familiar/tools/`.
 
-No packs are needed to start: watching creates them. Nothing leaves the machine except the write-up request you trigger.
+No packs are needed to start: watching creates them. Chat, recording write-ups, and delegated actions send their selected
+context to your configured Claude connection. Creating and editing Morning Files or Who’s Who entries stays local.
 
 ## Requirements
 - macOS 14+, Xcode Command Line Tools (Swift 5.9+). No Xcode needed.
@@ -89,6 +132,8 @@ No packs are needed to start: watching creates them. Nothing leaves the machine 
 .build/release/Familiar --render-mascot /tmp/mascot [--style innocent|innocentV1|innocentV3|innocentV4|sharp]   # renders every mood, the quill cursor and the app-icon source as PNGs
 .build/release/Familiar --render-origami /tmp/origami [--style innocentV4]   # folding stages and crane wing poses as PNGs
 .build/release/Familiar --render-card /tmp/card [--states]   # the pad with a pick, a note sticker and answers, as PNGs
+.build/release/Familiar --render-background-task /tmp/tasks # task screen states, fabricated content, no model or desktop capture
+.build/release/Familiar --render-morning /tmp/morning      # native folder, files, people and queue with fictional local data
 .build/release/Familiar --render-pen /tmp/pen               # the pen overlay over a fake page: stickers and the note editor, as a PNG
 build/Familiar.app/Contents/MacOS/Familiar --ask "question" [url] [--shot] [--control] [--claude-cli]   # headless Claude call, real tool loop
 ```
@@ -179,6 +224,7 @@ The docs were generated from the app's repo and use its real button labels.
 | allowControl | false | let Familiar move the mouse and type when asked |
 | controlInBackground | true | do things in the window you asked from, keeping your mouse and keyboard (the hand icon on the pad) |
 | backgroundPreciseClicks | false | experimental: click exact spots in a background window through a private macOS path (self-tested at first use) |
+| backgroundVirtualDisplay | false | experimental: move task windows onto a temporary virtual monitor; return them on stop/completion |
 | env | {} | non-secret variables handed to every script |
 | bubbleX / bubbleY | | remembered bubble position |
 | watcherEnabled / watcherIntervalSeconds | true / 2 | context polling |

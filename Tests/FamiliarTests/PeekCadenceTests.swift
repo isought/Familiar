@@ -59,6 +59,7 @@ struct PeekCadenceTests {
         feed.cursor = CGPoint(x: 0.5, y: 0.5)
         feed.highlight = CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.1)
         feed.pulse = 2
+        feed.borrowKeepsWindowOffscreen = true
         feed.startedAt = Date()
         feed.reset()
         #expect(feed.phase == .idle)
@@ -67,6 +68,7 @@ struct PeekCadenceTests {
         #expect(feed.caption.isEmpty && feed.metaLine.isEmpty)
         #expect(feed.cursor == nil && feed.highlight == nil && feed.pulse == 0)
         #expect(feed.startedAt == nil)
+        #expect(!feed.borrowKeepsWindowOffscreen)
         #expect(!feed.isWorking)
     }
 }

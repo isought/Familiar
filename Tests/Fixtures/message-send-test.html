@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Familiar local message test — Avery</title>
+<style>
+  body { max-width: 680px; margin: 48px auto; font: 18px -apple-system, sans-serif; color: #242424; }
+  textarea { display: block; box-sizing: border-box; width: 100%; margin: 12px 0; padding: 12px; font: inherit; }
+  li { white-space: pre-wrap; padding: 10px; background: #eef5ed; margin-bottom: 8px; }
+</style>
+<h1>Local conversation with Avery</h1>
+<p>This fixture stays on this computer. Return adds one message below; there is no Send button or network request.</p>
+<label for="composer">Message to Avery</label>
+<textarea id="composer" rows="4" aria-label="Message to Avery"></textarea>
+<p>Messages sent: <strong id="count">0</strong></p>
+<ol id="messages" aria-label="Sent messages"></ol>
+<script>
+  const composer = document.getElementById('composer');
+  composer.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    if (!composer.value.trim()) return;
+    const message = document.createElement('li');
+    message.textContent = composer.value;
+    document.getElementById('messages').append(message);
+    document.getElementById('count').textContent = document.querySelectorAll('#messages li').length;
+    composer.value = '';
+  });
+</script>
+</html>
