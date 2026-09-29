@@ -33,6 +33,10 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    **Esc** or menu bar → **Land Noteling** brings it back early. Starting work brings it back too. Available while idle;
    with macOS Reduce Motion enabled, the fold and gentle flap stay at home.
 6. Claude can call the pack's scripts, `read_file` / `grep` over the docs, and `read_screen` (accessibility text).
+   General chat also knows the saved sources (the jobs taught with Watch Me).
+   - **Context:** every turn carries a short "Your saved jobs" list: name, kind, address, reading rules, and when each was taught and last run.
+   - **Tools** (`SourceConversation`): `get_source` shows one job with its latest findings, `update_source` edits it through the same store and checks as Manage sources, `remove_source` / `restore_source` take it out of future runs and bring it back, and `offer_run_source` adds a Run now tab.
+   - **Rules:** only the person's tap runs a job. Edits wait while a read is running, and they never clear a source's "needs review" flag. Each change leaves a receipt on the pad and an Open Manage sources tab.
 7. **Control** (off by default, Settings → "Allow Noteling to control the mouse and keyboard"): ask it to do something
    ("type the sum formula for me") and it does it through Claude's computer toolset. By default it works **in the
    background**: it drives the window you were in when you asked through Accessibility and events sent to that app, so
@@ -80,7 +84,7 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    `~/.noteling/recordings/<stamp>/` (folder 0700, files 0600). After stopping, enter a short name or description, then
    optionally add context such as reading rules, exceptions or where to stop. **Skip context** continues without it.
    Noteling waits for both steps before generating one draft from the recording and your inputs, then puts a compact
-   review on the pad, including the source's reading rules and any uncertainty notice. Retry preserves both inputs.
+   review on the pad, including the source's reading rules and any uncertainty notice. Retry preserves both inputs. Typing while a draft is under review revises it: the text joins the recording's context as "Changes requested after reviewing the draft", and the draft is written again from the same recording. Earlier requests still apply, and a failed draft can be revised the same way.
    **Open full draft** shows the complete steps, screens, glossary, caveats and source details in a separate, read-only
    text window with search and copy. Long documents stay out of the chat layout. **Keep it** saves the complete draft as a tool pack (`SKILL.md`,
    `docs/screens.md`, `docs/workflows/<task>.md`, `docs/glossary.md`) into `~/.noteling/tools/<site>/` without touching

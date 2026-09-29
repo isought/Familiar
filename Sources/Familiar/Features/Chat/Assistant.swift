@@ -36,6 +36,17 @@ final class Assistant: ObservableObject {
     var onOpenWatchDraft: ((_ title: String, _ markdown: String) -> Void)?
     var onSetControlLane: ((_ allow: Bool, _ background: Bool) -> Void)?   // the app persists both and reconfigures
     var cardConversation: CardConversation?
+    /// Saved sources ("jobs") in general chat: listed every turn, changeable through tools, runnable only by a tap.
+    var sourceConversation: SourceConversation? {
+        didSet {
+            sourceConversation?.onChange = { [weak self] receipt in self?.sourceChanged(receipt) }
+            sourceConversation?.onOfferRun = { [weak self] id, name in self?.offerSourceRun(id: id, name: name) }
+        }
+    }
+    var onOpenSources: (() -> Void)?
+    var onRunSource: ((UUID) -> Void)?
+    private var pendingSourceTabs: [String] = []   // added to the reply's tabs when the turn ends
+    private var offeredRuns: [String: UUID] = [:]  // Run now tab title → job
 
     let learning: WatchLearnSession
     let notes: ContextNotesService
@@ -79,6 +90,7 @@ final class Assistant: ObservableObject {
     static let fullDraftTab = "Open full draft"
     static let discardTab = "Discard"
     static let retryTab = "Try again"
+    static let openSourcesTab = "Open Manage sources"
     static let reservedTabs = [continueTab, skipContextTab, keepTab, fullDraftTab, discardTab, retryTab]
 
     init(config: Config, watcher: ContextWatcher, registry: ToolRegistry, shell: ShellState, learning: WatchLearnSession,
@@ -137,6 +149,8 @@ final class Assistant: ObservableObject {
         learning.clear()
         purposeMessageID = nil
         contextMessageID = nil
+        pendingSourceTabs = []
+        offeredRuns = [:]
     }
 
     func startWand() {
@@ -147,6 +161,12 @@ final class Assistant: ObservableObject {
     }
 
     func askSuggestion(_ s: String) {
+        if s == Self.openSourcesTab, let onOpenSources { onOpenSources(); return }
+        if let id = offeredRuns.removeValue(forKey: s) {
+            suggestions.removeAll { $0 == s }
+            onRunSource?(id)
+            return
+        }
         if s == "Back to general chat", cardConversation?.cardID != nil {
             cardConversation?.clear()
             execution.conversation.clear()
@@ -310,7 +330,7 @@ final class Assistant: ObservableObject {
         var lines: [String] = []
         if let purpose, !purpose.isEmpty { lines.append("_You said: “\(reviewExcerpt(purpose, limit: 140))”_") }
         guard d.parsed else {
-            return (lines + ["I couldn't turn this into a skill. Open full draft to inspect the response, or try again."]).joined(separator: "\n\n")
+            return (lines + ["I couldn't turn this into a skill. Open full draft to inspect the response, try again, or tell me what to change."]).joined(separator: "\n\n")
         }
         func field(_ label: String, _ value: String, limit: Int = 100) {
             lines.append("**\(label):** \(reviewExcerpt(value.isEmpty ? "Not established" : value, limit: limit))")
@@ -341,7 +361,7 @@ final class Assistant: ObservableObject {
             uncertainties(source.uncertainties)
             lines.append("Keep adds this source to Sources for Run all sources.")
         } else if teachingCalendar {
-            lines.append("**Reading source not established**\nKeep cannot register this draft for Run all sources. Discard it and teach the source address, account and reading boundary again.")
+            lines.append("**Reading source not established**\nKeep cannot register this draft for Run all sources. Tell me what is missing (the page address, the account, or what to read) and I'll write it again, or discard it and teach it again.")
         } else {
             field("Skill", d.packName)
             field("Description", d.packDescription.isEmpty ? d.workflowTitle : d.packDescription, limit: 180)
@@ -352,7 +372,7 @@ final class Assistant: ObservableObject {
             field("Caution", caveat, limit: 120)
             if d.caveats.count > 1 { lines.append("\(d.caveats.count - 1) more cautions in the full draft.") }
         }
-        lines.append("Open full draft for complete instructions and any shortened details.")
+        lines.append("Open full draft for complete instructions and any shortened details. To change something, just tell me, and I'll write it again.")
         return lines.joined(separator: "\n\n")
     }
 
@@ -438,8 +458,12 @@ final class Assistant: ObservableObject {
             return
         }
         if pendingDraft != nil || draftFailed {
-            transcript.append(ChatMessage(role: .error, text: "Keep or discard the draft above first."))
-            suggestions = reviewTabs([])
+            // Talking about the draft revises it: the feedback joins the recording's context and it is written again.
+            suggestions = []
+            if learning.revise(q) == nil {
+                transcript.append(ChatMessage(role: .error, text: "Keep or discard the draft above first."))
+                suggestions = reviewTabs([])
+            }
             return
         }
         let ctx = watcher.current ?? watcher.sample()
@@ -473,7 +497,8 @@ final class Assistant: ObservableObject {
                 }
             }
             guard generation == captureGeneration else { finishRequest(); return }
-            let context = cardConversation?.card == nil ? Prompt.context(ctx, recent: watcher.history) + packsSection(ctx) : ""
+            let context = cardConversation?.card == nil
+                ? Prompt.context(ctx, recent: watcher.history) + packsSection(ctx) + (sourceConversation?.context ?? "") : ""
             let text = context + "\n## Question\n\(q)\n"
             content.append(["type": "text", "text": text])
             diagnoseChat(.contextReady)
@@ -667,12 +692,13 @@ final class Assistant: ObservableObject {
                     guard let self else { return .text("unavailable", isError: true) }
                     return await self.lookAtScreen(ctx, generation: generation)
                 }
+                let sourceRoutes = sourceConversation?.routes() ?? []
                 if controlAllowed, let desktop {
                     return try await desktop.prepare(id: id, registry: registry, context: ctx, background: background,
-                                                     title: title, lookAtScreen: capture)
+                                                     title: title, additionalRoutes: sourceRoutes, lookAtScreen: capture)
                 }
                 let router = try ExecutionTools.make(registry: registry, context: ctx, control: nil,
-                                                     background: false, lookAtScreen: capture)
+                                                     background: false, additionalRoutes: sourceRoutes, lookAtScreen: capture)
                 return PreparedExecution(system: Prompt.system, router: router)
             })
             let onStatus: (String) -> Void = { [weak self] value in
@@ -737,20 +763,41 @@ final class Assistant: ObservableObject {
         case .reply(let reply):
             let (text, tabs) = Self.splitSuggestions(reply.text)
             transcript.append(ChatMessage(role: .assistant, text: text))
-            suggestions = reviewTabs(tabs)
+            suggestions = reviewTabs(tabs) + takeSourceTabs(excluding: tabs)
             let secs = String(format: "%.1f", result.elapsed)
             status = "\(reply.inputTokens) in · \(reply.outputTokens) out · \(reply.toolCalls) tool call\(reply.toolCalls == 1 ? "" : "s") · \(secs)s"
             Log.info("reply: \(reply.outputTokens) out, \(reply.inputTokens) in (cache read \(reply.cacheRead)), \(reply.toolCalls) tool calls, \(secs)s")
         case .cancelled:
             transcript.append(ChatMessage(role: .assistant, text: "Stopped."))
-            suggestions = reviewTabs([])
+            suggestions = reviewTabs([]) + takeSourceTabs(excluding: [])
             status = ""
         case .failed(let error):
             transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
-            suggestions = reviewTabs([])
+            suggestions = reviewTabs([]) + takeSourceTabs(excluding: [])
             status = ""
             Log.info("error: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: saved jobs
+
+    /// A saved-job tool changed something: a factual line on the pad, and a way to see it in Manage sources.
+    private func sourceChanged(_ receipt: String) {
+        transcript.append(ChatMessage(role: .receipt, text: receipt))
+        if !pendingSourceTabs.contains(Self.openSourcesTab) { pendingSourceTabs.append(Self.openSourcesTab) }
+    }
+
+    /// The chat offered to run a job: a tab the person can tap. Nothing runs until they do.
+    private func offerSourceRun(id: UUID, name: String) {
+        let tab = "Run “\(Self.reviewExcerpt(name, limit: 40))” now"
+        offeredRuns[tab] = id
+        if !pendingSourceTabs.contains(tab) { pendingSourceTabs.append(tab) }
+    }
+
+    /// The tabs saved-job tools asked for during this turn, handed out once.
+    private func takeSourceTabs(excluding shown: [String]) -> [String] {
+        defer { pendingSourceTabs = [] }
+        return pendingSourceTabs.filter { !shown.contains($0) }
     }
 
     private func finishRequest() {
