@@ -15,7 +15,7 @@ struct MorningStoreTests {
         let reopened = MorningStore(directory: fixture.directory)
         #expect(reopened.workspace == store.workspace)
         let folderMode = try FileManager.default.attributesOfItem(atPath: fixture.directory.path)[.posixPermissions] as? NSNumber
-        let fileMode = try FileManager.default.attributesOfItem(atPath: fixture.file.path)[.posixPermissions] as? NSNumber
+        let fileMode = try FileManager.default.attributesOfItem(atPath: fixture.database.path)[.posixPermissions] as? NSNumber
         #expect(folderMode?.intValue == 0o700)
         #expect(fileMode?.intValue == 0o600)
     }
@@ -144,12 +144,12 @@ struct MorningStoreTests {
         _ = try store.enqueue(cardID: card.id)
         var corrupted = store.workspace
         corrupted.workItems[0].people = [MorningPerson(name: "Unrelated person")]
-        let original = try JSONEncoder().encode(corrupted)
-        try original.write(to: fixture.file)
+        try SQLiteMorningRepository(directory: fixture.directory).save(corrupted)
+        let original = try Data(contentsOf: fixture.database)
         let reopened = MorningStore(directory: fixture.directory)
         #expect(reopened.error != nil)
         #expect(throws: MorningStoreError.self) { try reopened.loadSamples() }
-        #expect(try Data(contentsOf: fixture.file) == original)
+        #expect(try Data(contentsOf: fixture.database) == original)
     }
 
     @Test func contextResultLeavesOriginalDecisionOpenAndAllowsLaterAction() throws {
@@ -286,16 +286,16 @@ struct MorningStoreTests {
         let card = fixture.card(folderID: store.folders[0].id)
         try store.saveCard(card)
         let before = store.workspace
-        let backup = fixture.directory.appendingPathComponent("backup.json")
-        try FileManager.default.moveItem(at: fixture.file, to: backup)
-        try FileManager.default.createDirectory(at: fixture.file, withIntermediateDirectories: false)
+        let backup = fixture.directory.appendingPathComponent("backup.sqlite")
+        try FileManager.default.moveItem(at: fixture.database, to: backup)
+        try FileManager.default.createDirectory(at: fixture.database, withIntermediateDirectories: false)
         #expect(throws: (any Error).self) { try store.enqueue(cardID: card.id) }
         #expect(store.workspace == before)
         #expect(store.error != nil)
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: fixture.directory.path)
-        #expect(!leftovers.contains(where: { $0.hasPrefix(".workspace-") }))
-        try FileManager.default.removeItem(at: fixture.file)
-        try FileManager.default.moveItem(at: backup, to: fixture.file)
+        #expect(!leftovers.contains(where: { $0.hasPrefix(".morning-") }))
+        try FileManager.default.removeItem(at: fixture.database)
+        try FileManager.default.moveItem(at: backup, to: fixture.database)
         #expect(MorningStore(directory: fixture.directory).workspace == before)
         _ = try store.enqueue(cardID: card.id)
         #expect(store.error == nil)
@@ -349,6 +349,7 @@ struct MorningStoreTests {
     private struct Fixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("familiar-morning-tests-\(UUID().uuidString)")
         var file: URL { directory.appendingPathComponent("workspace.json") }
+        var database: URL { directory.appendingPathComponent("morning.sqlite") }
         func remove() { try? FileManager.default.removeItem(at: directory) }
         func card(folderID: UUID, people: [UUID] = [], title: String = "Confirm rollout date") -> MorningCard {
             MorningCard(folderID: folderID, title: title, summary: "A customer is waiting.", personIDs: people,

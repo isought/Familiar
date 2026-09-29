@@ -17,12 +17,11 @@ final class MorningTaskRunner {
     private var observation: AnyCancellable?
     private var phaseObservation: AnyCancellable?
     private var worker: Task<Void, Never>?
-    private var execution: ExecutionCoordinator?
+    private var execution: TaskExecution?
     private var activeID: UUID?
     private var enabled = false
     private var persistenceBlocked = false
     private var shuttingDown = false
-    private var previousStop: (() -> Void)?
 
     var isRunning: Bool { activeID != nil }
 
@@ -108,19 +107,6 @@ final class MorningTaskRunner {
         return true
     }
 
-    /// Native controller startup installs its own Stop handler; keep the whole queued turn cancellable.
-    func backgroundDidBegin() {
-        desktop.backgroundDidBegin()
-        installStop()
-    }
-
-    private func installStop() {
-        desktop.peek.onStop = { [weak self] in
-            guard let self, let id = self.activeID else { return }
-            self.cancel(id: id)
-        }
-    }
-
     private func syncPresentation() {
         desktop.tasks.syncMorning(store.workItems, message: store.queueMessage)
     }
@@ -169,24 +155,18 @@ final class MorningTaskRunner {
     }
 
     private func run(_ item: MorningWorkItem, mode: MorningActionMode, client: any ConversationClient) async {
-        let coordinator = ExecutionCoordinator()
-        execution = coordinator
         activeID = item.id
-        previousStop = desktop.peek.onStop
-        desktop.peek.reset()
-        desktop.peek.startedAt = Date()
-        desktop.peek.phase = .thinking
-        desktop.peek.caption = mode == .prepare ? "Preparing your file" : "Finding the task window"
-        desktop.tasks.start(id: item.id, title: item.action.title)
-        installStop()
-        syncPresentation()
-        var receipt: DesktopExecutionService.Receipt?
+        var task: TaskExecution?
         let status: MorningWorkStatus
         let text: String
         let elapsed: TimeInterval
         do {
-            let result = try await coordinator.run(client: client,
-                content: [["type": "text", "text": Self.prompt(for: item)]], prepareImages: false,
+            let handle = try desktop.executor.begin(TaskRequest(id: item.id, title: item.action.title,
+                initialStatus: mode == .prepare ? "Preparing your file" : "Finding the task window"))
+            task = handle
+            execution = handle
+            syncPresentation()
+            let plan = TaskPlan(content: [["type": "text", "text": Self.prompt(for: item)]],
                 prepare: { [self] in
                     if mode == .prepare {
                         return PreparedExecution(system: Self.preparationSystem,
@@ -198,16 +178,12 @@ final class MorningTaskRunner {
                     return PreparedExecution(system: plan.system + "\n\n" + Self.queuedSystem,
                                              router: plan.router, maxToolRounds: plan.maxToolRounds,
                                              shouldStop: plan.shouldStop)
-                }, stopNative: { [weak desktop] in desktop?.stop(id: item.id) },
-                cleanup: { [weak desktop] in receipt = desktop?.finish(id: item.id) },
-                onStatus: { [weak self] value in
-                    guard let self, self.activeID == item.id else { return }
-                    self.desktop.peek.caption = value
                 })
+            let result = try await handle.run(plan, client: client)
             elapsed = result.elapsed
             switch result.outcome {
             case .reply(let reply):
-                status = receipt?.stopped == true ? .cancelled : .completed
+                status = handle.receipt?.stopped == true ? .cancelled : .completed
                 text = reply.text
             case .cancelled:
                 status = .cancelled
@@ -224,14 +200,6 @@ final class MorningTaskRunner {
         // Stop observing native phases before cleanup publishes a final presentation state.
         activeID = nil
         execution = nil
-        desktop.peek.onStop = previousStop
-        previousStop = nil
-        desktop.peek.onGoAhead = nil
-        desktop.peek.onNotNow = nil
-        desktop.peek.onRaise = nil
-        desktop.peek.approvalRequestID = nil
-        desktop.peek.approvalMessage = nil
-        desktop.peek.approvalContext = nil
         var presentedText = text
         var outcome: BackgroundTaskOutcome = status == .completed ? .completed : status == .cancelled ? .stopped : .failed
         do {
@@ -242,8 +210,7 @@ final class MorningTaskRunner {
             outcome = .failed
             presentedText = "The result could not be saved. Do not repeat external actions without checking what happened.\n\n" + text
         }
-        desktop.peek.phase = outcome == .completed ? .done : .stopped
-        desktop.tasks.finish(id: item.id, outcome: outcome, text: presentedText, elapsed: elapsed)
+        task?.finish(outcome: outcome, text: presentedText, elapsed: elapsed)
         syncPresentation()
     }
 

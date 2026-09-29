@@ -6,17 +6,16 @@ import FamiliarContracts
 
 @Suite @MainActor
 struct BackgroundTaskPresentationTests {
-    @Test func taskResultStaysOutsideChatAndDoesNotReopenIt() {
+    @Test func taskResultStaysOutsideChatAndDoesNotReopenIt() throws {
         let (assistant, desktop) = fixture()
         let id = UUID()
-        desktop.tasks.start(id: id, title: "Fill the report")
+        let task = try desktop.executor.begin(TaskRequest(id: id, title: "Fill the report"))
         assistant.chatBusy = true
         assistant.shell.expanded = false
         #expect(assistant.backgroundTaskRunning)
         #expect(!assistant.chatResponding)
 
-        assistant.presentExecutionResult(reply("Filled the report.\nSuggestions: Inspect it | Next task"),
-                                         requestID: id, receipt: nil)
+        assistant.completeExecution(reply("Filled the report.\nSuggestions: Inspect it | Next task"), task: task)
 
         #expect(assistant.transcript.isEmpty)
         #expect(assistant.suggestions.isEmpty)
@@ -25,15 +24,15 @@ struct BackgroundTaskPresentationTests {
         #expect(!desktop.tasks.isExpanded)
     }
 
-    @Test func clearingChatDoesNotEraseTaskOrLoseItsLateResult() {
+    @Test func clearingChatDoesNotEraseTaskOrLoseItsLateResult() throws {
         let (assistant, desktop) = fixture()
         let id = UUID()
-        desktop.tasks.start(id: id, title: "Background report")
+        let task = try desktop.executor.begin(TaskRequest(id: id, title: "Background report"))
         assistant.transcript = [ChatMessage(role: .user, text: "Old question")]
         assistant.clearConversation()
         desktop.tasks.dismiss()
 
-        assistant.presentExecutionResult(reply("The result is ready.", accepted: false), requestID: id, receipt: nil)
+        assistant.completeExecution(reply("The result is ready.", accepted: false), task: task)
 
         #expect(desktop.tasks.history.first?.text == "The result is ready.")
         #expect(assistant.transcript.isEmpty)
@@ -41,30 +40,41 @@ struct BackgroundTaskPresentationTests {
         #expect(!assistant.shell.expanded)
     }
 
-    @Test func stoppedAndFailedTaskResultsStayOnTheirTask() {
+    @Test func stoppedAndFailedTaskResultsStayOnTheirTask() throws {
         let (assistant, desktop) = fixture()
         let stopped = UUID()
-        desktop.tasks.start(id: stopped, title: "Stopped task")
-        assistant.presentExecutionResult(reply("Completed the first field."), requestID: stopped,
-                                         receipt: .init(steps: 1, appName: "Test app", stopped: true))
+        let stoppedTask = try desktop.executor.begin(TaskRequest(id: stopped, title: "Stopped task"))
+        assistant.completeExecution(.init(outcome: .cancelled, accepted: true, elapsed: 1), task: stoppedTask)
         #expect(desktop.tasks.history.first?.outcome == .stopped)
         let failed = UUID()
-        desktop.tasks.start(id: failed, title: "Failed task")
-        assistant.presentExecutionResult(.init(outcome: .failed(ClaudeError(message: "Connection failed")),
-                                               accepted: true, elapsed: 2), requestID: failed, receipt: nil)
+        let failedTask = try desktop.executor.begin(TaskRequest(id: failed, title: "Failed task"))
+        assistant.completeExecution(.init(outcome: .failed(ClaudeError(message: "Connection failed")),
+                                          accepted: true, elapsed: 2), task: failedTask)
         #expect(desktop.tasks.history.first?.outcome == .failed)
         #expect(desktop.tasks.history.first?.text == "Connection failed")
         #expect(assistant.transcript.isEmpty)
     }
 
-    @Test func ordinaryConversationStillReceivesItsAnswer() {
+    @Test func ordinaryConversationStillReceivesItsAnswer() throws {
         let (assistant, desktop) = fixture()
-        assistant.presentExecutionResult(reply("Here is the answer.\nSuggestions: Explain more | Example"),
-                                         requestID: UUID(), receipt: nil)
+        let task = try desktop.executor.begin(TaskRequest(id: UUID(), title: "Explain this",
+                                                         presentation: .conversation), coordinator: assistant.execution)
+        assistant.completeExecution(reply("Here is the answer.\nSuggestions: Explain more | Example"), task: task)
         #expect(assistant.transcript.last?.role == .assistant)
         #expect(assistant.transcript.last?.text == "Here is the answer.")
         #expect(assistant.suggestions == ["Explain more", "Example"])
         #expect(!desktop.tasks.hasTasks)
+    }
+
+    @Test func invalidatedConversationDoesNotBecomeATaskOrRestoreClearedChat() throws {
+        let (assistant, desktop) = fixture()
+        let task = try desktop.executor.begin(TaskRequest(id: UUID(), title: "Explain this",
+                                                         presentation: .conversation), coordinator: assistant.execution)
+        assistant.clearConversation()
+        assistant.completeExecution(reply("An old answer", accepted: false), task: task)
+        #expect(assistant.transcript.isEmpty)
+        #expect(!desktop.tasks.hasTasks)
+        #expect(desktop.tasks.history.isEmpty)
     }
 
     private func reply(_ text: String, accepted: Bool = true) -> ExecutionResult {

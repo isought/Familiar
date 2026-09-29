@@ -254,7 +254,10 @@ struct BubbleView: View {
         let tabsOn = state.busy ? nil : notes.last { $0.hasAnswer }?.id   // follow-ups stick to the last real answer
         return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                // Notes change height as tabs and the busy row move between turns.
+                // Lazy height estimates can loop with bottom-anchored scrolling;
+                // measure the current transcript before asking it to scroll.
+                VStack(alignment: .leading, spacing: 14) {
                     if notes.isEmpty { welcomeNote }
                     ForEach(Array(notes.enumerated()), id: \.element.id) { i, n in
                         let latest = i == notes.count - 1
@@ -275,9 +278,15 @@ struct BubbleView: View {
             }
             .defaultScrollAnchor(.bottom)
             .onChange(of: state.transcript.count) { _, _ in
+                MainThreadDiagnostics.shared.mark(.chatScrollRequested, itemCount: notes.count)
                 withAnimation { proxy.scrollTo(Note.id(containing: state.transcript.last?.id, in: Note.group(state.transcript)), anchor: .bottom) }
             }
-            .onChange(of: state.busy) { _, busy in if busy { withAnimation { proxy.scrollTo("busy", anchor: .bottom) } } }
+            .onChange(of: state.busy) { _, busy in
+                if busy {
+                    MainThreadDiagnostics.shared.mark(.chatScrollRequested, itemCount: notes.count)
+                    withAnimation { proxy.scrollTo("busy", anchor: .bottom) }
+                }
+            }
             .onAppear { proxy.scrollTo(notes.last?.id, anchor: .bottom) }   // the pad opens on the newest note
         }
     }

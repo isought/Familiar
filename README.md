@@ -74,9 +74,12 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
 8. **Watch me**: menu bar → **Watch Me** (or the eye on the pad). Do the task the way you normally do, then press ⌃⌥Space or
    **Stop Watching**. Familiar records clicks (with the real labels of what you clicked, via Accessibility), a crop around each
    click, a full frame whenever the screen changes, and text typed into named form fields, into
-   `~/.familiar/recordings/<stamp>/` (folder 0700, files 0600). It asks what you were doing, writes the recording up through
-   Claude and puts a draft on the pad: numbered steps with the real button and field names, the screens seen, the caveats and
-   the match rule (which hosts, titles or apps the pack will apply to). **Keep it** writes a tool pack (`SKILL.md`,
+   `~/.familiar/recordings/<stamp>/` (folder 0700, files 0600). After stopping, enter a short name or description, then
+   optionally add context such as reading rules, exceptions or where to stop. **Skip context** continues without it.
+   Familiar waits for both steps before generating one draft from the recording and your inputs, then puts a compact
+   review on the pad, including the source's reading rules and any uncertainty notice. Retry preserves both inputs.
+   **Open full draft** shows the complete steps, screens, glossary, caveats and source details in a separate, read-only
+   text window with search and copy. Long documents stay out of the chat layout. **Keep it** saves the complete draft as a tool pack (`SKILL.md`,
    `docs/screens.md`, `docs/workflows/<task>.md`, `docs/glossary.md`) into `~/.familiar/tools/<site>/` without touching
    existing files (new workflows get `-2`, `-3`; screens are added only when new); **Discard** throws the draft away. Either
    way the recording folder is deleted, as it is when you clear the pad or quit; anything left behind by a crash is swept
@@ -99,8 +102,40 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    **Try sample files** adds explicitly fictional examples; these can only prepare local drafts and analysis.
    Preparation uses your configured Claude connection with no tools. **Work in an app** uses existing desktop control
    and approvals. Queue entries survive restarts; interrupted work returns for review rather than replaying actions.
-   This first version is entered locally: email/Jira imports, automatic morning generation and knowledge-base connections
-   are not connected yet. See [the implementation boundaries](docs/architecture/morning-files.md).
+   **Manage sources → Teach a source with Watch Me** teaches a calendar, inbox, or web view from a demonstration.
+   Show the location, account, and information to read; explain what they mean and review the learned description in chat.
+   **Keep it** registers a reading source in Morning Files. If no reading source was established, Familiar keeps the review
+   open and explains what is missing. Ordinary Watch Me action workflows remain separate from source collection.
+   Previously saved demonstrations appear under **Saved reading workflows → Review & add** so you can confirm their
+   source address and reading scope without recording again. For calendars, choose a day and **Read calendar**.
+   Each saved source has **Edit** and **Remove** actions. Edit its description, location, account and reading rules;
+   changes update the same source. Remove excludes it from future batches while keeping past run results.
+   **Removed sources → Restore** brings the saved setup back, including after a restart.
+   Familiar uses fresh observations to collect that date and compute meeting blocks, accepted conflicts, and open time
+   within your selected briefing window. Partial reads show their limitations and do not assert free time.
+   **Run all sources** reads registered sources one at a time: calendars for today (09:00–17:00 briefing window in each
+   source’s time zone), and mail/web sources within their saved scope. It collects up to 25 visible mail/web observations,
+   retaining evidence and coverage gaps. New-item inbox discovery uses visible rows and snippets. Separately,
+   unresolved cards can request bounded rechecks of their tracked conversations, including opening a matching thread.
+   Results show which reads completed, were partial, or failed. Stop cancels the remaining reads
+   and keeps collections already saved. Clicking a completed row opens that run’s findings; **Manage sources**
+   is for saved setup and rules. **Run history** keeps earlier results available after a restart. Findings appear
+   before expandable collection details, and partial or failed reads remain clearly labeled.
+   Each run is stored under `~/.familiar/runs/<readable-timestamp>/`, with `run.json`, per-source JSON
+   exports, and a readable `report.md`. **Show run folder** opens the run folder. Existing saved collections
+   are preserved as recovered results; future runs retain every collection instead of replacing previous ones.
+   This first calendar collection supports exposed Accessibility navigation controls; unsupported controls are reported.
+   Calendar collection does not create or move meetings. Reads are started explicitly; scheduled collection, preference
+   history, relationship-based recommendations, and direct service APIs are not connected yet.
+   Saved observations generate continuing cards. Repeated scans match cards using the source and an extracted item key;
+   newer evidence can update or resolve a card, while missing items remain open. Human edits and handled decisions persist.
+   **Discuss or adjust** opens a focused card conversation; an explicit handoff queues its action for the shared executor.
+   Cards, decisions and accepted work live in a local SQLite database, separate from source rules and run evidence.
+   See [persistent cards](docs/architecture/persistent-cards.md) for identity and recheck limitations.
+   See [calendar collection](docs/architecture/calendar-ingestion.md) and [Morning Files](docs/architecture/morning-files.md).
+
+Familiar appears in the Dock with its app icon. Click it to reopen chat, use **Quit Familiar** or ⌘Q to exit,
+or use macOS **Force Quit** (⌥⌘Esc) if it becomes unresponsive. Closing a window keeps Familiar running.
 
 ## Try it on another Mac (5 minutes)
 ```bash
@@ -113,7 +148,7 @@ git clone https://github.com/isought/Familiar.git && cd Familiar
 Then, once:
 1. macOS asks for **Accessibility** and **Screen Recording**. Grant both (System Settings → Privacy & Security), then quit and relaunch Familiar from the menu bar.
 2. Right-click the note → **Settings…** → choose **API key** and paste an Anthropic API key, or choose **Local Claude CLI** to use your installed, signed-in Claude Code → **Save**.
-3. Menu bar → **Watch Me**, do a short task in the app you want it to learn, then **Stop Watching** (or ⌃⌥Space). Answer "what were you doing?" or skip it, read the draft, **Keep it**. It becomes a tool pack under `~/.familiar/tools/`.
+3. Menu bar → **Watch Me**, do a short task in the app you want it to learn, then **Stop Watching** (or ⌃⌥Space). Add a short description, then add optional context or choose **Skip context**. Review the draft and choose **Keep it**. It becomes a tool pack under `~/.familiar/tools/`.
 
 No packs are needed to start: watching creates them. Chat, recording write-ups, and delegated actions send their selected
 context to your configured Claude connection. Creating and editing Morning Files or Who’s Who entries stays local.

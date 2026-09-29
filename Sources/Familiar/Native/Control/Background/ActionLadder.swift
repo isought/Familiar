@@ -21,6 +21,7 @@ final class ActionLadder {
     var caption: (String) -> Void = { _ in }
     var declaredIrreversible: [String] = []      // from the matching pack's manifest
     var warningNoteLabels: [String] = []         // sticky warnings anchored on controls in this scene
+    var pressRefusal: ((IrreversibleGuard.ElementInfo) -> String?)?
     var requestApproval: ((String) async -> BackgroundActionApproval.Decision)?
     var viewportDirty = false                    // the human scrolled or resized since the model last looked
     private(set) var lastRaw: RawCapture?
@@ -44,6 +45,11 @@ final class ActionLadder {
         await PidEvents.type(pid: pid, text: text, cancelled: stopped)
     }
     var captureTypingState: ((AXUIElement?) async -> AXSnapshot)?
+    // The press boundary is injectable so policy revalidation can be checked without
+    // granting tests permission to press a real application's controls.
+    var readPressInfo: ((AXUIElement) -> IrreversibleGuard.ElementInfo)?
+    var capturePressState: ((AXUIElement) async -> AXSnapshot)?
+    var performPress: (AXUIElement) -> Void = { _ = AXUIElementPerformAction($0, kAXPressAction as CFString) }
     var refreshWindow: (inout TargetWindow) -> Bool = { $0.refresh() }
     var postMessageReturn: (pid_t) -> Void = { PidEvents.press(pid: $0, code: 36, flags: []) }
 
@@ -236,9 +242,13 @@ final class ActionLadder {
     func clickElement(id: Int) async -> ToolResult {
         guard let el = hits[id] else { return .text("No element #\(id). Call find_on_screen first; ids are only valid for its latest result.", isError: true) }
         if let gone = refreshTarget() { return gone }
+        return await pressElement(el)
+    }
+
+    func pressElement(_ el: AXUIElement) async -> ToolResult {
         step += 1
         peek?.step = step
-        let info = axInfo(el)
+        let info = readPressInfo?(el) ?? axInfo(el)
         caption("Pressing “\(plainName(info))”")
         if let frame = axFrame(el) { updateGhost(at: CGPoint(x: frame.midX, y: frame.midY)) }
         let noReaction = Self.needsForeground("“\(info.label)” did not react to being pressed")
@@ -296,17 +306,21 @@ final class ActionLadder {
 
     /// Rung A press with the irreversible guard and verification. `then` supplies the fall-through result (nil = try the next rung).
     private func press(_ el: AXUIElement, info: IrreversibleGuard.ElementInfo, then fallback: () -> ToolResult?) async -> ToolResult? {
+        if let reason = pressRefusal?(info) { return .text(reason, isError: true) }
         let permission = await guardPress(el, info: info)
         if let blocked = permission.blocked { return blocked }
         ghost?.highlight(rectCG: axFrame(el), label: info.label.isEmpty ? nil : String(info.label.prefix(40)))
         defer { ghost?.highlight(rectCG: nil, label: nil) }
         let point = axFrame(el).map { CGPoint(x: $0.midX, y: $0.midY) }
-        let before = await snapshot(element: el, cropAroundCG: point)
+        let before: AXSnapshot
+        if let capturePressState { before = await capturePressState(el) }
+        else { before = await snapshot(element: el, cropAroundCG: point) }
         guard !isStopped(), !Task.isCancelled else { return .text("Stopped before pressing the control.", isError: true) }
         // Capturing is asynchronous too. Check again immediately before AXPress, with no suspension between
         // validation and the action, so a target switch or changed control cannot inherit the human's answer.
         if let approval = permission.approval, !approvalStillValid(approval, element: el) { return staleApproval }
-        AXUIElementPerformAction(el, kAXPressAction as CFString)
+        if let reason = pressRefusal?(readPressInfo?(el) ?? axInfo(el)) { return .text(reason, isError: true) }
+        performPress(el)
         ghost?.pulse(count: 1)
         peek?.pulse += 1
         let v = await verify(before: before, element: el, cropAroundCG: point, expecting: .anyChange)
