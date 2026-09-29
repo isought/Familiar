@@ -14,7 +14,7 @@ final class ComputerController {
     ]
     static let targetWindowDefinition: [String: Any] = [
         "name": "target_window",
-        "description": "Background lane: list the app windows Familiar can work in (id, app, title), or switch to one by id. The window that was in front when the user asked is the target by default; switch only when the task needs another app, then take a screenshot.",
+        "description": "Background lane: list the app windows Noteling can work in (id, app, title), or switch to one by id. The window that was in front when the user asked is the target by default; switch only when the task needs another app, then take a screenshot.",
         "input_schema": ["type": "object", "properties": ["select": ["type": "integer", "description": "Window id from the list; omit to just list"]]],
     ]
     static let clickElementDefinition: [String: Any] = [
@@ -370,7 +370,7 @@ final class ComputerController {
     /// App termination must let the native transaction restore focus before its
     /// process and virtual monitor disappear. The borrower owns its short timeout.
     func endAfterInputReturns() async {
-        stop(reason: "Familiar is quitting")
+        stop(reason: "Noteling is quitting")
         while offscreenActionRunning {
             await withCheckedContinuation { continuation in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { continuation.resume() }
@@ -620,7 +620,7 @@ final class ComputerController {
     nonisolated static var virtualDisplayRelocationNotice: ToolResult {
         // This is a recoverable precondition, like needs_foreground. A hard error
         // makes the CLI adapter stop all further computer actions for the request.
-        .text("Action not performed: the task window was moved to Familiar's separate display first. Take a fresh screenshot, find the intended control again, then REPEAT the action you just requested. A requested click did NOT focus its field, so do not type until you repeat that click and confirm focus. Coordinates and element IDs from before the move are invalid. Background input and approval rules still apply.")
+        .text("Action not performed: the task window was moved to Noteling's separate display first. Take a fresh screenshot, find the intended control again, then REPEAT the action you just requested. A requested click did NOT focus its field, so do not type until you repeat that click and confirm focus. Coordinates and element IDs from before the move are invalid. Background input and approval rules still apply.")
     }
 
     /// Move only once work begins, never for a read-only question. A move can change
@@ -1133,8 +1133,8 @@ final class ComputerController {
     }
 
     private func hudLine(_ s: String) -> String {
-        grantActive ? "Familiar has the mouse for a moment · \(s) · move it or press Esc to take it back"
-                    : "Familiar is controlling · \(s) · move the mouse or press Esc to stop"
+        grantActive ? "Noteling has the mouse for a moment · \(s) · move it or press Esc to take it back"
+                    : "Noteling is controlling · \(s) · move the mouse or press Esc to stop"
     }
 
     // MARK: key names (xdotool style, as the model uses them)

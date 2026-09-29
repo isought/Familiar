@@ -223,7 +223,7 @@ struct MorningFilesView: View {
                             Image(systemName: "tray.full").font(.system(size: 23))
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Read your sources").font(.system(size: 14, weight: .semibold))
-                                Text("Teach Familiar where your information lives, then read it again.")
+                                Text("Teach Noteling where your information lives, then read it again.")
                                     .font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
                             }
                             Spacer()
@@ -234,7 +234,7 @@ struct MorningFilesView: View {
                 if store.cards.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Your morning starts small.").font(HandFont.font(size: 24))
-                        Text("Keep a note here, review what needs your attention, and decide what you’d like Familiar to help with.")
+                        Text("Keep a note here, review what needs your attention, and decide what you’d like Noteling to help with.")
                             .font(.system(size: 14)).foregroundStyle(Pad.inkSoft).fixedSize(horizontal: false, vertical: true)
                         HStack {
                             Button("Create a note") { createNote() }.buttonStyle(MorningActionButton(primary: true))
@@ -382,7 +382,7 @@ struct MorningFilesView: View {
                 if !card.unknowns.isEmpty { detailSection("Still unclear", icon: "questionmark.circle", text: card.unknowns) }
                 workResults(card)
                 VStack(alignment: .leading, spacing: 10) {
-                    sectionLabel("What Familiar can do", icon: "sparkles")
+                    sectionLabel("What Noteling can do", icon: "sparkles")
                     Text(card.action.title).font(.system(size: 14, weight: .semibold))
                     if card.tracking != nil {
                         DisclosureGroup("Task instructions") {
@@ -592,7 +592,7 @@ struct MorningFilesView: View {
         perform {
             let item = try store.enqueue(cardID: card.id, kind: kind)
             undo = nil
-            notice = kind == .context ? "Familiar will help clarify this file. Your decision stays open." : "Handed to Familiar. Progress and results stay with this file."
+            notice = kind == .context ? "Noteling will help clarify this file. Your decision stays open." : "Handed to Noteling. Progress and results stay with this file."
             if kind == .action { navigation.route = .folder(card.folderID) }
             handoff(item)
         }

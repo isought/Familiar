@@ -10,4 +10,6 @@ if [ -d "$TEST_FRAMEWORKS/Testing.framework" ]; then
   TEST_ARGS+=(-Xswiftc -F -Xswiftc "$TEST_FRAMEWORKS" -Xlinker -rpath -Xlinker "$TEST_FRAMEWORKS"
              -Xlinker -rpath -Xlinker "$TEST_DEVELOPER/usr/lib")
 fi
+# Tests never touch your real data folder.
+export NOTELING_HOME="${NOTELING_HOME:-$(mktemp -d "${TMPDIR:-/tmp}/noteling-tests.XXXXXX")}"
 exec swift test "${TEST_ARGS[@]}" "$@"

@@ -39,13 +39,13 @@ enum ScreenCaptureError: LocalizedError {
         switch self {
         case .noDisplay: return "No display found to capture."
         case .encodeFailed: return "Could not encode the screenshot."
-        case .notPermitted: return "Screen Recording permission is not granted. Open System Settings → Privacy & Security → Screen Recording and enable Familiar, then relaunch."
+        case .notPermitted: return "Screen Recording permission is not granted. Open System Settings → Privacy & Security → Screen Recording and enable Noteling, then relaunch."
         }
     }
 }
 
 enum ScreenCapture {
-    /// Captures the display containing `point` (or the mouse) at native resolution, excluding Familiar's own windows.
+    /// Captures the display containing `point` (or the mouse) at native resolution, excluding Noteling's own windows.
     static func captureDisplay(containing point: NSPoint? = nil) async throws -> RawCapture {
         guard Permissions.screenRecordingGranted else { throw ScreenCaptureError.notPermitted }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)

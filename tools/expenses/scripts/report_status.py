@@ -13,7 +13,7 @@ import os
 
 
 def run(report_id: str) -> dict:
-    ctx = json.loads(os.environ.get("FAMILIAR_CONTEXT", "{}"))
+    ctx = json.loads(os.environ.get("NOTELING_CONTEXT") or os.environ.get("FAMILIAR_CONTEXT", "{}"))
     return {
         "report_id": report_id,
         "status": "Pending approval",

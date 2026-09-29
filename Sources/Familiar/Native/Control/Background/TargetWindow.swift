@@ -21,8 +21,10 @@ enum TargetError: LocalizedError, Equatable {
 enum TargetPolicy {
     static let terminalMessage = "I don't type into terminals or shells, even in the background: a keystroke there runs a command."
 
-    /// Familiar's own bundle id. The fallback is the shipped id, so the policy holds in tests too (Bundle.main is xctest there).
-    static let selfBundleID = Bundle.main.bundleIdentifier ?? "com.isought.familiar"
+    /// Noteling's own bundle id. The fallback is the shipped id, so the policy holds in tests too (Bundle.main is xctest there).
+    static let selfBundleID = Bundle.main.bundleIdentifier ?? "app.noteling.mac"
+    /// Every id this app has shipped under, so it never drives an older copy of itself either.
+    static let ownBundleIDs: Set<String> = [selfBundleID, "app.noteling.mac", "com.isought.familiar"]
 
     static let terminalBundles: Set<String> = [
         "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.github.wez.wezterm",
@@ -32,8 +34,8 @@ enum TargetPolicy {
         "com.apple.systempreferences", "com.apple.SecurityAgent", "com.apple.keychainaccess",
     ]
 
-    /// Bundle ids Familiar never drives in the background (terminals, itself, security UI).
-    static let refusedBundles: Set<String> = terminalBundles.union(securityBundles).union(["com.isought.familiar", selfBundleID])
+    /// Bundle ids Noteling never drives in the background (terminals, itself, security UI).
+    static let refusedBundles: Set<String> = terminalBundles.union(securityBundles).union(ownBundleIDs)
 
     /// Editors whose embedded terminals are refused by focused element (VS Code, Xcode, Cursor, Zed, JetBrains).
     static let editorBundles: Set<String> = [
@@ -52,7 +54,7 @@ enum TargetPolicy {
     /// Pure. `focusedPath` = titles/descriptions/roles of the focused element and its ancestors (innermost first).
     static func refusal(bundleID: String?, appName: String, focusedPath: [String]) -> String? {
         let id = bundleID ?? ""
-        if id == selfBundleID || id == "com.isought.familiar" { return "I don't drive Familiar itself." }
+        if ownBundleIDs.contains(id) { return "I don't drive Noteling itself." }
         if terminalBundles.contains(id) { return terminalMessage }
         if securityBundles.contains(id) { return "I don't work in \(appName) in the background: it holds permissions and passwords, so it's yours to click." }
         if editorBundles.contains(id), focusedPath.contains(where: mentionsTerminal) { return terminalMessage }
@@ -103,10 +105,10 @@ struct TargetWindow {
     // MARK: Resolution
 
     /// The window of the frontmost app: focused window, else main window. Refuses per TargetPolicy and when the
-    /// frontmost app is Familiar.
+    /// frontmost app is Noteling.
     static func resolveFrontmost() async -> Result<TargetWindow, TargetError> {
         guard let app = NSWorkspace.shared.frontmostApplication else { return .failure(.noFrontmostApp) }
-        if app.processIdentifier == ProcessInfo.processInfo.processIdentifier { return .failure(.refused("I don't drive Familiar itself.")) }
+        if app.processIdentifier == ProcessInfo.processInfo.processIdentifier { return .failure(.refused("I don't drive Noteling itself.")) }
         guard Permissions.accessibilityGranted else { return .failure(.permission(accessibilityMessage)) }
         let axApp = application(app.processIdentifier)
         guard let axWindow = AX.element(axApp, kAXFocusedWindowAttribute) ?? AX.element(axApp, kAXMainWindowAttribute) else {
@@ -118,7 +120,7 @@ struct TargetWindow {
     /// Any window by id (from `list()`), same checks.
     static func resolve(windowID: CGWindowID) async -> Result<TargetWindow, TargetError> {
         guard let win = cgWindows().first(where: { $0.id == windowID }) else { return .failure(.noWindow("That window")) }
-        if win.pid == ProcessInfo.processInfo.processIdentifier { return .failure(.refused("I don't drive Familiar itself.")) }
+        if win.pid == ProcessInfo.processInfo.processIdentifier { return .failure(.refused("I don't drive Noteling itself.")) }
         guard let app = NSRunningApplication(processIdentifier: win.pid) else { return .failure(.noWindow(win.owner)) }
         guard Permissions.accessibilityGranted else { return .failure(.permission(accessibilityMessage)) }
         let axApp = application(win.pid)
@@ -129,7 +131,7 @@ struct TargetWindow {
         return await build(app: app, axApp: axApp, axWindow: axWindow, cgWindowID: windowID)
     }
 
-    /// Candidate windows for the model: layer-0 windows with a title or an owner name, excluding Familiar, sorted
+    /// Candidate windows for the model: layer-0 windows with a title or an owner name, excluding Noteling, sorted
     /// front to back; includes off-screen and minimized ones.
     static func list() -> [Descriptor] {
         let me = ProcessInfo.processInfo.processIdentifier
@@ -155,7 +157,7 @@ struct TargetWindow {
         }.map(\.element)
     }
 
-    private static let accessibilityMessage = "Accessibility permission is off. Open System Settings → Privacy & Security → Accessibility and enable Familiar."
+    private static let accessibilityMessage = "Accessibility permission is off. Open System Settings → Privacy & Security → Accessibility and enable Noteling."
 
     private static func build(app: NSRunningApplication, axApp: AXUIElement, axWindow: AXUIElement, cgWindowID: CGWindowID?) async -> Result<TargetWindow, TargetError> {
         let pid = app.processIdentifier

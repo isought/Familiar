@@ -4,7 +4,7 @@ The app runs on your Mac and has no accounts. It sends nothing to its developer:
 
 ## What stays on your Mac
 
-The app stores its data in `~/.familiar`, or in `$FAMILIAR_HOME` if you set it:
+The app stores its data in `~/.noteling`, or in `$NOTELING_HOME` if you set it. If you used it before it was renamed from Familiar, your existing `~/.familiar` folder is moved there the first time you open Noteling.
 
 | What | Where |
 |---|---|
@@ -14,7 +14,7 @@ The app stores its data in `~/.familiar`, or in `$FAMILIAR_HOME` if you set it:
 | Sources you set up, run history and findings | `calendar/`, `runs/` |
 | Cards, your decisions and context, Who's Who, queued work | `morning/` |
 | Watch Me recordings, only while a draft is being written | `recordings/` |
-| Activity log | `familiar.log` |
+| Activity log | `noteling.log` |
 
 Watch Me recordings, developer-build secrets and the activity log can be read only by your macOS user account.
 
@@ -49,8 +49,8 @@ Watch Me recordings, developer-build secrets and the activity log can be read on
 ## Deleting your data
 
 1. Quit the app.
-2. Delete `~/.familiar` (or your `$FAMILIAR_HOME` folder).
-3. Delete the secrets that signed builds saved in the Keychain. Open Keychain Access and delete the items under `com.isought.familiar`, plus `com.familiar.app` and `com.sidekick.app` from older builds.
+2. Delete `~/.noteling` (or your `$NOTELING_HOME` folder).
+3. Delete the secrets that signed builds saved in the Keychain. Open Keychain Access and delete the items under `app.noteling.mac`, plus `com.isought.familiar`, `com.familiar.app` and `com.sidekick.app` from builds before the rename.
 
 Data already sent to your Claude connection is handled under that provider's terms.
 
@@ -62,4 +62,4 @@ Data already sent to your Claude connection is handled under that provider's ter
 
 ## Changes and questions
 
-This notice describes the current version of the app; its history is this file's history. For questions, open an issue at https://github.com/isought/Familiar/issues. Please don't post personal data there.
+This notice describes the current version of the app; its history is this file's history. For questions, open an issue at https://github.com/noteling/noteling/issues. Please don't post personal data there.

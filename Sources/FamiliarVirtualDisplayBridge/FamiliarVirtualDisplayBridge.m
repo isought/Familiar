@@ -3,7 +3,7 @@
 
 // Private ABI declarations cross-checked against DeskPad and Chromium's macOS
 // virtual-display utility. Runtime lookup keeps an unavailable API from stopping
-// Familiar from launching; no private classes escape this module.
+// Noteling from launching; no private classes escape this module.
 // https://github.com/Stengo/DeskPad/blob/main/DeskPad/CGVirtualDisplayPrivate.h
 // https://github.com/chromium/chromium/blob/main/ui/display/mac/test/virtual_display_util_mac.mm
 @interface CGVirtualDisplayDescriptor : NSObject
@@ -39,7 +39,7 @@
 @end
 
 static NSError *DisplayError(NSInteger code, NSString *description) {
-    return [NSError errorWithDomain:@"Familiar.VirtualDisplay" code:code
+    return [NSError errorWithDomain:@"Noteling.VirtualDisplay" code:code
                           userInfo:@{NSLocalizedDescriptionKey: description}];
 }
 
@@ -72,7 +72,7 @@ static NSError *DisplayError(NSInteger code, NSString *description) {
 
     @try {
         _descriptor = [[descriptorClass alloc] init];
-        _descriptor.name = @"Familiar Background Workspace";
+        _descriptor.name = @"Noteling Background Workspace";
         _descriptor.queue = dispatch_get_main_queue();
         _descriptor.maxPixelsWide = width;
         _descriptor.maxPixelsHigh = height;

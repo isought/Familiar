@@ -30,7 +30,7 @@ struct LearnedReadingSource: Codable, Equatable, Identifiable {
     func validateForRead() throws {
         try validate()
         try calendarRequire(!requiresReview, "Review and save this source’s location and reading scope before running it.")
-        try calendarRequire(calendarHasText(scope), "Confirm which mailbox, view, or records Familiar should read.")
+        try calendarRequire(calendarHasText(scope), "Confirm which mailbox, view, or records Noteling should read.")
         try calendarRequire(!url.isEmpty || calendarHasText(account), "Confirm the account for this native reading source.")
     }
 

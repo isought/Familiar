@@ -6,7 +6,7 @@ import Foundation
 import SwiftUI
 
 struct ChatMessage: Identifiable {
-    enum Role { case user, wand, assistant, error, draft, learned, note, receipt }   // draft/learned: a note Familiar starts itself (a watched workflow's title), before and after Keep; note: a sticky note someone left on the control; receipt: the last frame of a background job
+    enum Role { case user, wand, assistant, error, draft, learned, note, receipt }   // draft/learned: a note Noteling starts itself (a watched workflow's title), before and after Keep; note: a sticky note someone left on the control; receipt: the last frame of a background job
     let id = UUID()
     let role: Role
     let text: String

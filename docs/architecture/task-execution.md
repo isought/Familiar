@@ -62,13 +62,13 @@ Those decisions cannot be replaced by a generic successful provider response.
 
 `CalendarStore` owns source-definition validation and transactions. It depends on
 `SourceRulesRepository`; the current `FileSourceRulesRepository` preserves
-`~/.familiar/calendar/workspace.json` version 4. `SourceRulesSnapshot` contains
+`~/.noteling/calendar/workspace.json` version 4. `SourceRulesSnapshot` contains
 reusable definitions only. Older embedded observations arrive separately for
 migration into run history before the rules file is replaced.
 
 `SourceRunStore` owns run lifecycle and observable records. It depends on
 `SourceRunRepository`; `FileSourceRunRepository` owns timestamped folders under
-`~/.familiar/runs`, authoritative `run.json`, generated per-source JSON and
+`~/.noteling/runs`, authoritative `run.json`, generated per-source JSON and
 `report.md`, and atomic file replacement. The contracts permit repositories with
 no folder location. Current files, permissions and migration behavior are retained;
 this separation does not move synchronous file work off the main actor.

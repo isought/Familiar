@@ -43,7 +43,7 @@ struct PythonRuntimeTests {
 
     private struct Fixture {
         let root: URL
-        var resources: URL { root.appendingPathComponent("Familiar.app/Contents/Resources") }
+        var resources: URL { root.appendingPathComponent("Noteling.app/Contents/Resources") }
         var bundledUv: URL { resources.appendingPathComponent("bin/uv") }
         var unrelatedDirectory: URL { root.appendingPathComponent("elsewhere") }
 
@@ -54,7 +54,7 @@ struct PythonRuntimeTests {
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 }
                 try Data().write(to: resources.appendingPathComponent("py/run_tool.py"))
-                _ = try executable("Familiar.app/Contents/Resources/bin/uv")
+                _ = try executable("Noteling.app/Contents/Resources/bin/uv")
             } catch {
                 remove()
                 throw error

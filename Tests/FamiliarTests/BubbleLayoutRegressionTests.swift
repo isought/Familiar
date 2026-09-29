@@ -24,7 +24,7 @@ struct BubbleLayoutRegressionTests {
         child.executableURL = repository.appendingPathComponent(".build/debug/Familiar")
         child.arguments = ["--probe-watch-keep"]
         var environment = ProcessInfo.processInfo.environment
-        environment["FAMILIAR_HOME"] = directory.appendingPathComponent("home").path
+        environment["NOTELING_HOME"] = directory.appendingPathComponent("home").path
         environment["FAMILIAR_BUBBLE_LAYOUT_FIXTURE"] = directory.path
         child.environment = environment
         child.standardOutput = handle

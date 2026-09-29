@@ -17,7 +17,7 @@ list is valid. Receipts make each source run idempotent across relaunch and repe
 generation requests.
 
 The person decides whether to keep ownership, file a card away, discuss it, or hand
-its action to Familiar. An accepted action becomes an immutable `MorningWorkItem`
+its action to Noteling. An accepted action becomes an immutable `MorningWorkItem`
 snapshot and follows the existing `MorningTaskRunner` and shared executor path.
 See [task execution](task-execution.md).
 
@@ -94,7 +94,7 @@ normal queue; discussing or adjusting a proposal does not execute it.
 
 `MorningStore` owns validation and domain transactions through `MorningRepository`.
 The current `SQLiteMorningRepository` stores mutable morning state at
-`~/.familiar/morning/morning.sqlite` (under `FAMILIAR_HOME` when redirected). Workspace
+`~/.noteling/morning/morning.sqlite` (under `FAMILIAR_HOME` when redirected). Workspace
 metadata, card payloads and work-item payloads commit in one SQLite transaction.
 A unique tracking-key column enforces one card per source item. Published state and
 generation receipts change only after the transaction succeeds.
@@ -105,9 +105,9 @@ for recovery. Once the database exists, it is authoritative. Existing cards, peo
 folders, decisions and work snapshots keep their identities. In-progress work is
 recovered as interrupted using the existing recovery behavior.
 
-Timestamped folders under `~/.familiar/runs` remain the collected evidence and
+Timestamped folders under `~/.noteling/runs` remain the collected evidence and
 readable reports; they are not replaced by the card database. Reusable source rules
-remain in `~/.familiar/calendar/workspace.json`. Files retain owner-only permissions.
+remain in `~/.noteling/calendar/workspace.json`. Files retain owner-only permissions.
 The repository separation does not move synchronous database work off the main actor.
 
 ## Verification boundary

@@ -77,7 +77,7 @@ struct BubbleView: View {
             Divider()
             Button("Settings…") { shell.onOpenSettings?() }
             Button("Hide bubble") { shell.onHideBubble?() }
-            Button("Quit Familiar") { NSApp.terminate(nil) }
+            Button("Quit Noteling") { NSApp.terminate(nil) }
         }
         .help("Double-click: chat  ·  Hold: pick up the pen  ·  ⌃⌥Space: pen")
     }
@@ -192,7 +192,7 @@ struct BubbleView: View {
     private var header: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Familiar").font(HandFont.font(size: 17)).foregroundStyle(Pad.deskInk(dark))
+                Text("Noteling").font(HandFont.font(size: 17)).foregroundStyle(Pad.deskInk(dark))
                 Text(state.contextLine).font(.caption).foregroundStyle(Pad.deskInkSoft(dark)).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
@@ -219,7 +219,7 @@ struct BubbleView: View {
                     .disabled(onOrigami == nil || state.busy || state.watching || sense.controlActive)
                 Button("Settings…") { shell.onOpenSettings?() }
                 Button("Hide bubble") { shell.onHideBubble?() }
-                Button("Quit Familiar") { NSApp.terminate(nil) }
+                Button("Quit Noteling") { NSApp.terminate(nil) }
             } label: { Image(systemName: "ellipsis.circle") }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("More")
         }
@@ -243,7 +243,7 @@ struct BubbleView: View {
     /// The hand's tooltip describes the effective state: a fresh install (control off) never shows a purple hand that does nothing.
     private var handHelp: String {
         if sense.controlActive && state.backgroundOn { return "Working in the background task screen — Stop is there, or ⌃⌥Space." }
-        if !state.config.allowControl { return "Control is off. Click to let Familiar do things for you — it works in the window while you carry on." }
+        if !state.config.allowControl { return "Control is off. Click to let Noteling do things for you — it works in the window while you carry on." }
         if state.backgroundOn { return "Works in the window you asked about while you carry on — your mouse and keyboard stay yours. Click to have it take the mouse instead." }
         return "Takes the mouse when it does things for you. Click to have it work in the window while you carry on instead."
     }

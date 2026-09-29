@@ -216,17 +216,17 @@ struct SettingsView: View {
                     Text("Never").tag("never")
                 }
                 Toggle("Hide the bubble from screenshots and screen shares", isOn: $model.hideFromScreenShare)
-                Toggle("Start Familiar at login", isOn: $model.startAtLogin)
-                Toggle("Allow Familiar to control the mouse and keyboard when asked", isOn: $model.allowControl)
+                Toggle("Start Noteling at login", isOn: $model.startAtLogin)
+                Toggle("Allow Noteling to control the mouse and keyboard when asked", isOn: $model.allowControl)
                 Toggle("Do things in the window you asked from, keeping your mouse and keyboard", isOn: $model.controlInBackground)
                     .disabled(!model.allowControl)
                 Toggle("Use a separate display for background tasks (experimental)", isOn: $model.backgroundVirtualDisplay)
                     .disabled(!model.allowControl || !model.controlInBackground)
-                Text("Moves the task window off your screen while Familiar works. Returns it when the task ends.")
+                Text("Moves the task window off your screen while Noteling works. Returns it when the task ends.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Precise clicks in the background (experimental)", isOn: $model.backgroundPreciseClicks)
                     .disabled(!model.allowControl || !model.controlInBackground)
-                Text("Lets Familiar click exact spots in a window behind your work through a private macOS path. Off, it only presses controls it can name and asks for the mouse for anything else.")
+                Text("Lets Noteling click exact spots in a window behind your work through a private macOS path. Off, it only presses controls it can name and asks for the mouse for anything else.")
                     .font(.caption).foregroundStyle(.secondary)
                 Picker("Character brows", selection: $model.mascotStyle) {
                     Text("Innocent").tag("innocent")
@@ -243,7 +243,7 @@ struct SettingsView: View {
                     Button("Save", action: onSave).keyboardShortcut(.defaultAction)
                 }
                 Text(Secrets.store == .file
-                     ? "Secrets are stored owner-only in ~/.familiar/secrets.json (dev build) and handed to pack scripts only as environment variables."
+                     ? "Secrets are stored owner-only in ~/.noteling/secrets.json (dev build) and handed to pack scripts only as environment variables."
                      : "Secrets are stored in your macOS Keychain and handed to pack scripts only as environment variables.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
@@ -263,7 +263,7 @@ final class SettingsWindowController {
         model.load(config: config, packs: packs)
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 720), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-            w.title = "Familiar Settings"
+            w.title = "Noteling Settings"
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: SettingsView(model: model, onSave: onSave, onOpenTools: onOpenTools, onReloadTools: onReloadTools))
             w.center()

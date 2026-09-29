@@ -48,7 +48,7 @@ import SwiftUI
             }
         focusObservation = store.explicitOpenRequests.receive(on: RunLoop.main).sink { [weak self] in
             guard let self, self.store.isVisible, !self.hiddenForForegroundGrant else { return }
-            // A deliberate Open can accept keyboard focus without activating Familiar or its chat.
+            // A deliberate Open can accept keyboard focus without activating Noteling or its chat.
             // Do not retain this intent: restoring the panel after a mouse grant must stay passive.
             self.requestedVisible = self.store.isVisible
             self.expanded = self.store.isExpanded
@@ -138,7 +138,7 @@ import SwiftUI
     }
 
     /// The preview belongs on a user's display even when the target's key window
-    /// makes AppKit's `main` screen point at Familiar's virtual workspace.
+    /// makes AppKit's `main` screen point at Noteling's virtual workspace.
     private var presentationScreen: NSScreen? {
         FloatingWindowPlacement.screen(for: positioned ? panel.frame : .zero, fallback: NSScreen.main)
     }
@@ -364,7 +364,7 @@ struct BackgroundTaskPanelView: View {
                      : "This result is available in this session. It has not been saved with your file.")
                     .font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
             } else {
-                Text("Recent tasks are kept until Familiar quits.")
+                Text("Recent tasks are kept until Noteling quits.")
                     .font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
             }
         }
@@ -373,7 +373,7 @@ struct BackgroundTaskPanelView: View {
     private var queue: some View {
         VStack(alignment: .leading, spacing: 9) {
             Divider()
-            Text("Waiting for Familiar").font(.system(size: 11, weight: .semibold)).foregroundStyle(Pad.inkSoft)
+            Text("Waiting for Noteling").font(.system(size: 11, weight: .semibold)).foregroundStyle(Pad.inkSoft)
             ForEach(store.morningWork.filter { $0.status == .queued }) { item in
                 HStack(alignment: .top, spacing: 8) {
                     Button { store.selectTask(id: item.id) } label: {
@@ -394,7 +394,7 @@ struct BackgroundTaskPanelView: View {
                 .font(.system(size: 12.5)).lineSpacing(3).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if item.status == .queued {
-                Text("Saved in the queue. Familiar runs one task at a time when it’s ready.")
+                Text("Saved in the queue. Noteling runs one task at a time when it’s ready.")
                     .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
                 Button("Cancel this task") { onCancelQueued?(item.id) }
                     .buttonStyle(TaskActionStyle(accent: false))

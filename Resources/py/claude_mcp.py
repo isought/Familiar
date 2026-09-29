@@ -1,7 +1,7 @@
-"""Private stdio MCP bridge between Claude Code and a running Familiar request.
+"""Private stdio MCP bridge between Claude Code and a running Noteling request.
 
 Only the tools in tools.json are exposed. No network listener, imports of tool
-packs, credentials, or direct execution: Familiar retains its normal executor.
+packs, credentials, or direct execution: Noteling retains its normal executor.
 """
 import json
 import os
@@ -41,9 +41,9 @@ def call_tool(root, names, params):
                 response.unlink(missing_ok=True)
                 return result
             if not root.exists() or os.getppid() != parent:
-                return tool_result("Familiar request has ended.")
+                return tool_result("Noteling request has ended.")
             time.sleep(0.04)
-        return tool_result("Familiar tool timed out.")
+        return tool_result("Noteling tool timed out.")
     finally:
         request.unlink(missing_ok=True)
 
@@ -70,7 +70,7 @@ def main():
             response["result"] = {
                 "protocolVersion": params.get("protocolVersion", "2024-11-05"),
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "familiar", "version": "1.0.0"},
+                "serverInfo": {"name": "noteling", "version": "1.0.0"},
             }
         elif method == "ping":
             response["result"] = {}
@@ -80,7 +80,7 @@ def main():
             try:
                 response["result"] = call_tool(root, names, params)
             except (OSError, ValueError):
-                response["result"] = tool_result("Familiar tool bridge is unavailable.")
+                response["result"] = tool_result("Noteling tool bridge is unavailable.")
         else:
             response["error"] = {"code": -32601, "message": "Method not found"}
         print(json.dumps(response, ensure_ascii=False), flush=True)

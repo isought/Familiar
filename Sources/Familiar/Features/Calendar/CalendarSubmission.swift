@@ -23,7 +23,7 @@ enum CalendarSubmission {
                         "type": "object", "additionalProperties": false,
                         "required": ["title", "start", "end", "allDay", "response", "availability", "isCancelled", "evidence"],
                         "properties": ([
-                            "id": ["type": "string", "description": "Stable identity from the source when visible. Omit when unavailable; Familiar derives a repeatable identity."],
+                            "id": ["type": "string", "description": "Stable identity from the source when visible. Omit when unavailable; Noteling derives a repeatable identity."],
                             "title": text,
                             "start": ["type": "string", "description": "ISO8601 date-time with explicit Z or ±HH:MM offset. All-day events start at local midnight."],
                             "end": ["type": "string", "description": "ISO8601 date-time with explicit Z or ±HH:MM offset; exclusive end, including the next local midnight for one-day all-day events."],

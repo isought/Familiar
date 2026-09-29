@@ -144,7 +144,7 @@ final class CalendarCollectionRunner: ObservableObject {
     }
 
     private func readyClient() -> (any ConversationClient)? {
-        guard !shuttingDown else { error = "Familiar is closing."; return nil }
+        guard !shuttingDown else { error = "Noteling is closing."; return nil }
         guard desktopAvailable else {
             error = "Finish the current desktop task or Watch Me session before collecting this source."
             return nil

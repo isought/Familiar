@@ -3,7 +3,7 @@ import SwiftUI
 import FamiliarContracts
 import FamiliarRuntime
 
-/// `Familiar --selftest [toolsDir]`: load tool packs, print schemas, run two scripts, exit. No UI, no API.
+/// `Noteling --selftest [toolsDir]`: load tool packs, print schemas, run two scripts, exit. No UI, no API.
 @MainActor
 func runSelfTest() async {
     let config = Config()

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Familiar character: a small yellow sticky note with two elliptical eyes, two glossy eyebrows and a curled corner.
+/// The Noteling character: a small yellow sticky note with two elliptical eyes, two glossy eyebrows and a curled corner.
 /// Drawn entirely with SwiftUI shapes so every part can animate.
 /// Versioned brow personalities. `innocent` is v2; v4 lifts the inner ends and lets the outer tails droop
 /// for a bashful, slightly bewildered expression. Earlier versions remain available for comparison.

@@ -1,7 +1,7 @@
 import AppKit
 
 /// Stops or pauses a background session when the human's input would collide with the target window.
-/// The human keeps the mouse and keyboard while Familiar drives one window in the background, so most input is
+/// The human keeps the mouse and keyboard while Noteling drives one window in the background, so most input is
 /// none of our business; only a click into the target, or switching to its app, ends the job. Typing and a held
 /// mouse button pause it briefly so posted keys never interleave with the human's.
 @MainActor final class ConflictMonitor {
@@ -82,7 +82,7 @@ import AppKit
     }
 
     /// NSEvent global monitor (mouseDown/Up, scroll, keyDown, mouseMoved) + NSWorkspace didActivate. Global monitors
-    /// never see events delivered to Familiar itself, and events posted with postToPid never reach them at all.
+    /// never see events delivered to Noteling itself, and events posted with postToPid never reach them at all.
     func install() {
         guard monitor == nil else { return }
         let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseUp, .rightMouseUp, .otherMouseUp,
@@ -131,7 +131,7 @@ import AppKit
     }
 
     private var paused: Bool {
-        // A missed mouseUp (the drag ended over Familiar's own window) must not pause forever: trust the hardware state.
+        // A missed mouseUp (the drag ended over Noteling's own window) must not pause forever: trust the hardware state.
         if mouseButtonHeld, NSEvent.pressedMouseButtons == 0 { mouseButtonHeld = false }
         if let until = pausedUntil, until > Date() { return true }
         return mouseButtonHeld

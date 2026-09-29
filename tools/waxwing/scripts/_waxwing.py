@@ -10,7 +10,7 @@ DEFAULT_URL = "http://127.0.0.1:4310"
 
 def context() -> dict:
     try:
-        return json.loads(os.environ.get("FAMILIAR_CONTEXT", "{}"))
+        return json.loads(os.environ.get("NOTELING_CONTEXT") or os.environ.get("FAMILIAR_CONTEXT", "{}"))
     except Exception:
         return {}
 
@@ -18,7 +18,7 @@ def context() -> dict:
 def _read_token_file() -> dict:
     """token file in the pack dir: either the bare token, or KEY=VALUE lines."""
     out = {}
-    tool_dir = os.environ.get("FAMILIAR_TOOL_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    tool_dir = os.environ.get("NOTELING_TOOL_DIR") or os.environ.get("FAMILIAR_TOOL_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path = os.path.join(tool_dir, "token")
     if not os.path.exists(path):
         return out
@@ -70,7 +70,7 @@ def get(path: str, params=None):
 def auth_hint(status: int):
     if status in (401, 403):
         return ("Waxwing API rejected the request (%d). Create a read token in the app: sign in, open "
-                "'Account and access', create a named agent token, then paste it into Familiar Settings "
+                "'Account and access', create a named agent token, then paste it into Noteling Settings "
                 "(right-click the bubble → Settings…) as WAXWING_API_TOKEN." % status)
     if status == 0:
         return "Could not reach the Waxwing app. Is it running at %s ?" % settings()[0]

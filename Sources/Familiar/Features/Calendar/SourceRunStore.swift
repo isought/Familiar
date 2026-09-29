@@ -66,7 +66,7 @@ final class SourceRunStore: ObservableObject {
             record.entries[index].state = wasWaiting ? .notRun : (status == .interrupted ? .interrupted : status == .failed ? .failed : .stopped)
             record.entries[index].finishedAt = finishedAt
             record.entries[index].message = status == .interrupted
-                ? (wasWaiting ? "Not run: Familiar closed before this source started." : "Interrupted: Familiar closed before this source completed.")
+                ? (wasWaiting ? "Not run: Noteling closed before this source started." : "Interrupted: Noteling closed before this source completed.")
                 : (wasWaiting ? "This source was not run." : "This source did not complete during this run.")
         }
         try commit(record, replacing: true)

@@ -17,13 +17,13 @@ struct Config: Codable {
     var screenshotMode: String = "auto"      // "auto": attach when the question sounds screen-related, else the model may look; "always"; "never"
     var screenshotReuseSeconds: Double = 0   // >0: reuse the last screenshot for follow-ups on the same screen within this window
     var hideFromScreenShare: Bool = false    // true = bubble invisible in screenshots, screen shares and recordings
-    var toolsDir: String = ""                // empty = ~/.familiar/tools
+    var toolsDir: String = ""                // empty = ~/.noteling/tools
     var docsStuffLimitChars: Int = 24000
     var uvPath: String = ""                  // empty = bundled uv, then ~/.local/bin, homebrew
     var wandHoldSeconds: Double = 0.8        // hold the bubble this long to charge the wand
     var mascotStyle: String = "innocent"     // "innocent" (v2, default), "innocentV1", "innocentV3", "innocentV4" (bashful), or "sharp"
     var hotkey: String = "control+option+space"
-    var allowControl: Bool = false           // let Familiar move the mouse and type when asked to do something
+    var allowControl: Bool = false           // let Noteling move the mouse and type when asked to do something
     var controlInBackground: Bool = true     // do things in the window you asked from, keeping your mouse and keyboard yours
     var backgroundVirtualDisplay: Bool = false // opt in to moving the task window onto a separate display while it runs
     var backgroundPreciseClicks: Bool = false // experimental: click exact spots in a background window through a private macOS path
@@ -38,14 +38,39 @@ struct Config: Codable {
     var watchMaxImages: Int = 60              // Watch me: most images sent to Claude when writing a recording up
     var watchCropWidth: Int = 900             // Watch me: crop around each click, in screen points
     var watchCropHeight: Int = 560
-    var recordingsDir: String = ""            // empty = ~/.familiar/recordings
+    var recordingsDir: String = ""            // empty = ~/.noteling/recordings
     var noteAuthor: String = ""               // name written on the notes you leave with the pen; empty = your macOS full name
 
+    /// `$NOTELING_HOME`, else `$FAMILIAR_HOME` (the earlier name), else `~/.noteling`.
     static var dir: URL {
-        if let h = ProcessInfo.processInfo.environment["FAMILIAR_HOME"], !h.isEmpty { return URL(fileURLWithPath: (h as NSString).expandingTildeInPath) }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".familiar")
+        let env = ProcessInfo.processInfo.environment
+        for key in ["NOTELING_HOME", "FAMILIAR_HOME"] {
+            if let h = env[key], !h.isEmpty { return URL(fileURLWithPath: (h as NSString).expandingTildeInPath) }
+        }
+        return defaultDir
     }
     static var file: URL { dir.appendingPathComponent("config.json") }
+    static var logFile: URL { dir.appendingPathComponent("noteling.log") }
+
+    /// Resolved once, before anything writes to the folder.
+    private static let defaultDir = adoptDefaultDir(home: FileManager.default.homeDirectoryForCurrentUser)
+
+    /// `<home>/.noteling`. The first time, the folder of an earlier name (`.familiar`, before that `.sidekick`) is
+    /// moved there and its log renamed. If that move fails, the old folder stays in use rather than starting empty.
+    static func adoptDefaultDir(home: URL) -> URL {
+        let fm = FileManager.default
+        let target = home.appendingPathComponent(".noteling")
+        guard !fm.fileExists(atPath: target.path) else { return target }
+        for (folder, log) in [(".familiar", "familiar.log"), (".sidekick", "sidekick.log")] {
+            let legacy = home.appendingPathComponent(folder)
+            guard fm.fileExists(atPath: legacy.path) else { continue }
+            do { try fm.moveItem(at: legacy, to: target) } catch { return legacy }
+            let oldLog = target.appendingPathComponent(log)
+            if fm.fileExists(atPath: oldLog.path) { try? fm.moveItem(at: oldLog, to: target.appendingPathComponent("noteling.log")) }
+            return target
+        }
+        return target
+    }
 
     /// An explicit key in config.json wins (a deliberate dev override), then the Keychain (what Settings saves), then the environment.
     var resolvedApiKey: String? {
@@ -110,22 +135,7 @@ struct Config: Codable {
         noteAuthor = try c.decodeIfPresent(String.self, forKey: .noteAuthor) ?? d.noteAuthor
     }
 
-    /// One-time move of the pre-rename home folder (`~/.sidekick`) to `~/.familiar`.
-    static func migrateLegacyHome() {
-        let fm = FileManager.default
-        let legacy = fm.homeDirectoryForCurrentUser.appendingPathComponent(".sidekick")
-        guard !fm.fileExists(atPath: dir.path), fm.fileExists(atPath: legacy.path) else { return }
-        do {
-            try fm.moveItem(at: legacy, to: dir)
-            let oldLog = dir.appendingPathComponent("sidekick.log")
-            if fm.fileExists(atPath: oldLog.path) { try? fm.moveItem(at: oldLog, to: dir.appendingPathComponent("familiar.log")) }
-        } catch {
-            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        }
-    }
-
     static func load() -> Config {
-        migrateLegacyHome()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let data = try? Data(contentsOf: file), let cfg = try? JSONDecoder().decode(Config.self, from: data) {
             cfg.save()   // rewrite so new keys show up with defaults

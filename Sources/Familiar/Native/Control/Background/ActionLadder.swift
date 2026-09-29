@@ -366,7 +366,7 @@ final class ActionLadder {
               let role = focus.info.role, Self.textRoles.contains(role) else { return typingNeedsFocus }
         let field = focus.element
         let info = focus.info
-        if case .forbidden(let why) = IrreversibleGuard.classifyType(into: info) { return .text("Not done: \(why). Familiar never types there.", isError: true) }
+        if case .forbidden(let why) = IrreversibleGuard.classifyType(into: info) { return .text("Not done: \(why). Noteling never types there.", isError: true) }
         ghost?.underline(rectCG: axFrame(field))
         let expecting = ActionVerifier.Expectation.valueContains(String(text.prefix(24)))
         var inputWasPosted = false
@@ -451,7 +451,7 @@ final class ActionLadder {
     }
 
     private func key(_ combo: String, times: Int, hold: Double?) async -> ToolResult {
-        if case .forbidden(let why) = IrreversibleGuard.classifyKey(combo) { return .text("Not done: \(why). Familiar never does that in the background.", isError: true) }
+        if case .forbidden(let why) = IrreversibleGuard.classifyKey(combo) { return .text("Not done: \(why). Noteling never does that in the background.", isError: true) }
         caption(hold == nil ? "Pressing \(combo)" : "Holding \(combo)")
         guard let (code, flags) = ComputerController.parseCombo(combo) else {
             if combo.count == 1 { return await type(combo) }
@@ -537,7 +537,7 @@ final class ActionLadder {
     private func guardPress(_ el: AXUIElement, info: IrreversibleGuard.ElementInfo) async -> (blocked: ToolResult?, approval: PressApproval?) {
         switch IrreversibleGuard.classifyPress(info, inSheet: isInSheet(el), declared: declaredIrreversible, warningNoteLabels: warningNoteLabels) {
         case .safe: return (nil, nil)
-        case .forbidden(let why): return (.text("Not done: \(why). Familiar never does that in the background.", isError: true), nil)
+        case .forbidden(let why): return (.text("Not done: \(why). Noteling never does that in the background.", isError: true), nil)
         case .confirm(let label):
             guard let requestApproval else {
                 return (.text("Not pressed: “\(label)” needs approval in the background task screen, which is unavailable in this session.", isError: true), nil)

@@ -46,7 +46,7 @@ final class MorningStore: ObservableObject {
                 guard loaded.workItems[index].status == .running || loaded.workItems[index].status == .needsAttention else { continue }
                 loaded.workItems[index].status = .interrupted
                 loaded.workItems[index].finishedAt = Date()
-                loaded.workItems[index].progress = "Familiar closed while this was in progress. Check what happened before trying again."
+                loaded.workItems[index].progress = "Noteling closed while this was in progress. Check what happened before trying again."
                 Self.restoreCard(after: loaded.workItems[index], in: &loaded)
                 recovered = true
             }
@@ -108,7 +108,7 @@ final class MorningStore: ObservableObject {
     func setDisposition(cardID: UUID, to disposition: MorningCardDisposition) throws {
         try transact { next in
             guard [.unreviewed, .ignored, .mine].contains(disposition) else {
-                throw MorningStoreError.invalid("Hand the file to Familiar to start work; its result will update the file automatically.")
+                throw MorningStoreError.invalid("Hand the file to Noteling to start work; its result will update the file automatically.")
             }
             guard let index = next.cards.firstIndex(where: { $0.id == cardID }) else {
                 throw MorningStoreError.invalid("This file could not be found.")
@@ -237,7 +237,7 @@ final class MorningStore: ObservableObject {
             }
             if let actionInstruction {
                 let instruction = actionInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !instruction.isEmpty else { throw MorningStoreError.invalid("Describe what Familiar should do.") }
+                guard !instruction.isEmpty else { throw MorningStoreError.invalid("Describe what Noteling should do.") }
                 next.cards[index].action.instruction = instruction
             }
             next.cards[index].personalContext = context.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -292,7 +292,7 @@ final class MorningStore: ObservableObject {
         func unique(_ ids: [UUID]) -> Bool { Set(ids).count == ids.count }
         func validateAction(_ action: MorningAction, sample: Bool) throws {
             try require(hasText(action.title), "Give the proposed action a title.")
-            try require(hasText(action.instruction), "Describe what Familiar should do.")
+            try require(hasText(action.instruction), "Describe what Noteling should do.")
             try require(!sample || action.mode == .prepare, "Sample files can only prepare local results; they cannot perform actions in your apps.")
         }
         let folderIDs = Set(value.folders.map(\.id)), personIDs = Set(value.people.map(\.id))

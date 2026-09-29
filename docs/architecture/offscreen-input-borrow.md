@@ -82,7 +82,7 @@ native adapters and never move a real window or send an OS input event.
 
 On 2026-09-27, the full suite passed: **228 tests in 35 suites**, run with an
 isolated `FAMILIAR_HOME`. `scripts/build.sh` produced the signed release app at
-`build/Familiar.app`; `codesign --verify --deep --strict` passed.
+`build/Noteling.app`; `codesign --verify --deep --strict` passed.
 
 Initial live verification was pending: the Mac was locked when the computer-use tool
 attempted to begin the local fixture test, including a retry after the release

@@ -30,9 +30,9 @@ struct MorningPersonEditor: View {
                 Toggle("This is me", isOn: $isMe).font(.system(size: 13))
                 MorningField("Role & team", text: $role, placeholder: "Product lead · platform team")
                 MorningField("Relationship to you", text: $relationship, placeholder: "My project partner")
-                MorningTextField("Working context", text: $context, hint: "Shared projects, responsibilities, commitments, or anything Familiar should understand.", minHeight: 95)
+                MorningTextField("Working context", text: $context, hint: "Shared projects, responsibilities, commitments, or anything Noteling should understand.", minHeight: 95)
                 MorningTextField("Names & identities across tools", text: $identities, hint: "One per line, for example an email address, Jira username, or nickname.", minHeight: 72)
-                Text("You control this context. Familiar uses it when you hand over a linked file.").font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
+                Text("You control this context. Noteling uses it when you hand over a linked file.").font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
                 MorningEditorFooter(error: error, saveTitle: "Save person", enabled: !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, save: {
                     do {
                         try save(MorningPerson(id: existingID, name: name, role: role, relationship: relationship, context: context,
@@ -142,10 +142,10 @@ struct MorningCardEditor: View {
                 Divider()
                 Text("A useful handoff").font(HandFont.font(size: 20))
                 MorningField("Action label", text: $actionTitle, placeholder: "Draft a reply")
-                MorningTextField("What Familiar should do", text: $instruction, hint: "Be specific about the result you want and the scope of the work.", minHeight: 85)
+                MorningTextField("What Noteling should do", text: $instruction, hint: "Be specific about the result you want and the scope of the work.", minHeight: 85)
                 Picker("How to work", selection: $mode) { ForEach(availableModes, id: \.self) { Text($0.label).tag($0) } }.font(.system(size: 12)).disabled(original?.isSample == true)
                 if original?.isSample == true { Text("Fictional sample files prepare local results only.").font(.system(size: 11)).foregroundStyle(Pad.inkSoft) }
-                Text(mode == .prepare ? "Prepare uses the context attached to this file. It won’t read your inbox, browse, or operate another app." : "Work in an app uses the existing background executor. Familiar may need input access or a separate action approval.")
+                Text(mode == .prepare ? "Prepare uses the context attached to this file. It won’t read your inbox, browse, or operate another app." : "Work in an app uses the existing background executor. Noteling may need input access or a separate action approval.")
                     .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
                 MorningEditorFooter(error: error, saveTitle: "Save note", enabled: canSave, save: saveNote, cancel: cancel)
             }.padding(23)

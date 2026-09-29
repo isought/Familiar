@@ -17,5 +17,5 @@ How to help someone here:
   (the app's own words: page, version, revision, record, citation, linked page, collection home).
 - Use `waxwing__search` when they are looking for something, `waxwing__library` for an overview of spaces,
   `waxwing__attention` for "what may no longer be true".
-- If a script returns a 401 hint, tell them: create a read token in Waxwing under **Account and access**, then paste it in Familiar Settings (right-click the bubble → Settings…) as WAXWING_API_TOKEN. Then stop.
+- If a script returns a 401 hint, tell them: create a read token in Waxwing under **Account and access**, then paste it in Noteling Settings (right-click the bubble → Settings…) as WAXWING_API_TOKEN. Then stop.
 - Common surprises are listed in docs/confusions.md; check it before answering "why is this disabled/empty".

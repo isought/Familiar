@@ -18,7 +18,7 @@ matching tracked conversation; see [persistent cards](persistent-cards.md).
 
 This is maintained functionality in the existing Watch Me and Morning Files paths.
 It does not require a service API connection. The current route requires a signed-in
-application and macOS access already used by Familiar. Calendar UI compatibility
+application and macOS access already used by Noteling. Calendar UI compatibility
 depends on exposed Accessibility controls; a source description is not proof that
 the current interface is completely readable.
 
@@ -69,7 +69,7 @@ batches and workflow recovery suggestions. Historical runs remain available in
 **Run history**, and the original workflow document is preserved. **Removed sources →
 Restore** returns the same reusable profile, including after a restart.
 A stale editor cannot silently recreate an archived ID; restoration is explicit.
-These operations affect Familiar's saved records, not the connected application's data.
+These operations affect Noteling's saved records, not the connected application's data.
 
 ## Fresh collection
 
@@ -123,7 +123,7 @@ text or images. Model prose alone never becomes a successful collection.
 `Config.dir/calendar/workspace.json`; version 4 contains active and removed source
 profiles. `SourceRunStore` owns run lifecycle and delegates archive I/O through
 `SourceRunRepository`. Its current `FileSourceRunRepository` stores results under
-`Config.dir/runs` (normally `~/.familiar/runs`). Both facades accept other repository
+`Config.dir/runs` (normally `~/.noteling/runs`). Both facades accept other repository
 implementations without changing their consumers. Unsupported or corrupt state is
 reported and protected from replacement. This boundary preserves the existing local
 formats and synchronous storage behavior.

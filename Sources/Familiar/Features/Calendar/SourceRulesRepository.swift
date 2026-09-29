@@ -49,7 +49,7 @@ final class FileSourceRulesRepository: SourceRulesRepository {
         struct Header: Decodable { var version: Int }
         let version = try JSONDecoder().decode(Header.self, from: data).version
         guard [1, 2, 3, 4].contains(version) else {
-            throw CalendarDataError.unavailable("Source version \(version) is not supported by this Familiar version.")
+            throw CalendarDataError.unavailable("Source version \(version) is not supported by this Noteling version.")
         }
         let workspace = try (version >= 4 ? SourceRunJSON.decoder() : JSONDecoder()).decode(Workspace.self, from: data)
         let rules = SourceRulesSnapshot(sources: workspace.sources, readingSources: workspace.readingSources, removedSources: workspace.removedSources)

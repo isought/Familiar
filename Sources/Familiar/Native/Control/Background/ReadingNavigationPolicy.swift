@@ -46,5 +46,5 @@ enum ReadingNavigationPolicy {
 
     static let followUpBlocked = "This control is not supported for tracked follow-up reading. Only matching tracked message rows/cells and recognized mailbox navigation can open. Unrelated messages, content links and mutation controls remain unavailable. Leave the item unresolved if it cannot be verified."
 
-    static let blocked = "This control is not supported for source reading. Familiar can inspect the current list and use recognized mailbox or page navigation. It cannot open message rows, follow content links, change mail, or use unrecognized controls. Report incomplete coverage when needed."
+    static let blocked = "This control is not supported for source reading. Noteling can inspect the current list and use recognized mailbox or page navigation. It cannot open message rows, follow content links, change mail, or use unrecognized controls. Report incomplete coverage when needed."
 }
