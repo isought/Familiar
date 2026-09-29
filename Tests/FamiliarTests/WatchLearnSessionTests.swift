@@ -284,6 +284,66 @@ struct WatchLearnSessionTests {
     }
 
     @Test
+    func typedReviewFeedbackRewritesTheDraftAndEarlierRequestsStillApply() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let session = fixture.session()
+        #expect(try session.start(source: true))
+        await (try #require(session.stop())).value
+        #expect(session.submitDescription("Check my work inbox"))
+        await (try #require(session.submitContext("Only unread email."))).value
+        #expect(session.phase == .review)
+
+        await (try #require(session.revise("  Only the last 3 days, and skip newsletters. "))).value
+        await (try #require(session.revise("Stop after 25 messages"))).value
+
+        #expect(fixture.summaryRecordings.count == 3)
+        #expect(fixture.summaryRecordings[1].meta.context == "Only unread email.\n\nChanges requested after reviewing the draft: Only the last 3 days, and skip newsletters.")
+        let latest = try #require(fixture.summaryRecordings[2].meta.context)
+        #expect(latest.contains("skip newsletters"))
+        #expect(latest.hasSuffix("Changes requested after reviewing the draft: Stop after 25 messages"))
+        #expect(fixture.summaryRecordings.allSatisfy { $0.meta.purpose == "Check my work inbox" })
+        #expect(session.phase == .review)
+        let stored = try JSONDecoder().decode(WatchMeta.self, from: Data(contentsOf: fixture.recording.dir.appendingPathComponent("meta.json")))
+        #expect(stored.context == latest)
+    }
+
+    @Test
+    func revisingNeedsADraftUnderReviewAndSomethingToSay() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let session = fixture.session()
+        #expect(session.revise("Only unread") == nil)
+        #expect(try session.start(source: true))
+        await (try #require(session.stop())).value
+        #expect(session.revise("Only unread") == nil)
+        #expect(session.submitDescription("Check my work inbox"))
+        #expect(session.revise("Only unread") == nil)
+        await (try #require(session.submitContext(nil))).value
+        #expect(session.revise(" \n ") == nil)
+        #expect(fixture.summaryRecordings.count == 1)
+    }
+
+    @Test
+    func aFailedDraftCanBeRevisedWithWhatWasMissing() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let session = fixture.session()
+        #expect(try session.start(source: true))
+        await (try #require(session.stop())).value
+        #expect(session.submitDescription("Check my work inbox"))
+        fixture.summaryError = Failure.model
+        await (try #require(session.submitContext(nil))).value
+        #expect(session.draftFailed)
+        fixture.summaryError = nil
+
+        await (try #require(session.revise("The inbox is https://mail.google.com/mail/u/0/#inbox"))).value
+
+        #expect(session.phase == .review)
+        #expect(fixture.summaryRecordings.last?.meta.context == "Changes requested after reviewing the draft: The inbox is https://mail.google.com/mail/u/0/#inbox")
+    }
+
+    @Test
     func keepFailuresPreserveReviewAndRetryReloadDoesNotWriteTwice() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

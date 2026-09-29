@@ -129,7 +129,7 @@ struct WatchPresentationTests {
             let summary = Assistant.draftBody(draft, purpose: long, context: long, root: URL(fileURLWithPath: "/unused"))
             #expect(summary.count <= 1_500)
             #expect(summary.components(separatedBy: "\n").count < 30)
-            #expect(summary.hasSuffix("Open full draft for complete instructions and any shortened details."))
+            #expect(summary.hasSuffix("Open full draft for complete instructions and any shortened details. To change something, just tell me, and I'll write it again."))
         }
         check()
         draft.readingSource = LearnedReadingSource(kind: .mail, name: long, meaning: long, application: long,

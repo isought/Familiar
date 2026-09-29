@@ -209,10 +209,24 @@ final class WatchLearnSession: ObservableObject {
         return summarize(purpose: pendingRecording?.meta.purpose)
     }
 
+    /// Feedback typed while a draft is under review: it joins the recording's context, and the draft is written
+    /// again from the same recording. Each round adds to the context, so earlier requests still apply.
+    @discardableResult
+    func revise(_ feedback: String) -> Task<Void, Never>? {
+        guard phase == .review || phase == .failed, var recording = pendingRecording,
+              let note = Self.optionalText(feedback) else { return nil }
+        let request = "Changes requested after reviewing the draft: \(note)"
+        recording.meta.context = [recording.meta.context, request].compactMap { $0 }.joined(separator: "\n\n")
+        do { try operations.saveMeta(recording) }
+        catch { onEvent?(.failed(stage: .summarize, error: error)); return nil }
+        pendingRecording = recording
+        return summarize(purpose: recording.meta.purpose)
+    }
+
     func keep() async {
         guard !busy, let draft = pendingDraft, draft.parsed, let recording = pendingRecording else { return }
         guard !isTeachingSource || draft.calendarSource != nil || draft.readingSource != nil else {
-            onEvent?(.failed(stage: .keep, error: ClaudeError(message: "No reading source was established, so nothing has been saved. Show the source address, account and a bounded view of the information to read. Discard this draft and teach it again; ordinary action workflows cannot be run as reading sources.")))
+            onEvent?(.failed(stage: .keep, error: ClaudeError(message: "No reading source was established, so nothing has been saved. Tell me what is missing (the page address, the account, or what to read) and I'll write it again, or discard this draft and teach it again. Ordinary action workflows cannot be run as reading sources.")))
             return
         }
         phase = .saving

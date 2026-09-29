@@ -330,7 +330,7 @@ final class Assistant: ObservableObject {
         var lines: [String] = []
         if let purpose, !purpose.isEmpty { lines.append("_You said: “\(reviewExcerpt(purpose, limit: 140))”_") }
         guard d.parsed else {
-            return (lines + ["I couldn't turn this into a skill. Open full draft to inspect the response, or try again."]).joined(separator: "\n\n")
+            return (lines + ["I couldn't turn this into a skill. Open full draft to inspect the response, try again, or tell me what to change."]).joined(separator: "\n\n")
         }
         func field(_ label: String, _ value: String, limit: Int = 100) {
             lines.append("**\(label):** \(reviewExcerpt(value.isEmpty ? "Not established" : value, limit: limit))")
@@ -361,7 +361,7 @@ final class Assistant: ObservableObject {
             uncertainties(source.uncertainties)
             lines.append("Keep adds this source to Sources for Run all sources.")
         } else if teachingCalendar {
-            lines.append("**Reading source not established**\nKeep cannot register this draft for Run all sources. Discard it and teach the source address, account and reading boundary again.")
+            lines.append("**Reading source not established**\nKeep cannot register this draft for Run all sources. Tell me what is missing (the page address, the account, or what to read) and I'll write it again, or discard it and teach it again.")
         } else {
             field("Skill", d.packName)
             field("Description", d.packDescription.isEmpty ? d.workflowTitle : d.packDescription, limit: 180)
@@ -372,7 +372,7 @@ final class Assistant: ObservableObject {
             field("Caution", caveat, limit: 120)
             if d.caveats.count > 1 { lines.append("\(d.caveats.count - 1) more cautions in the full draft.") }
         }
-        lines.append("Open full draft for complete instructions and any shortened details.")
+        lines.append("Open full draft for complete instructions and any shortened details. To change something, just tell me, and I'll write it again.")
         return lines.joined(separator: "\n\n")
     }
 
@@ -458,8 +458,12 @@ final class Assistant: ObservableObject {
             return
         }
         if pendingDraft != nil || draftFailed {
-            transcript.append(ChatMessage(role: .error, text: "Keep or discard the draft above first."))
-            suggestions = reviewTabs([])
+            // Talking about the draft revises it: the feedback joins the recording's context and it is written again.
+            suggestions = []
+            if learning.revise(q) == nil {
+                transcript.append(ChatMessage(role: .error, text: "Keep or discard the draft above first."))
+                suggestions = reviewTabs([])
+            }
             return
         }
         let ctx = watcher.current ?? watcher.sample()

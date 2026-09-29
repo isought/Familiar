@@ -34,7 +34,7 @@ Start with a view you already use, such as your email inbox.
 1. Open the small folder on your desktop, then choose **Manage sources → Teach a source with Watch Me**.
 2. Show Noteling the app, account, and view you want it to check. Choose **Stop Watching** when you’re done.
 3. Give it a short description, such as “Check unread email.” Add optional context about what to include, skip, or stop at.
-4. Review what Noteling learned and choose **Keep it**. Confirm any source details it asks you to review.
+4. Review what Noteling learned. If something is off, just type what to change, such as “only the last 3 days”, and it writes the draft again. Then choose **Keep it**, and confirm any source details it asks you to review.
 5. In **Settings**, enable **Allow Noteling to control the mouse and keyboard when asked** so it can navigate the app you showed it. Then choose **Run all sources** to check for fresh information.
 
 Click a completed run to read its findings. **Manage sources** is where you change the instructions; **Run history** is where you find earlier results.

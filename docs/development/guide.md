@@ -84,7 +84,7 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    `~/.noteling/recordings/<stamp>/` (folder 0700, files 0600). After stopping, enter a short name or description, then
    optionally add context such as reading rules, exceptions or where to stop. **Skip context** continues without it.
    Noteling waits for both steps before generating one draft from the recording and your inputs, then puts a compact
-   review on the pad, including the source's reading rules and any uncertainty notice. Retry preserves both inputs.
+   review on the pad, including the source's reading rules and any uncertainty notice. Retry preserves both inputs. Typing while a draft is under review revises it: the text joins the recording's context as "Changes requested after reviewing the draft", and the draft is written again from the same recording. Earlier requests still apply, and a failed draft can be revised the same way.
    **Open full draft** shows the complete steps, screens, glossary, caveats and source details in a separate, read-only
    text window with search and copy. Long documents stay out of the chat layout. **Keep it** saves the complete draft as a tool pack (`SKILL.md`,
    `docs/screens.md`, `docs/workflows/<task>.md`, `docs/glossary.md`) into `~/.noteling/tools/<site>/` without touching
