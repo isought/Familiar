@@ -128,7 +128,7 @@ final class ContextWatcher {
                     if let c = urlCache, c.key == key {
                         url = c.url
                     } else {
-                        url = browserURL(window: win)
+                        url = Self.browserURL(window: win)
                         urlCache = (key, url)
                     }
                 }
@@ -148,7 +148,8 @@ final class ContextWatcher {
                              url: url, focused: focused, timestamp: Date())
     }
 
-    private func browserURL(window: AXUIElement) -> String? {
+    /// The address a browser window shows: its document, web area or address bar.
+    static func browserURL(window: AXUIElement) -> String? {
         if let doc = AX.string(window, kAXDocumentAttribute), !doc.isEmpty { return doc }
         var queue = [window]
         var visited = 0

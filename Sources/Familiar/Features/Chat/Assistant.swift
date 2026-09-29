@@ -302,13 +302,7 @@ final class Assistant: ObservableObject {
             if let i = transcript.lastIndex(where: { $0.role == .draft }) {
                 transcript[i] = ChatMessage(role: .learned, text: transcript[i].text)
             }
-            var sourceReceipt = draft.calendarSource.map { "Calendar source kept: \(Self.reviewExcerpt($0.name, limit: 80)). It now appears in Sources for Run all sources. Review any missing details before reading.\n\n" } ?? ""
-            if let source = draft.readingSource {
-                sourceReceipt += "Reading source kept: \(Self.reviewExcerpt(source.name, limit: 80)). It now appears in Sources for Run all sources. "
-                sourceReceipt += source.requiresReview ? "Confirm its address in Manage sources before reading; it was learned from screenshot evidence.\n\n" : "Each run reads fresh information within the saved scope.\n\n"
-            }
-            if sourceReceipt.isEmpty { sourceReceipt = "No reading source was registered. Run all sources will not run this workflow.\n\n" }
-            transcript.append(ChatMessage(role: .assistant, text: sourceReceipt + "Kept as \(Self.reviewExcerpt(draft.packName, limit: 80)). I'll use it whenever you're on \(whereText). The recording itself is deleted.\n" + rel.map { "- \($0)" }.joined(separator: "\n")))
+            transcript.append(ChatMessage(role: .assistant, text: Self.sourceReceipt(draft) + "Kept as \(Self.reviewExcerpt(draft.packName, limit: 80)). I'll use it whenever you're on \(whereText). The recording itself is deleted.\n" + rel.map { "- \($0)" }.joined(separator: "\n")))
             suggestions = []
             status = ""
         case .failed(_, let error):
@@ -323,6 +317,28 @@ final class Assistant: ObservableObject {
                 : "Discarded the remaining review. The recording was deleted. These files were already saved and remain on disk:\n" + savedFiles.map { "- \($0.path)" }.joined(separator: "\n")
             transcript.append(ChatMessage(role: .assistant, text: receipt))
         }
+    }
+
+    /// A reading source without an account reads the one its taught view shows.
+    static let accountShownWhenRun = "Whichever one it shows when it runs"
+
+    /// The saved address, or the app for a native source.
+    static func location(of source: LearnedReadingSource) -> String {
+        source.url.isEmpty && !source.application.isEmpty ? "The \(source.application) app" : source.url
+    }
+
+    /// What Keep registered for Run all sources, and whether it can run yet.
+    static func sourceReceipt(_ draft: PackDraft) -> String {
+        var s = draft.calendarSource.map { "Calendar source kept: \(reviewExcerpt($0.name, limit: 80)). It now appears in Sources for Run all sources. Review any missing details before reading.\n\n" } ?? ""
+        if let source = draft.readingSource {
+            s += "Reading source kept: \(reviewExcerpt(source.name, limit: 80)). It now appears in Sources for Run all sources. "
+            if let missing = source.missingSetup {
+                s += "It can't run yet: \(reviewExcerpt(missing, limit: 200)) Tell me here, or add it in Manage sources.\n\n"
+            } else {
+                s += source.requiresReview ? "Confirm its address in Manage sources before reading; it was learned from screenshot evidence.\n\n" : "Each run reads fresh information within the saved scope.\n\n"
+            }
+        }
+        return s.isEmpty ? "No reading source was registered. Run all sources will not run this workflow.\n\n" : s
     }
 
     /// Keep generated documents out of the animated chat layout. Only bounded, single-line fields go on the note.
@@ -340,17 +356,26 @@ final class Assistant: ObservableObject {
             field("Still unclear", first, limit: 140)
             if values.count > 1 { lines.append("\(values.count - 1) more uncertainties in the full draft.") }
         }
+        func assumptions(_ values: [String]) {
+            guard let first = values.first else { return }
+            field("Assuming", first, limit: 140)
+            if values.count > 1 { lines.append("\(values.count - 1) more in the full draft.") }
+        }
         if let source = d.readingSource {
             lines.append("**Reading source to keep**")
             field("Name", source.name, limit: 70)
             field("Meaning", source.meaning, limit: 100)
-            field("Account", source.account, limit: 80)
-            field("Location", source.url, limit: 100)
+            field("Account", source.account.isEmpty ? Self.accountShownWhenRun : source.account, limit: 80)
+            field("Location", Self.location(of: source), limit: 100)
             field("Reading rules", source.scope, limit: 220)
-            uncertainties(source.uncertainties)
-            lines.append(source.requiresReview
-                ? "Keep adds this source to Sources. Confirm its address there before Run all sources can read it."
-                : "Keep adds this source to Sources for Run all sources.")
+            assumptions(source.uncertainties)
+            if let missing = source.missingSetup, !source.requiresReview {
+                lines.append("**Before it can run:** \(reviewExcerpt(missing, limit: 200)) Tell me here and I'll write it again, or keep it and add it later in Manage sources.")
+            } else {
+                lines.append(source.requiresReview
+                    ? "Keep adds this source to Sources. Confirm its address there before Run all sources can read it."
+                    : "Keep adds this source to Sources for Run all sources.")
+            }
         } else if let source = d.calendarSource {
             lines.append("**Calendar source to keep**")
             field("Name", source.name, limit: 70)
@@ -395,12 +420,15 @@ final class Assistant: ObservableObject {
             s += "\n\n**Reading source to keep**\n"
             let fields = [("Name", source.name), ("Kind", source.kind == .mail ? "Mail" : "Web"),
                           ("Meaning", source.meaning), ("Application", source.application),
-                          ("Application identifier", source.bundleID), ("Location", source.url), ("Account", source.account),
+                          ("Application identifier", source.bundleID), ("Location", location(of: source)),
+                          ("Account", source.account.isEmpty ? accountShownWhenRun : source.account),
                           ("Reading rules", source.scope), ("Navigation", source.navigationHints), ("Completion checks", source.completionChecks)]
             s += fields.map { "**\($0.0):** \(known($0.1))" }.joined(separator: "\n")
-            s += "\n**Still unclear:** " + (source.uncertainties.isEmpty ? "No additional uncertainties recorded; review any fields marked Not established." : source.uncertainties.joined(separator: "; "))
+            s += "\n**Assuming:** " + (source.uncertainties.isEmpty ? "Nothing beyond what's above." : source.uncertainties.joined(separator: "; "))
+            if let missing = source.missingSetup { s += "\n**Before it can run:** \(missing)" }
             s += source.requiresReview ? "\nKeep adds this source to Sources. Confirm its address there before Run all sources can read it."
-                : "\nKeep adds this source to Sources for Run all sources. Each run reads fresh information within this scope."
+                : source.missingSetup == nil ? "\nKeep adds this source to Sources for Run all sources. Each run reads fresh information within this scope."
+                : "\nKeep adds it to Sources, but it won't run until then."
             s += "\nThe demonstration is an example, not a collected result or permission to send, edit, or scan the whole account."
         }
         if let source = d.calendarSource {

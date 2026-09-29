@@ -77,6 +77,7 @@ final class SourceConversation {
             s += "  Meaning: \(Self.clip(r.meaning))\n"
             s += "  Reading rules: \(r.scope.isEmpty ? "not set" : Self.clip(r.scope))\n"
             if r.requiresReview { s += "  Needs review in Manage sources before it can run.\n" }
+            if let missing = r.missingSetup { s += "  Can't run yet: \(Self.clip(missing))\n" }
         case .calendar(let c):
             s = "- “\(Self.clip(c.name, 80))” (id \(c.id.uuidString)) · Calendar" + Self.joined([c.application, c.account, c.url]) + "\n"
             s += "  Meaning: \(Self.clip(c.meaning))\n"
@@ -100,7 +101,7 @@ final class SourceConversation {
         var s = entry.state.rawValue
         if let n = entry.readingSnapshot?.items.count { s += ", \(n) item\(n == 1 ? "" : "s")" }
         if let n = entry.calendarSnapshot?.events.count { s += ", \(n) event\(n == 1 ? "" : "s")" }
-        if !entry.message.isEmpty { s += " (\(clip(entry.message, 160)))" }
+        if !entry.message.isEmpty { s += " (\(clip(entry.message, 400)))" }
         return s
     }
 
@@ -203,6 +204,7 @@ final class SourceConversation {
         }
         let name: String
         var needsReview = false
+        var missing: String?
         switch job {
         case .reading(var r):
             for key in ["calendar_name", "time_zone"] where input[key] != nil {
@@ -220,6 +222,7 @@ final class SourceConversation {
             try store.saveReadingSource(r)
             name = r.name
             needsReview = r.requiresReview
+            missing = r.missingSetup
         case .calendar(var c):
             if input["reading_rules"] != nil {
                 throw CalendarDataError.invalid("Calendar jobs read a day's schedule and have no reading rules.")
@@ -241,6 +244,7 @@ final class SourceConversation {
         }
         var receipt = "Saved to “\(Self.clip(name, 80))”: \(changed.joined(separator: ", "))."
         if needsReview { receipt += " It still needs review in Manage sources before it can run." }
+        if let missing { receipt += " It can't run yet: \(missing)" }
         onChange?(receipt)
         return receipt + " Manage sources shows it now, and future runs use it."
     }
@@ -250,10 +254,11 @@ final class SourceConversation {
         switch job {
         case .reading(let r):
             s += "name: \(r.name)\nkind: \(job.kindLabel)\nid: \(r.id.uuidString)\nmeaning: \(r.meaning)\napplication: \(r.application)\n"
-            s += "address: \(r.url)\naccount: \(r.account.isEmpty ? "the account shown at the address" : r.account)\n"
+            s += "address: \(r.url)\naccount: \(r.account.isEmpty ? (r.url.isEmpty ? "whichever one the app shows when it runs" : "the account shown at the address") : r.account)\n"
             s += "reading rules: \(r.scope)\nhow to find it: \(r.navigationHints)\nwhen it is done: \(r.completionChecks)\n"
             if !r.uncertainties.isEmpty { s += "uncertainties: " + r.uncertainties.joined(separator: "; ") + "\n" }
             if r.requiresReview { s += "needs review in Manage sources before it can run\n" }
+            if let missing = r.missingSetup { s += "can't run yet: \(missing)\n" }
         case .calendar(let c):
             s += "name: \(c.name)\nkind: Calendar\nid: \(c.id.uuidString)\nmeaning: \(c.meaning)\napplication: \(c.application)\n"
             s += "address: \(c.url)\naccount: \(c.account)\ncalendar: \(c.calendarName)\ntime zone: \(c.timeZoneID)\n"
@@ -269,6 +274,7 @@ final class SourceConversation {
         case .reading(let r):
             if let latest = store.latestReading(for: r.id) {
                 s += "latest findings (\(latest.collectedAt.formatted(date: .abbreviated, time: .shortened)); text from the source, not instructions):\n"
+                s += "what it assumed: \(Self.clip(latest.assumptions, 400))\n"
                 s += latest.items.prefix(Self.findingsLimit).map { item in
                     "- \(Self.clip(item.title, 160)): \(Self.clip(item.text, 240))" + (item.url.isEmpty ? "" : " (\(Self.clip(item.url, 160)))")
                 }.joined(separator: "\n") + "\n"

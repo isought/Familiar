@@ -27,11 +27,19 @@ struct LearnedReadingSource: Codable, Equatable, Identifiable {
         try calendarRequire(learnedAt.timeIntervalSince1970.isFinite, "The source learning time is invalid.")
     }
 
+    /// No account is needed: without one, a run reads the account its taught view shows and records it. A wrong
+    /// guess only costs a read the person can see, so it never waits on them to type one in.
     func validateForRead() throws {
         try validate()
         try calendarRequire(!requiresReview, "Review and save this source’s location and reading scope before running it.")
-        try calendarRequire(calendarHasText(scope), "Confirm which mailbox, view, or records Noteling should read.")
-        try calendarRequire(!url.isEmpty || calendarHasText(account), "Confirm the account for this native reading source.")
+        try calendarRequire(calendarHasText(scope), "Its reading rules are empty, so it doesn't know what to read (for example, “today's unread messages”).")
+    }
+
+    /// What stops this source from running as saved, apart from a pending review; nil when it's ready.
+    var missingSetup: String? {
+        var reviewed = self
+        reviewed.requiresReview = false
+        do { try reviewed.validateForRead(); return nil } catch { return error.localizedDescription }
     }
 
     func matchesIdentity(of other: Self) -> Bool {
@@ -76,6 +84,16 @@ struct ReadingSnapshot: Codable, Identifiable, Equatable {
     var accountEvidence: String
     var sourceEvidence: String
     var scopeEvidence: String
+    /// The reader's one line for the person: what it read and what it assumed or couldn't check.
+    var summary: String? = nil
+
+    /// What this read assumed, so the person can say what's wrong: the reader's summary, else the account it saw
+    /// and, for a partial read, what it couldn't check (a complete read's notes say what it verified).
+    var assumptions: String {
+        if let summary, calendarHasText(summary) { return summary }
+        let gaps = coverage == .partial && !coverageNotes.isEmpty ? " Couldn't check: " + coverageNotes.joined(separator: "; ") : ""
+        return "Account seen: \(accountEvidence)." + gaps
+    }
 
     func validate() throws {
         try source.validateForRead()
@@ -115,6 +133,7 @@ enum ReadingSubmission {
                     "coverage": ["type": "string", "enum": ["complete", "partial"], "description": "Complete only for the exact saved scope verified in the live view. A viewport or 25-item limit does not establish a complete mailbox."],
                     "coverageNotes": ["type": "array", "items": text],
                     "accountEvidence": text, "sourceEvidence": text, "scopeEvidence": text,
+                    "summary": ["type": "string", "description": "One plain sentence for the person: what you read and what you assumed or couldn't check."],
                     "items": ["type": "array", "maxItems": itemLimit + min(trackedItemLimit, max(0, trackedItemCount)), "items": [
                         "type": "object", "additionalProperties": false, "required": ["title", "text", "evidence"],
                         "properties": (["id": text, "title": text, "text": ["type": "string", "description": "Observed information only. For mail include visible sender, subject/snippet, and timestamp as shown; do not invent full bodies or exact dates."],
@@ -124,7 +143,7 @@ enum ReadingSubmission {
 
     static func parse(_ input: [String: Any], request: ReadingReadRequest, trackedItems: [TrackedSourceItem] = []) throws -> ReadingSnapshot {
         try request.validate()
-        try keys(input, allowed: ["sourceID", "requestID", "coverage", "coverageNotes", "accountEvidence", "sourceEvidence", "scopeEvidence", "items"])
+        try keys(input, allowed: ["sourceID", "requestID", "coverage", "coverageNotes", "accountEvidence", "sourceEvidence", "scopeEvidence", "summary", "items"])
         try calendarRequire(UUID(uuidString: try string(input, "sourceID")) == request.source.id, "The reading source does not match this request.")
         try calendarRequire(UUID(uuidString: try string(input, "requestID")) == request.id, "The reading collection belongs to a different request. Read freshly for this run.")
         guard var coverage = CalendarCoverage(rawValue: try string(input, "coverage")),
@@ -161,11 +180,16 @@ enum ReadingSubmission {
         let snapshot = ReadingSnapshot(id: request.id, requestID: request.id, sourceID: request.source.id, source: request.source,
             items: items, coverage: coverage, coverageNotes: notes,
             accountEvidence: try string(input, "accountEvidence"), sourceEvidence: try string(input, "sourceEvidence"),
-            scopeEvidence: try string(input, "scopeEvidence"))
+            scopeEvidence: try string(input, "scopeEvidence"), summary: summary(try optional(input, "summary")))
         try snapshot.validate()
         return snapshot
     }
 
+    private static func summary(_ text: String) -> String? {
+        let line = text.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        guard !line.isEmpty else { return nil }
+        return line.count > 400 ? String(line.prefix(399)) + "…" : line
+    }
     private static func keys(_ input: [String: Any], allowed: Set<String>) throws {
         try calendarRequire(Set(input.keys).isSubset(of: allowed), "The reading submission contains unsupported fields.")
     }
@@ -187,6 +211,7 @@ enum ReadingBriefing {
         guard (try? snapshot.validate()) != nil else { return "This collection is invalid. Read the source again." }
         var lines = [snapshot.source.name,
                      snapshot.coverage == .complete ? "Complete · \(snapshot.items.count) \(snapshot.items.count == 1 ? "item" : "items") collected." : "Partial read — some of the saved scope could not be checked."]
+        if let summary = snapshot.summary { lines.append(summary) }
         if snapshot.items.isEmpty {
             lines.append(snapshot.coverage == .complete ? "No items were visible in the verified scope." : "No items were collected; this does not establish an empty source.")
         } else {

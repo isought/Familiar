@@ -31,6 +31,9 @@ final class CalendarCollectionRunner: ObservableObject {
     var onRunFinished: ((UUID) -> Void)?
     /// Runs write their story to the activity log: start, each source's result and why, and where it was saved.
     var log: (String) -> Void = { Log.info($0) }
+    /// Opens the taught page or app before a read and says what it opened (SourcePageOpener, wired by the app).
+    /// Off by default, so tests never open anything.
+    var openSource: @MainActor (LearnedReadingSource) async -> String? = { _ in nil }
     private var pendingFinishedRunID: UUID?
 
     typealias PrepareExecution = SourceCollectionTask.PrepareExecution
@@ -79,9 +82,10 @@ final class CalendarCollectionRunner: ObservableObject {
     private func collectOne(_ request: SourceCollectionTask) -> Task<Void, Never>? {
         error = nil
         batchResults = []
-        do { try request.validate(); try request.requireActive(in: store) }
-        catch {
-            let message = error.localizedDescription
+        var refusal: String?
+        do { try request.validate() } catch { refusal = request.notStartedMessage(error.localizedDescription) }
+        if refusal == nil { do { try request.requireActive(in: store) } catch { refusal = error.localizedDescription } }
+        if let message = refusal {
             if beginArchive([request.archiveEntry(state: .failed, message: message)], origin: .single) {
                 finishArchive(stopped: false)
             }
@@ -119,7 +123,7 @@ final class CalendarCollectionRunner: ObservableObject {
                 ready.append(request)
                 return request.archiveEntry()
             } catch {
-                return request.archiveEntry(state: .failed, message: error.localizedDescription)
+                return request.archiveEntry(state: .failed, message: request.notStartedMessage(error.localizedDescription))
             }
         }
         batchResults = entries.map(Self.row)
@@ -275,6 +279,9 @@ final class CalendarCollectionRunner: ObservableObject {
             }
             currentRunID = try store.runStore.begin(entries: entries, origin: origin).id
             log("run started: \(entries.count) source\(entries.count == 1 ? "" : "s") (\(origin.rawValue))")
+            for entry in entries where entry.state == .failed {
+                log("run: “\(entry.sourceName)” failed before reading: \(Self.oneLine(entry.message))")
+            }
             return true
         } catch {
             recordArchiveFailure(error)
@@ -393,7 +400,12 @@ final class CalendarCollectionRunner: ObservableObject {
             execution.cancel()
         }
         defer { removalObservation.cancel() }
-        let plan = request.plan(desktop: desktop, registry: registry, evidence: evidence,
+        var opened: String?
+        if case .reading(let value) = request, let note = await openSource(value.source) {
+            opened = note
+            log("run: “\(request.sourceName)”: \(note)")
+        }
+        let plan = request.plan(desktop: desktop, registry: registry, evidence: evidence, note: opened,
             prepareExecution: prepareExecution, trackedItems: trackedItems(request.sourceID), validatePermission: { [self] in
                 guard !sourceRemoved else { throw CalendarDataError.invalid(Self.removedMessage) }
                 try request.requireActive(in: store)
@@ -427,7 +439,7 @@ final class CalendarCollectionRunner: ObservableObject {
                         try request.requireActive(in: store)
                         if let saved = request.result(evidence) {
                             let state: CalendarSourceRunResult.State = saved.coverage == .partial ? .partial : .complete
-                            let message = saved.coverage == .partial ? "Saved with gaps. Review the collection’s coverage notes." : "Fresh source information saved."
+                            let message = request.savedMessage(evidence, coverage: saved.coverage)
                             // This is the authoritative commit. No latest-only cache
                             // write may replace a prior run or claim success first.
                             try persistEntry(request, state: state, message: message, evidence: evidence)

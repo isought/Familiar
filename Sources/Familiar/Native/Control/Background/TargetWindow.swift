@@ -132,7 +132,7 @@ struct TargetWindow {
     }
 
     /// Candidate windows for the model: layer-0 windows with a title or an owner name, excluding Noteling, sorted
-    /// front to back; includes off-screen and minimized ones.
+    /// front to back; includes off-screen and minimized ones, but not helper surfaces (see isHelperSurface).
     static func list() -> [Descriptor] {
         let me = ProcessInfo.processInfo.processIdentifier
         var axCache: [pid_t: [AXWindowInfo]] = [:]
@@ -144,7 +144,9 @@ struct TargetWindow {
             var minimized = false
             if !w.onScreen, Permissions.accessibilityGranted {   // on-screen windows can't be minimized
                 if axCache[w.pid] == nil { axCache[w.pid] = axWindows(of: application(w.pid, timeout: 0.3)) }
-                minimized = closestInfo(to: w.bounds, title: w.name, in: axCache[w.pid] ?? [])?.minimized ?? false
+                let axWins = axCache[w.pid] ?? []
+                if isHelperSurface(title: w.name, onScreen: w.onScreen, bounds: w.bounds, axFrames: axWins.compactMap(\.frame)) { continue }
+                minimized = closestInfo(to: w.bounds, title: w.name, in: axWins)?.minimized ?? false
             }
             out.append(Descriptor(id: Int(w.id), pid: w.pid, appName: app?.localizedName ?? w.owner,
                                   bundleID: app?.bundleIdentifier ?? "", title: w.name,
@@ -155,6 +157,13 @@ struct TargetWindow {
             if a.element.isOnScreen != b.element.isOnScreen { return a.element.isOnScreen }
             return a.offset < b.offset
         }.map(\.element)
+    }
+
+    /// An off-screen, untitled window with no Accessibility window at its frame is a helper surface, not a window
+    /// anyone sees or Noteling can work in. Chrome keeps several even with no window open (toolbar strips across the
+    /// top of the screen, a 500-point box); listing them sent the reader through five "off screen" windows.
+    static func isHelperSurface(title: String, onScreen: Bool, bounds: CGRect, axFrames: [CGRect]) -> Bool {
+        !onScreen && title.isEmpty && !axFrames.contains { distance($0, bounds) <= 8 }
     }
 
     private static let accessibilityMessage = "Accessibility permission is off. Open System Settings → Privacy & Security → Accessibility and enable Noteling."
