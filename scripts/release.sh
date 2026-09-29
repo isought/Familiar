@@ -1,11 +1,16 @@
 #!/bin/bash
-# Signs with the Developer ID, notarizes, staples, and produces dist/Familiar-<version>.dmg and .pkg.
+# Signs, notarizes and staples dist/<version>/Familiar-<version>.dmg and .pkg.
 # One-time setup: install a "Developer ID Application" certificate, and
 #   xcrun notarytool store-credentials familiar-notary --apple-id EMAIL --team-id TEAMID --password APP_SPECIFIC_PASSWORD
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PROFILE="${FAMILIAR_NOTARY_PROFILE:-familiar-notary}"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+DIST="dist/$VERSION"
+if [ -e "$DIST" ]; then
+  echo "release output already exists: $DIST; choose a new version to preserve the existing build"
+  exit 1
+fi
 
 security find-identity -v -p codesigning | grep -q "Developer ID Application" || { echo "no Developer ID Application certificate in the keychain"; exit 1; }
 xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 || { echo "notarytool profile '$PROFILE' not found; run store-credentials first"; exit 1; }
@@ -15,7 +20,8 @@ APP="build/Familiar.app"
 codesign --verify --deep --strict --verbose=2 "$APP"
 grep -q "Developer ID" <(codesign -dvv "$APP" 2>&1) || { echo "app is not Developer ID signed"; exit 1; }
 
-DIST=dist; rm -rf "$DIST"; mkdir -p "$DIST"
+mkdir -p dist
+mkdir "$DIST"
 
 # Do not rebuild while a submission is pending: the ticket is bound to the exact bundle that was uploaded.
 staple() {   # the ticket can take a minute to propagate after "Accepted"
@@ -32,7 +38,7 @@ rm "$DIST/Familiar.zip"
 echo "== dmg"
 STAGE="$(mktemp -d)"; cp -R "$APP" "$STAGE/"; ln -s /Applications "$STAGE/Applications"
 DMG="$DIST/Familiar-$VERSION.dmg"
-hdiutil create -volname "Familiar" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+hdiutil create -volname "Familiar" -srcfolder "$STAGE" -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 IDENTITY_APP="$(security find-identity -v -p codesigning | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')"
 codesign --force --timestamp --sign "$IDENTITY_APP" "$DMG"      # the image itself must be signed before notarization
