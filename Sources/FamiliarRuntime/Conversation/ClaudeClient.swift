@@ -10,7 +10,9 @@ package final class ClaudeClient: ConversationClient {
     package var baseURL: URL
     package var extraHeaders: [String: String]
     package var maxToolRounds = 8
-    package var betas: [String] = ["server-side-fallback-2026-07-01"]
+    /// Server-side refusal fallbacks (the `fallbacks` field and its beta header) exist only on Anthropic's own API.
+    /// Gateways and cloud platforms reject them, so they are sent only to api.anthropic.com.
+    package var serverFallbacks: Bool
     /// Checked before every tool round; when true the loop ends gracefully (pending tool calls get an error result).
     package var shouldStop: () -> Bool = { false }
 
@@ -23,7 +25,9 @@ package final class ClaudeClient: ConversationClient {
         self.model = options.model
         self.effort = options.effort
         self.maxTokens = options.maxTokens
-        self.baseURL = URL(string: options.baseURL.isEmpty ? "https://api.anthropic.com" : options.baseURL) ?? URL(string: "https://api.anthropic.com")!
+        let baseURL = URL(string: options.baseURL.isEmpty ? "https://api.anthropic.com" : options.baseURL) ?? URL(string: "https://api.anthropic.com")!
+        self.baseURL = baseURL
+        self.serverFallbacks = baseURL.host?.lowercased() == "api.anthropic.com"
         self.extraHeaders = options.headers
         self.logger = logger
         if let session {
@@ -114,19 +118,20 @@ package final class ClaudeClient: ConversationClient {
         var body: [String: Any] = [
             "model": model,
             "max_tokens": maxTokens,
-            "fallbacks": "default",
             "output_config": ["effort": effort],
             "system": [["type": "text", "text": system, "cache_control": ["type": "ephemeral"]]],
             "messages": messages,
         ]
+        if serverFallbacks { body["fallbacks"] = "default" }
         if !tools.isEmpty { body["tools"] = tools }
 
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/messages"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        // A gateway may authenticate through its own header instead (config apiHeaders).
+        if !apiKey.isEmpty { req.setValue(apiKey, forHTTPHeaderField: "x-api-key") }
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        req.setValue(betas.joined(separator: ","), forHTTPHeaderField: "anthropic-beta")
+        if serverFallbacks { req.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta") }
         for (k, v) in extraHeaders { req.setValue(v, forHTTPHeaderField: k) }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
