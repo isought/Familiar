@@ -16,9 +16,10 @@
     <key>LSUIElement</key><false/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSHumanReadableCopyright</key><string>© 2026 Yang Lu. Code licensed under the Apache License 2.0.</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Familiar takes a screenshot only when you ask it a question, so it can see what you are looking at.</string>
+    <string>Screen access lets it see your screen when you ask a question, while you record a demonstration with Watch Me, and while it works on a task you gave it.</string>
     <key>NSAccessibilityUsageDescription</key>
-    <string>Familiar reads the name of the app and window you are using so it can give relevant help.</string>
+    <string>Accessibility lets it read which app, window and control you are using and record the steps you show it. Only when you turn on control does it click and type for you.</string>
 </dict>
 </plist>

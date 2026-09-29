@@ -299,4 +299,9 @@ pre-approved, so the user clicks one prompt on first launch, once per install.
 - Python helpers in `Resources/py/`: `introspect.py` (ast-only schema extraction), `run_tool.py` (executes `run(**args)`), `claude_mcp.py` (private CLI tool bridge).
 
 ## License
-Apache License 2.0. Copyright 2026 isought. See `LICENSE`.
+The code is under the Apache License 2.0, Copyright 2026 Yang Lu. See `LICENSE` and `NOTICE`.
+
+- **Third-party software:** anything bundled in the app is listed in `THIRD_PARTY_NOTICES.md`, with its license text in `licenses/`. `scripts/build.sh` copies all of these into `Contents/Resources/Legal/` in every build. When you bundle something new, add it to both.
+- **Brand:** the name, app icon and sticky-note character are covered by `TRADEMARKS.md`, not by the Apache License.
+- **Contributions:** they need a signed CLA; see `CONTRIBUTING.md` and `CLA.md`.
+- **Privacy:** `PRIVACY.md` describes what the app stores and sends. Update it whenever that changes.

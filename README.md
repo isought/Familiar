@@ -41,13 +41,13 @@ Click a completed run to read its findings. **Manage sources** is where you chan
 
 Cards stay with you across days. Familiar tries to update the same card when it sees the same item again, and can update its status when it finds new evidence. An item disappearing from a scan doesn’t mean it is finished.
 
-Open a card and choose **Discuss or adjust** to ask a question or explain what matters to you. You can handle it yourself, mark it handled, or ask Familiar to take on its proposed action. Discussing a card doesn’t start the action.
+Open a card and choose **Discuss or adjust** to ask a question or explain what matters to you. You can handle it yourself, mark it handled, or ask Familiar to take on its proposed action. Discussing a card doesn’t start the action unless you ask Familiar to do it.
 
 ## Your information, your control
 
-Your saved sources, cards, and run history are stored on your Mac. AI features send the relevant information—including screen text or images when needed—to your configured Claude connection. **Watch Me** records the demonstration you start.
+Your saved sources, cards, and run history are stored on your Mac, and Familiar sends nothing to its developer. AI features send what a request needs to your configured Claude connection. Depending on the request, that can include screenshots, text from the window you’re using, the apps and web addresses you used recently, and what Familiar reads from your sources. **Watch Me** records only the demonstration you start. The [privacy notice](PRIVACY.md) lists exactly what is stored, what is sent, and how to delete it.
 
-Mouse and keyboard control is off until you enable it in Settings. Tasks show their progress and any approval requests in the task window; **Stop** ends the work. Checking a tracked email conversation may open it and mark it as read.
+Mouse and keyboard control is off until you turn it on, in Settings or with the hand button on the chat pad. Tasks show their progress and any approval requests in the task window; **Stop** ends the work. Checking a tracked email conversation may open it and mark it as read.
 
 To quit, choose **Quit Familiar** or press **⌘Q** while Familiar is active. If it stops responding, use macOS **Force Quit** (**⌥⌘Esc**).
 
@@ -59,4 +59,6 @@ Familiar is an early version. You start source checks yourself; scheduled mornin
 
 ---
 
-[Developer guide](docs/development/guide.md) · [Architecture](docs/architecture/task-execution.md) · [Apache 2.0 license](LICENSE)
+[Developer guide](docs/development/guide.md) · [Architecture](docs/architecture/task-execution.md) · [Contributing](CONTRIBUTING.md) · [Privacy](PRIVACY.md)
+
+The code is licensed under the [Apache License 2.0](LICENSE) (© 2026 Yang Lu; see [NOTICE](NOTICE) and [third-party notices](THIRD_PARTY_NOTICES.md)). The name, app icon and sticky-note character are not covered by that license; see [TRADEMARKS.md](TRADEMARKS.md).

@@ -10,8 +10,11 @@ enum Log {
     private static var handle: FileHandle? = {
         let url = Config.dir.appendingPathComponent("familiar.log")
         try? FileManager.default.createDirectory(at: Config.dir, withIntermediateDirectories: true)
+        // Owner-only: the log records window titles, web addresses and tool activity.
         if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
+            FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        } else {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
         let h = try? FileHandle(forWritingTo: url)
         h?.seekToEndOfFile()
