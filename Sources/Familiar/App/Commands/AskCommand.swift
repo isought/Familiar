@@ -3,7 +3,7 @@ import SwiftUI
 import FamiliarContracts
 import FamiliarRuntime
 
-/// `Familiar --ask "question" [url] [--shot]`: headless question through the real Claude tool loop, no screenshot, no UI.
+/// `Noteling --ask "question" [url] [--shot]`: headless question through the real Claude tool loop, no screenshot, no UI.
 @MainActor
 func runHeadlessAsk() async {
     let args = CommandLine.arguments

@@ -22,8 +22,10 @@ struct TargetPolicyTests {
     func selfBundleIsRefused() {
         #expect(TargetPolicy.refusedBundles.contains(TargetPolicy.selfBundleID))
         #expect(TargetPolicy.refusedBundles.contains("com.isought.familiar"))
-        #expect(TargetPolicy.refusal(bundleID: TargetPolicy.selfBundleID, appName: "Familiar", focusedPath: []) != nil)
+        #expect(TargetPolicy.refusedBundles.contains("app.noteling.mac"))
+        #expect(TargetPolicy.refusal(bundleID: TargetPolicy.selfBundleID, appName: "Noteling", focusedPath: []) != nil)
         #expect(TargetPolicy.refusal(bundleID: "com.isought.familiar", appName: "Familiar", focusedPath: []) != nil)
+        #expect(TargetPolicy.refusal(bundleID: "app.noteling.mac", appName: "Noteling", focusedPath: []) != nil)
     }
 
     @Test

@@ -5,7 +5,7 @@ workspace object: title, where it sits in the hierarchy, its current version, ci
 a preview of the content. Call this first when the user is in Waxwing.
 
 Args:
-    url: Browser URL. Defaults to the current window's URL from the Familiar context.
+    url: Browser URL. Defaults to the current window's URL from the Noteling context.
     full_body: Include the full page Markdown instead of a preview.
 """
 import os

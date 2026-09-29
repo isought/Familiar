@@ -90,7 +90,7 @@ struct ClaudeCodeClientTests {
     func testToolsRunThroughMCPAndPreserveImagesAndErrors() async throws {
         let fixture = try FakeClaude(script: #"""
         config_file = Path(args[args.index("--mcp-config") + 1])
-        server = json.loads(config_file.read_text())["mcpServers"]["familiar"]
+        server = json.loads(config_file.read_text())["mcpServers"]["noteling"]
         bridge_env = os.environ.copy()
         bridge_env.update(server.get("env", {}))
         bridge = subprocess.Popen([server["command"], *server.get("args", [])], stdin=subprocess.PIPE,
@@ -165,7 +165,7 @@ struct ClaudeCodeClientTests {
     func testRelocationRecoveryPreservesComputerToolSequence(hardFailure: Bool) async throws {
         let fixture = try FakeClaude(script: #"""
         config_file = Path(args[args.index("--mcp-config") + 1])
-        server = json.loads(config_file.read_text())["mcpServers"]["familiar"]
+        server = json.loads(config_file.read_text())["mcpServers"]["noteling"]
         bridge_env = os.environ.copy()
         bridge_env.update(server.get("env", {}))
         bridge = subprocess.Popen([server["command"], *server.get("args", [])], stdin=subprocess.PIPE,

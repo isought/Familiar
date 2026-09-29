@@ -3,7 +3,7 @@ import SwiftUI
 import FamiliarContracts
 import FamiliarRuntime
 
-/// `Familiar --render-mascot <dir>`: render every mascot mood at 256pt and 48pt (@2x PNG), a charging variant, gaze samples,
+/// `Noteling --render-mascot <dir>`: render every mascot mood at 256pt and 48pt (@2x PNG), a charging variant, gaze samples,
 /// contact sheets (light at 256/48/32/24, dark at 48/32, and the 24pt card-header row), the quill cursor as a vector at 4x
 /// with its hotspot marked, and `icon-1024.png` (the idle note at 512pt @2x, for the app icon), then exit.
 /// Used to eyeball the character without launching the app.
@@ -111,7 +111,7 @@ func runRenderMascot() {
     exit(0)
 }
 
-/// `Familiar --render-card <dir>`: render the expanded chat card (the sticky-note pad) with a sample conversation at the
+/// `Noteling --render-card <dir>`: render the expanded chat card (the sticky-note pad) with a sample conversation at the
 /// default 400x540 and the large 560x760, @2x, plus a dark-appearance variant of the default size, then exit.
 /// Files: pad-400.png, pad-560.png, pad-400-dark.png. Used to eyeball the pad without launching the app.
 @MainActor
@@ -195,7 +195,7 @@ func runRenderCard() {
     exit(0)
 }
 
-/// `Familiar --render-pen <dir>`: the pen overlay over a fake window, with two stickers (one open) and the note editor,
+/// `Noteling --render-pen <dir>`: the pen overlay over a fake window, with two stickers (one open) and the note editor,
 /// drawn into a PNG. For eyeballing the paper without a mouse.
 @MainActor
 func runRenderPen() {

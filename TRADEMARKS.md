@@ -6,9 +6,11 @@ The code in this repository is licensed under the Apache License 2.0, but the br
 
 The brand assets are:
 
-- the project's name and logo;
+- the name Noteling and its logo;
 - the app icon: `Resources/AppIcon.icns` and any rendering of it;
 - the sticky-note character: its look and expressions, and any rendering of it. This covers renderings produced by the code in `Sources/Familiar/Features/Companion/` as well as drawings of it anywhere else.
+
+Versions up to 0.4 were called Familiar. That name is not a brand of this project.
 
 From this version on, `Resources/AppIcon.icns` is not licensed under the Apache License: © 2026 Yang Lu, all rights reserved. Earlier releases stay under the terms they were published with. The character's drawing code remains Apache-2.0 code; this policy is about using the character as a brand.
 
@@ -36,4 +38,4 @@ The concept image is not distributed with the project.
 
 ## Contact
 
-For permission requests or questions, open an issue at https://github.com/isought/Familiar/issues.
+For permission requests or questions, open an issue at https://github.com/noteling/noteling/issues.

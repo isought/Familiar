@@ -1,7 +1,7 @@
 import Foundation
 import FamiliarContracts
 
-/// Runs the user's unmodified, signed-in Claude Code executable. Familiar owns
+/// Runs the user's unmodified, signed-in Claude Code executable. Noteling owns
 /// conversation history and all tools; the CLI owns authentication and its loop.
 package final class ClaudeCodeClient: ConversationClient {
     package var effort: String
@@ -73,7 +73,7 @@ package final class ClaudeCodeClient: ConversationClient {
     package func converse(system: String, tools: [[String: Any]], messages: inout [[String: Any]],
                   executor: @escaping ToolExecutor, onStatus: @escaping (String) -> Void) async throws -> ClaudeReply {
         guard let executable = Self.executable(path: options.executablePath) else {
-            throw ClaudeError(message: "Claude Code was not found. Install it, sign in with claude auth login, then set its path in Familiar Settings if needed.")
+            throw ClaudeError(message: "Claude Code was not found. Install it, sign in with claude auth login, then set its path in Noteling Settings if needed.")
         }
         let workspace = try CLIWorkspace()
         defer { workspace.close() }
@@ -86,7 +86,7 @@ package final class ClaudeCodeClient: ConversationClient {
         } else {
             let helper = pythonRuntime.helpers.appendingPathComponent("claude_mcp.py").path
             guard FileManager.default.fileExists(atPath: helper) else {
-                throw ClaudeError(message: "Familiar's Claude Code tool bridge is missing. Rebuild or reinstall Familiar.")
+                throw ClaudeError(message: "Noteling's Claude Code tool bridge is missing. Rebuild or reinstall Noteling.")
             }
             let command: String
             let args: [String]
@@ -97,9 +97,9 @@ package final class ClaudeCodeClient: ConversationClient {
                 command = python
                 args = [helper, workspace.root.path]
             } else {
-                throw ClaudeError(message: "Claude Code tools need Familiar's bundled uv or Python 3. Reinstall Familiar or install uv.")
+                throw ClaudeError(message: "Claude Code tools need Noteling's bundled uv or Python 3. Reinstall Noteling or install uv.")
             }
-            mcp = ["mcpServers": ["familiar": ["type": "stdio", "command": command, "args": args]]]
+            mcp = ["mcpServers": ["noteling": ["type": "stdio", "command": command, "args": args]]]
         }
         try workspace.writeJSON(mcp, to: "mcp.json")
         var input = try JSONSerialization.data(withJSONObject: Self.inputMessage(messages: messages))
@@ -111,8 +111,8 @@ package final class ClaudeCodeClient: ConversationClient {
                     "--setting-sources", "", "--settings", "{\"disableAllHooks\":true}",
                     "--strict-mcp-config", "--mcp-config", workspace.root.appendingPathComponent("mcp.json").path,
                     "--permission-mode", "dontAsk", "--max-turns", String(max(1, maxToolRounds + 1)),
-                    "--system-prompt", system + "\n\nYou are running inside Familiar. Use only the supplied Familiar tools. Tool names are prefixed with mcp__familiar__; computer actions are named computer__screenshot, computer__left_click, etc. Earlier conversation is historical context. Answer the latest user request."]
-        if !bindings.isEmpty { args += ["--allowedTools", "mcp__familiar__*"] }
+                    "--system-prompt", system + "\n\nYou are running inside Noteling. Use only the supplied Noteling tools. Tool names are prefixed with mcp__noteling__; computer actions are named computer__screenshot, computer__left_click, etc. Earlier conversation is historical context. Answer the latest user request."]
+        if !bindings.isEmpty { args += ["--allowedTools", "mcp__noteling__*"] }
         let model = options.model.trimmingCharacters(in: .whitespacesAndNewlines)
         if !model.isEmpty { args += ["--model", model] }
         args += ["--effort", effort == "low" ? "low" : effort == "medium" ? "medium" : "high"]
@@ -127,7 +127,7 @@ package final class ClaudeCodeClient: ConversationClient {
         }
         do {
             do { try process.run() } catch {
-                throw ClaudeError(message: "Could not start Claude Code. Check its executable path in Familiar Settings.")
+                throw ClaudeError(message: "Could not start Claude Code. Check its executable path in Noteling Settings.")
             }
             onStatus("Thinking with Claude Code…")
             let deadline = Date().addingTimeInterval(requestTimeout)
@@ -206,7 +206,7 @@ package final class ClaudeCodeClient: ConversationClient {
             guard process.terminationStatus == 0, result["is_error"] as? Bool != true,
                   result["subtype"] as? String == "success" else {
                 if result["subtype"] as? String == "error_max_turns" {
-                    throw ClaudeError(message: "Claude Code reached Familiar's tool limit. Ask a follow-up to continue.")
+                    throw ClaudeError(message: "Claude Code reached Noteling's tool limit. Ask a follow-up to continue.")
                 }
                 throw ClaudeError(message: Self.failureMessage(String(decoding: stdout, as: UTF8.self)))
             }

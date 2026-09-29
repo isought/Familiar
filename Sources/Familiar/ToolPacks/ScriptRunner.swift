@@ -66,10 +66,13 @@ final class ScriptRunner {
         }
         let stdin = try JSONSerialization.data(withJSONObject: args)
         var env = extraEnv
-        env["FAMILIAR_TOOL_DIR"] = tool.path.deletingLastPathComponent().deletingLastPathComponent().path
+        let toolDir = tool.path.deletingLastPathComponent().deletingLastPathComponent().path
+        env["NOTELING_TOOL_DIR"] = toolDir
+        env["FAMILIAR_TOOL_DIR"] = toolDir   // earlier name, kept for existing packs
         for key in secrets { if let v = Secrets.get(key) { env[key] = v } }
         if let context, let d = try? JSONSerialization.data(withJSONObject: context.json), let s = String(data: d, encoding: .utf8) {
-            env["FAMILIAR_CONTEXT"] = s
+            env["NOTELING_CONTEXT"] = s
+            env["FAMILIAR_CONTEXT"] = s   // earlier name, kept for existing packs
         }
         let started = Date()
         let r = try await Subprocess.run(exe, cmdArgs, stdin: stdin, cwd: tool.path.deletingLastPathComponent(), env: env, timeout: 90)

@@ -221,7 +221,7 @@ struct MorningTaskRunnerTests {
         try await Task.sleep(nanoseconds: 20_000_000)
         #expect(calls == 1)
         #expect(fixture.store.workItems.map(\.status) == [.running, .queued])
-        #expect(fixture.store.queueMessage?.contains("Restart Familiar") == true)
+        #expect(fixture.store.queueMessage?.contains("Restart Noteling") == true)
         runner.shutdown()
     }
 

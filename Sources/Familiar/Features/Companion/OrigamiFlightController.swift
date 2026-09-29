@@ -97,7 +97,7 @@ final class OrigamiFlightController {
         timing = OrigamiFlightTiming(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         let state = OrigamiFlightState(frame: timing.frame(at: 0, path: route))
         let stage = NSPanel(contentRect: bounds, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        stage.title = "Familiar paper crane"
+        stage.title = "Noteling paper crane"
         stage.level = .floating
         stage.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         stage.isOpaque = false

@@ -1,7 +1,7 @@
 import AppKit
 import QuartzCore
 
-/// The arrow Familiar draws for itself: same path for the screen overlay and the peek-note thumbnail.
+/// The arrow Noteling draws for itself: same path for the screen overlay and the peek-note thumbnail.
 /// Everything draws into a y-down user space (a flipped NSImage, a SwiftUI Canvas, a layer whose contents are
 /// flipped) with the tip at `tipAt`. Nothing depends on the context's base space, so the shadow falls the same way
 /// in every host.
@@ -95,7 +95,7 @@ enum GhostCursorArt {
     }
 }
 
-/// A click-through overlay that follows the target window and shows where Familiar is working: the ghost arrow,
+/// A click-through overlay that follows the target window and shows where Noteling is working: the ghost arrow,
 /// click rings, a wand-style highlight with a label, and an underline under the field being typed into. It never
 /// activates the app: a non-activating panel ordered with orderFrontRegardless.
 @MainActor final class GhostCursorPanel {

@@ -2,13 +2,13 @@ import Foundation
 import Security
 
 /// Secrets keyed by environment-variable name. Two stores:
-/// - `file`: `~/.familiar/secrets.json`, owner-only. Used for dev builds, because a self-signed app is re-identified by
+/// - `file`: `~/.noteling/secrets.json`, owner-only. Used for dev builds, because a self-signed app is re-identified by
 ///   macOS on every rebuild and the Keychain prompts each time no matter what the user clicks.
 /// - `keychain`: the login Keychain, for builds signed with a trusted (Developer ID) certificate.
 enum Secrets {
     enum Store: String { case file, keychain }
     nonisolated(unsafe) static var store: Store = .file
-    static let service = "com.isought.familiar"
+    static let service = "app.noteling.mac"
     static var fileURL: URL { Config.dir.appendingPathComponent("secrets.json") }
 
     private static func loadFile() -> [String: String] {
@@ -35,7 +35,7 @@ enum Secrets {
         if !d.isEmpty, saveFile(d) { Log.info("secrets: migrated \(d.keys.sorted()) from the Keychain to \(fileURL.path)") }
     }
 
-    private static let legacyServices = ["com.familiar.app", "com.sidekick.app"]   // pre-rename entries are copied over on first read
+    private static let legacyServices = ["com.isought.familiar", "com.familiar.app", "com.sidekick.app"]   // pre-rename entries are copied over on first read
 
     static func get(_ key: String) -> String? {
         if store == .file { let v = loadFile()[key]?.trimmingCharacters(in: .whitespacesAndNewlines); return (v?.isEmpty ?? true) ? nil : v }
@@ -81,7 +81,7 @@ enum Secrets {
         if update == errSecSuccess { return true }
         var add = base
         add[kSecValueData as String] = data
-        add[kSecAttrLabel as String] = "Familiar: \(key)"
+        add[kSecAttrLabel as String] = "Noteling: \(key)"
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 

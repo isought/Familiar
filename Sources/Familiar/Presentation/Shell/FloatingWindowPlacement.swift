@@ -7,7 +7,7 @@ import AppKit
     let anchor: Anchor
 
     init(_ key: String, anchor: Anchor = .topLeft) {
-        self.key = "Familiar.windowPlacement.\(key)"
+        self.key = "Noteling.windowPlacement.\(key)"
         self.anchor = anchor
     }
 

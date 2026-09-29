@@ -43,7 +43,7 @@ enum MorningCardDisposition: String, Codable, CaseIterable {
         case .unreviewed: return "To review"
         case .ignored: return "Filed away"
         case .mine: return "I’ll handle it"
-        case .delegated: return "With Familiar"
+        case .delegated: return "With Noteling"
         case .completed: return "Result ready"
         case .resolved: return "Resolved"
         }

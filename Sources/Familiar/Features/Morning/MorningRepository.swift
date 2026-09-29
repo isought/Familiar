@@ -40,7 +40,7 @@ final class SQLiteMorningRepository: MorningRepository {
         struct Header: Decodable { var version: Int }
         let version = try JSONDecoder().decode(Header.self, from: data).version
         guard version == 1 else {
-            throw MorningStoreError.unavailable("These morning files use version \(version), which this version of Familiar cannot read. Your saved files have been left untouched.")
+            throw MorningStoreError.unavailable("These morning files use version \(version), which this version of Noteling cannot read. Your saved files have been left untouched.")
         }
         return LoadedMorningWorkspace(workspace: try JSONDecoder().decode(MorningWorkspace.self, from: data), requiresSave: true)
     }

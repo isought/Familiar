@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds Familiar with SwiftPM and assembles build/Familiar.app (ad-hoc signed unless a "Familiar Dev" identity exists).
+# Builds Noteling with SwiftPM and assembles build/Noteling.app (ad-hoc signed unless a "Noteling Dev" or older "Familiar Dev" identity exists).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -9,14 +9,14 @@ if ! OUT=$(swift build -c "$CONFIG" 2>&1); then
   echo "build failed"; exit 1
 fi
 echo "$OUT" | grep -E 'warning' | head -5 || true
-BIN=".build/$CONFIG/Familiar"
+BIN=".build/$CONFIG/Familiar"   # the SwiftPM product keeps its internal name
 [ -x "$BIN" ] || { echo "build failed: $BIN missing"; exit 1; }
 
-APP="build/Familiar.app"
+APP="build/Noteling.app"
 RES="$APP/Contents/Resources"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$RES/bin"
-cp "$BIN" "$APP/Contents/MacOS/Familiar"
+cp "$BIN" "$APP/Contents/MacOS/Noteling"
 cp Resources/Info.plist "$APP/Contents/"
 
 # Copy only files git does not ignore, so git-ignored tokens and caches never reach the app.
@@ -64,6 +64,7 @@ IDS="$(security find-identity -v -p codesigning 2>/dev/null || true)"
 if [ -z "$IDENTITY" ]; then
   DEVID="$(echo "$IDS" | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')"
   if [ -n "$DEVID" ]; then IDENTITY="$DEVID"
+  elif echo "$IDS" | grep -q "Noteling Dev"; then IDENTITY="Noteling Dev"
   elif echo "$IDS" | grep -q "Familiar Dev"; then IDENTITY="Familiar Dev"
   elif echo "$IDS" | grep -q "Sidekick Dev"; then IDENTITY="Sidekick Dev"
   fi

@@ -3,7 +3,7 @@ import AppKit
 import ApplicationServices
 import QuartzCore
 
-/// One thing that happened while Familiar was watching. Written to `events.json` as it goes.
+/// One thing that happened while Noteling was watching. Written to `events.json` as it goes.
 struct WatchEvent: Codable {
     var index: Int
     var t: Double            // seconds since the recording started
@@ -83,9 +83,9 @@ enum PrivateFiles {
 }
 
 /// "Watch me": a passive recorder. Global click and key monitors (never intercepting), a screenshot crop around
-/// every click outside Familiar's own windows, a full frame whenever the scene changes, typed text per form field
+/// every click outside Noteling's own windows, a full frame whenever the scene changes, typed text per form field
 /// (never for password fields, terminals, or fields it cannot identify), all written to
-/// `~/.familiar/recordings/<stamp>/` as it happens.
+/// `~/.noteling/recordings/<stamp>/` as it happens.
 @MainActor
 final class WatchRecorder {
     static let maxEvents = 400
@@ -552,7 +552,7 @@ final class WatchRecorder {
 
     // MARK: HUD
 
-    private var captionText: String { "Familiar is watching · \(meta.clicks) click\(meta.clicks == 1 ? "" : "s") · \(hotkeyLabel) to stop" }
+    private var captionText: String { "Noteling is watching · \(meta.clicks) click\(meta.clicks == 1 ? "" : "s") · \(hotkeyLabel) to stop" }
 
     private func updateCaption() { for c in captions { c.string = captionText } }
 

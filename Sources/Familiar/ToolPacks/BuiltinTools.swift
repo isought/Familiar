@@ -76,7 +76,7 @@ enum BuiltinTools {
 }
 
 enum ScreenText {
-    /// Depth-first text dump of the frontmost (non-Familiar) app's focused window.
+    /// Depth-first text dump of the frontmost (non-Noteling) app's focused window.
     static func dumpFrontmostWindow(maxNodes: Int = 2000, maxChars: Int = 14_000) -> String {
         guard Permissions.accessibilityGranted else { return "" }
         let apps = NSWorkspace.shared.runningApplications

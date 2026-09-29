@@ -20,7 +20,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--since", required=True, type=timestamp)
 parser.add_argument("--turns", type=int, default=2)
 args = parser.parse_args()
-home = Path(os.environ.get("FAMILIAR_HOME", str(Path.home() / ".familiar")))
+home = Path(os.environ.get("NOTELING_HOME") or os.environ.get("FAMILIAR_HOME") or str(Path.home() / ".noteling"))
 directory = home / "diagnostics/main-thread"
 events = []
 for filename in ("events.previous.jsonl", "events.jsonl"):

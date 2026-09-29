@@ -3,9 +3,9 @@ import SwiftUI
 import FamiliarContracts
 import FamiliarRuntime
 
-/// `Familiar --record-synthetic <dir>`: a recording from the current screen without a person: 3 full frames a second
+/// `Noteling --record-synthetic <dir>`: a recording from the current screen without a person: 3 full frames a second
 /// apart plus 3 crops around the mouse with fake click labels, in the real events.json / meta.json format.
-/// Needs Screen Recording, so run the bundle binary (build/Familiar.app/Contents/MacOS/Familiar).
+/// Needs Screen Recording, so run the bundle binary (build/Noteling.app/Contents/MacOS/Noteling).
 @MainActor
 func runRecordSynthetic() async {
     let args = CommandLine.arguments
@@ -20,7 +20,7 @@ func runRecordSynthetic() async {
     } catch { print("FAILED: \(error.localizedDescription)"); exit(1) }
 }
 
-/// `Familiar --summarize-recording <dir> ["purpose"] [--tools-root <dir>] [--keep]`: writes a recording up through Claude
+/// `Noteling --summarize-recording <dir> ["purpose"] [--tools-root <dir>] [--keep]`: writes a recording up through Claude
 /// and prints the draft JSON; with --keep writes the pack into --tools-root (default: a fresh temp folder, never the real
 /// tools folder unless you point there) and shows what the registry makes of it.
 @MainActor

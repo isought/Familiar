@@ -1,4 +1,4 @@
-"""Familiar helper: turn a script's run() function into a JSON tool schema.
+"""Noteling helper: turn a script's run() function into a JSON tool schema.
 
 Uses `ast` only, so it never imports the script or needs its dependencies.
 Usage: python introspect.py path/to/script.py  -> JSON on stdout

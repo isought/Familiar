@@ -34,7 +34,7 @@ There is one report per stall episode, one sampler at a time, and a bounded samp
 timeout. Process suspension gaps restart the detector rather than reporting sleep
 as a UI freeze. Recovery is recorded when the heartbeat completes.
 
-Files live under `~/.familiar/diagnostics/main-thread/` (respecting `FAMILIAR_HOME`):
+Files live under `~/.noteling/diagnostics/main-thread/` (respecting `FAMILIAR_HOME`):
 
 - `events.jsonl`: typed phases, counts, stall/recovery events, and report names.
 - `events.previous.jsonl`: one rotated 256 KB metadata log.

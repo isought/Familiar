@@ -42,9 +42,9 @@ import AppKit
         let v = ProcessInfo.processInfo.operatingSystemVersion
         guard Self.supportedOS(v) else { return disable("macOS \(v.majorVersion).\(v.minorVersion) is outside the tested range") }
         guard Self.symbolsAvailable else { return disable("SkyLight symbols missing") }
-        // Deactivating ourselves while the human is in Familiar would drop their focus; try again next time.
+        // Deactivating ourselves while the human is in Noteling would drop their focus; try again next time.
         if NSApplication.shared.isActive || NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() {
-            Log.info("skylight: self-test deferred (Familiar is active)")
+            Log.info("skylight: self-test deferred (Noteling is active)")
             return false
         }
         let t0 = Date()

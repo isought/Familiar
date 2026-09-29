@@ -8,7 +8,7 @@ final class HideHint {
     private var dismissWork: DispatchWorkItem?
 
     func show(under anchor: NSRect, onRestore: @escaping () -> Void) {
-        show(under: anchor, title: "Familiar is up here now", subtitle: "Click the pen icon to bring it back", seconds: 4.5, onTap: onRestore)
+        show(under: anchor, title: "Noteling is up here now", subtitle: "Click the pen icon to bring it back", seconds: 4.5, onTap: onRestore)
     }
 
     /// Generic callout with an arrow pointing up at `anchor`.

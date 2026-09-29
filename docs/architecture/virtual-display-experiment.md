@@ -5,7 +5,7 @@ The experiment builds on that baseline in `codex/virtual-background-display`.
 
 ## Question and decision
 
-Can Familiar move an existing, signed-in application's window onto a virtual
+Can Noteling move an existing, signed-in application's window onto a virtual
 display, keep capturing and controlling it with the current native controller,
 and leave the user's physical workspace available?
 
@@ -29,7 +29,7 @@ UI or parallel execution engine to compensate.
 
 - `FamiliarVirtualDisplayBridge` contains the private `CGVirtualDisplay` ABI and
   owns a single non-HiDPI display. It resolves classes at runtime and reports
-  unavailable APIs without preventing the rest of Familiar from launching.
+  unavailable APIs without preventing the rest of Noteling from launching.
 - `VirtualDisplayWorkspace` owns the temporary monitor and borrowed window
   positions. Its injected adapters allow lifecycle tests without moving real
   windows or configuring the test machine's displays.
@@ -56,7 +56,7 @@ On 2026-09-27, macOS 26.6.2 on Apple silicon:
   display appeared at `(1710, 0)`. The target moved from `(0, 34, 1710, 993)` to
   `(1742, 64, 1710, 993)` and returned to the exact original rectangle on finish.
   The extra display disappeared. The read-only observer recorded no pointer or
-  foreground-app changes during the task (Familiar was already foreground).
+  foreground-app changes during the task (Noteling was already foreground).
 - The task entered `Hello virtual display 👋`, edited `ABC` to `AxBC` using two
   Left-arrow presses followed by `x`, and pressed the local Set title button.
   It verified the fields by screenshot and waited ten seconds before finishing.
@@ -103,7 +103,7 @@ pressing the message composer produced no verified change, and the typing guard
 refused input because it could not confirm a focused text field. The virtual
 display therefore did not resolve Discord's background-input limitation.
 
-At 21:29:10 the user granted foreground control. Familiar restored the Discord
+At 21:29:10 the user granted foreground control. Noteling restored the Discord
 window to its original `(0, 34, 1710, 997)` rectangle. About one second later the
 input monitor revoked the grant; the user confirmed they continued using both
 mouse and keyboard and switched away with ⌘Tab. This was an expected hand-back:

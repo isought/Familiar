@@ -1,4 +1,4 @@
-# Familiar: code structure for the next phase
+# Noteling: code structure for the next phase
 
 **Status:** Current-workflow ownership and source organization implemented on `codex/modular-cleanup`. Automated and packaging checks are recorded below; live native interaction verification remains a pre-merge review item. Future daily/integration designs remain deferred.
 
@@ -61,7 +61,7 @@ This proposal prepares those boundaries. Building the daily feature, connecting 
 
 | Decision | Reason |
 | --- | --- |
-| Keep one repository and one installable app. | One place to configure Familiar and grant macOS permissions. |
+| Keep one repository and one installable app. | One place to configure Noteling and grant macOS permissions. |
 | Begin with three SwiftPM targets: contracts, runtime, executable app. | Enforce the most valuable dependency boundary without creating a package for every feature. |
 | Give chat, learning, contextual notes, and companion behavior separate owners. | New behavior should have a clear home and lifetime. |
 | Use a shared execution service from chat and the headless entry point. | Remove duplicated routing before adding another caller. |
@@ -73,7 +73,7 @@ The baseline was checkpointed and pushed before moving files. Cleanup stays on a
 
 ## 3. Implemented source structure
 
-The top-level source directories are compiler-enforced modules. Folders inside `Familiar` express app responsibilities; they are not separate Swift targets. Keep new features inside a focused owner first, and extract an additional target when there is a concrete need.
+The top-level source directories are compiler-enforced modules. Folders inside `Noteling` express app responsibilities; they are not separate Swift targets. Keep new features inside a focused owner first, and extract an additional target when there is a concrete need.
 
 ```text
 Sources/
@@ -122,7 +122,7 @@ Arrows mean “imports.”
 
 ```mermaid
 flowchart LR
-    App[Familiar app] --> Runtime[FamiliarRuntime]
+    App[Noteling app] --> Runtime[FamiliarRuntime]
     App --> Contracts[FamiliarContracts]
     Runtime --> Contracts
 ```
@@ -143,7 +143,7 @@ When its first implementation begins, introduce `FamiliarDay` and extract the re
 
 ```mermaid
 flowchart LR
-    App[Familiar app] --> Day[FamiliarDay]
+    App[Noteling app] --> Day[FamiliarDay]
     App --> Runtime[FamiliarRuntime]
     App --> Paper[FamiliarPaperUI]
     Day --> Contracts[FamiliarContracts]
@@ -274,7 +274,7 @@ flowchart TD
     Result -. eligible facts through explicit write policy .-> Ingest
 ```
 
-The diagram is data flow, not module imports. An external tool may already perform capture, storage and indexing. The ingestion service can adapt its API and track accepted source IDs; Familiar does not necessarily implement every box locally.
+The diagram is data flow, not module imports. An external tool may already perform capture, storage and indexing. The ingestion service can adapt its API and track accepted source IDs; Noteling does not necessarily implement every box locally.
 
 | Responsibility | Owner and boundary |
 | --- | --- |
@@ -322,7 +322,7 @@ Captured observations, inferred procedures/preferences, executable tools, approv
 | A Watch upload fails, the view closes, and the app retries later | Recording is deleted or uploaded twice. | The ingestion receipt owns the accepted source; durable retry/deduplication belongs to ingestion, with recoverable failure state. |
 | One captured procedure is useful to both Chat execution and Day | Each feature builds its own index and prompt rules. | Both use the same source/evidence contract; neither imports WatchLearn. |
 | The same person asks for a task and a daily digest | One shared prompt returns irrelevant context to one caller. | Purpose-specific queries share retrieval machinery while producing appropriately scoped evidence. |
-| A source changes after a feed card was generated | Familiar repeats completed work or acts on an outdated entity. | The card retains source references; execution refreshes necessary facts and rechecks its proposed work. |
+| A source changes after a feed card was generated | Noteling repeats completed work or acts on an outdated entity. | The card retains source references; execution refreshes necessary facts and rechecks its proposed work. |
 | A source is deleted, becomes inaccessible, or belongs to another workspace | Old caches still return it. | Retrieval and derived caches honor scope and source lifecycle; tests cover revocation/deletion propagation under the chosen backend contract. |
 | A feed is refreshed while background execution runs | A global busy flag blocks useful read-only work, or capture races control. | Knowledge work has its own lifecycle; resource conflicts are enforced by the shared activity owner. |
 | Knowledge service is unavailable | Every app feature fails or stale facts look current. | Retrieval reports unavailable/partial/stale status; unrelated actions still work and dependent work can request missing context. |
@@ -334,11 +334,11 @@ These checks become implementation tests when their corresponding feature exists
 
 Waxwing is a possible later integration, not an active cleanup workstream. The findings below preserve the September 26 investigation for later revalidation; none requires an implementation or fix during this restructure.
 
-The user identified `/Users/david/projects/waxwing-app` as the preferred integration, while keeping Familiar-managed/local-file knowledge possible. The following findings come from that sibling checkout's current source and contracts. Its old `spec/` directory is explicitly historical. `GET http://127.0.0.1:4310/api` could not connect during this review; no service was started, authenticated content accessed, or Waxwing data modified.
+The user identified `/Users/david/projects/waxwing-app` as the preferred integration, while keeping Noteling-managed/local-file knowledge possible. The following findings come from that sibling checkout's current source and contracts. Its old `spec/` directory is explicitly historical. `GET http://127.0.0.1:4310/api` could not connect during this review; no service was started, authenticated content accessed, or Waxwing data modified.
 
 ### What Waxwing already supplies
 
-| Existing capability | Fit for Familiar | Limit or integration work |
+| Existing capability | Fit for Noteling | Limit or integration work |
 | --- | --- | --- |
 | Versioned Markdown pages with stable item identity and optimistic update checks | Store a curated learned procedure and retrieve the precise version that informed a task. | Map Watch's accepted draft to a page; retain remote IDs/revisions and handle update conflicts. Page creation does not expose a caller-supplied idempotency key in its current schema. |
 | Evidence-backed work reports, explicit observations/interpretations/hypotheses, checks and revisions | Publish suitable execution evidence or a learned account where the report's domain fits. | Reports require a repository-oriented scope and text evidence. They are not a generic raw Watch-session or image-attachment format. Do not invent repository provenance to satisfy the schema. |
@@ -353,9 +353,9 @@ Work-report supersession deserves specific handling: a revised report has a new 
 
 ### Recommended ownership with Waxwing
 
-**Familiar owns:** desktop capture, review of what was learned, individual preferences, personal feed state, task proposals, approval and execution, and local staging for pending ingestion. **Waxwing owns:** the published shared knowledge and its source versions, evidence accounts, search and citation relationships.
+**Noteling owns:** desktop capture, review of what was learned, individual preferences, personal feed state, task proposals, approval and execution, and local staging for pending ingestion. **Waxwing owns:** the published shared knowledge and its source versions, evidence accounts, search and citation relationships.
 
-Add `WaxwingKnowledgeSource` and `WaxwingKnowledgeWriter` behind the shared knowledge interfaces when integration begins. A source and a writer are separate capabilities: a configured read connection must remain useful without publishing anything. Use the documented API and validate responses against its contracts; never couple Familiar to Waxwing's PostgreSQL tables or import the sibling app's implementation.
+Add `WaxwingKnowledgeSource` and `WaxwingKnowledgeWriter` behind the shared knowledge interfaces when integration begins. A source and a writer are separate capabilities: a configured read connection must remain useful without publishing anything. Use the documented API and validate responses against its contracts; never couple Noteling to Waxwing's PostgreSQL tables or import the sibling app's implementation.
 
 A file-backed source can implement the same retrieval/evidence projection using stable IDs, metadata, content revisions and explicit source roots. A file writer can provide a standalone local mode. It does not need to reproduce Waxwing's collaboration and citation UI. Declare unsupported operations rather than pretending all backends offer identical deletion, attachments or revisions.
 
@@ -364,9 +364,9 @@ Choose one authoritative destination for each knowledge scope. A local upload ou
 ### Integration gaps that affect the plan
 
 1. **Watch handoff:** Prefer a reviewed Markdown procedure for the first general workflow integration. Use a work report when its evidence and scope actually fit. The current `PackDraft` lacks explicit claim-to-event provenance; an evidence-backed report requires preserving those references during summarization. Introduce stable capture/submission identity and persist the exact outgoing payload for retry. Keeping screenshots remotely needs an explicit artifact/attachment design; current report evidence is text. Raw recording retention and what is automatically published remain product decisions.
-2. **Personalization and feed assembly:** Familiar's context resolver adds task/person relevance over Waxwing retrieval. Day adds novelty, daily selection and previously shown/dismissed state. A complete “what changed since yesterday” feed may require a Waxwing change-list/cursor API; the current attention endpoint and keyword search do not provide a complete change stream.
+2. **Personalization and feed assembly:** Noteling's context resolver adds task/person relevance over Waxwing retrieval. Day adds novelty, daily selection and previously shown/dismissed state. A complete “what changed since yesterday” feed may require a Waxwing change-list/cursor API; the current attention endpoint and keyword search do not provide a complete change stream.
 3. **Deletion and recovery:** A local discard cannot promise to retract a published report through an ordinary write token. Separate cancelling unpublished ingestion, local cleanup, and remote retention/deletion. Respect capabilities exposed by the selected backend.
 4. **Freshness:** Preserve source IDs/revisions and load authoritative current content when preparing work. Search references may distinguish an annotation's source from the target it annotates; retain both. Source resolution must dispatch by content kind because Waxwing does not expose one generic reader for all result types. Refreshing context is separate from approving a materially changed proposal.
-5. **Current connector drift:** Familiar's [search script](../../tools/waxwing/scripts/search.py) reads `results`, while Waxwing returns `hits`. The [attention script](../../tools/waxwing/scripts/attention.py) reads `pages`/`citations`, while Waxwing returns `items`/`changed`. These are source-confirmed field mismatches; no live integration was tested or application code fixed during this planning task. Add adapter fixtures from Waxwing's current contracts before relying on these calls for context or cards.
+5. **Current connector drift:** Noteling's [search script](../../tools/waxwing/scripts/search.py) reads `results`, while Waxwing returns `hits`. The [attention script](../../tools/waxwing/scripts/attention.py) reads `pages`/`citations`, while Waxwing returns `items`/`changed`. These are source-confirmed field mismatches; no live integration was tested or application code fixed during this planning task. Add adapter fixtures from Waxwing's current contracts before relying on these calls for context or cards.
 
 If integration is pursued, this check suggests one validated knowledge adapter shared by its consumers. It does not require a different app shell or a rewrite of execution. Cleanup leaves room to inject such an adapter later; it does not need to define it now. Waxwing writes, local-backend implementation, connector fixes and any Waxwing API extensions are subsequent feature work.

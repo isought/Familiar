@@ -49,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var origamiMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Log.info("Familiar launching (bundle: \(Bundle.main.bundleIdentifier ?? "none"), config: \(Config.file.path))")
+        Log.info("Noteling launching (bundle: \(Bundle.main.bundleIdentifier ?? "none"), config: \(Config.file.path))")
         seedToolsIfMissing()
         MascotStyle.current = MascotStyle(rawValue: config.mascotStyle) ?? .innocent
         Secrets.store = Secrets.Store(rawValue: config.secretsStore) ?? (Signing.isDeveloperID ? .keychain : .file)
@@ -237,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         openChatItem.target = self
         appItem.submenu?.addItem(openChatItem)
         appItem.submenu?.addItem(.separator())
-        appItem.submenu?.addItem(NSMenuItem(title: "Quit Familiar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appItem.submenu?.addItem(NSMenuItem(title: "Quit Noteling", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         let editItem = NSMenuItem(); main.addItem(editItem)
         let edit = NSMenu(title: "Edit")
         edit.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
@@ -293,7 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let img = NSImage(systemSymbolName: "pencil.tip", accessibilityDescription: "Familiar") {
+        if let img = NSImage(systemSymbolName: "pencil.tip", accessibilityDescription: "Noteling") {
             img.isTemplate = true
             statusItem.button?.image = img
         }
@@ -332,7 +332,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(screenPermItem)
         menu.addItem(axPermItem)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Familiar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit Noteling", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
     }
 
@@ -386,7 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Log.info("permissions: screen=\(Permissions.screenRecordingGranted) accessibility=\(Permissions.accessibilityGranted)")
     }
 
-    /// First run: copy the bundled example tool packs to ~/.familiar/tools and retire the old knowledge folder.
+    /// First run: copy the bundled example tool packs to ~/.noteling/tools and retire the old knowledge folder.
     private func seedToolsIfMissing() {
         let fm = FileManager.default
         let dir = config.resolvedToolsDir
@@ -413,7 +413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             : "Stop Working in \(assistant.peek.appName)   \(HotKey.display(config.hotkey))"
         tasksMenuItem.isEnabled = desktop.tasks.hasTasks
         hideMenuItem.isEnabled = panel.isVisible || origami.isFlying
-        origamiMenuItem.title = origami.isFlying ? "Land Familiar   Esc" : "Fold into a Crane"
+        origamiMenuItem.title = origami.isFlying ? "Land Noteling   Esc" : "Fold into a Crane"
         origamiMenuItem.isEnabled = origami.isFlying || canTakeOrigamiFlight
         let scripts = registry.packs.reduce(0) { $0 + $1.scripts.count }
         let missing = registry.missingRequirements(for: registry.packs)
@@ -642,7 +642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc private func openTools() { NSWorkspace.shared.open(config.resolvedToolsDir) }
     @objc private func openConfig() { NSWorkspace.shared.open(Config.file) }
-    @objc private func openLog() { NSWorkspace.shared.open(Config.dir.appendingPathComponent("familiar.log")) }
+    @objc private func openLog() { NSWorkspace.shared.open(Config.logFile) }
     @objc private func fixScreenPermission() { if !Permissions.requestScreenRecording() { Permissions.openScreenRecordingSettings() } }
     @objc private func fixAXPermission() { Permissions.requestAccessibility(); Permissions.openAccessibilitySettings() }
 }

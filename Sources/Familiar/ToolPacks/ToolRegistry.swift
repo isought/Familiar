@@ -67,7 +67,7 @@ final class ToolPack {
     }
 }
 
-/// `~/.familiar/tools/<pack>/{SKILL.md, docs/**, scripts/*.py}`
+/// `~/.noteling/tools/<pack>/{SKILL.md, docs/**, scripts/*.py}`
 @MainActor
 final class ToolRegistry {
     let root: URL

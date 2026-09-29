@@ -15,9 +15,9 @@ enum ConversationBackend {
 
     static func setupMessage(config: Config) -> String {
         if config.connectionMode == "claudeCode" {
-            return "Claude Code was not found. Install it and run claude auth login, then check the connection in Familiar Settings."
+            return "Claude Code was not found. Install it and run claude auth login, then check the connection in Noteling Settings."
         }
-        return "Add your API key in Familiar Settings to connect to Claude."
+        return "Add your API key in Noteling Settings to connect to Claude."
     }
 }
 

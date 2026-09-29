@@ -8,7 +8,7 @@ enum Log {
     }()
     private static let queue = DispatchQueue(label: "familiar.log")
     private static var handle: FileHandle? = {
-        let url = Config.dir.appendingPathComponent("familiar.log")
+        let url = Config.logFile
         try? FileManager.default.createDirectory(at: Config.dir, withIntermediateDirectories: true)
         // Owner-only: the log records window titles, web addresses and tool activity.
         if !FileManager.default.fileExists(atPath: url.path) {

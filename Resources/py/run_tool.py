@@ -1,4 +1,4 @@
-"""Familiar helper: execute a script's run(**args) and print JSON.
+"""Noteling helper: execute a script's run(**args) and print JSON.
 
 Usage: python run_tool.py path/to/script.py   (JSON args on stdin)
 Anything the script prints goes into "stdout" so it can't corrupt the result.

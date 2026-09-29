@@ -52,7 +52,7 @@ enum PackContextProvider {
         if !missingRequirements.isEmpty {
             section += "\n## Not configured yet\n"
             for missing in missingRequirements {
-                section += "- \(missing.pack.name) needs \(missing.keys.joined(separator: ", ")). Its scripts will fail until the user adds it in Familiar Settings (right-click the bubble → Settings…).\n"
+                section += "- \(missing.pack.name) needs \(missing.keys.joined(separator: ", ")). Its scripts will fail until the user adds it in Noteling Settings (right-click the bubble → Settings…).\n"
             }
         }
         return section

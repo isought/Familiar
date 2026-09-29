@@ -249,7 +249,7 @@ struct PeekNoteView: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("Approve “\(label)”?").font(HandFont.font(size: 14)).foregroundStyle(Pad.ink)
-                Text("This action may be irreversible. Approval applies to this control once; it does not give Familiar your mouse.")
+                Text("This action may be irreversible. Approval applies to this control once; it does not give Noteling your mouse.")
                     .font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft)
                 if !feed.metaLine.isEmpty {
                     Text(feed.metaLine).font(.system(size: 10.5)).foregroundStyle(Pad.inkSoft).lineLimit(1)

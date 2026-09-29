@@ -47,7 +47,7 @@ are fictional, labeled, and loaded only on request. They use preparation-only ac
 ## Local state and decisions
 
 The workspace is stored through `MorningRepository` in the local SQLite database
-`Config.dir/morning/morning.sqlite` (`~/.familiar/morning/morning.sqlite` normally).
+`Config.dir/morning/morning.sqlite` (`~/.noteling/morning/morning.sqlite` normally).
 Existing `workspace.json` data is validated and migrated, keeping the original JSON
 unchanged. `FAMILIAR_HOME` redirects storage for tests and isolated runs. Transactions
 commit card decisions, accepted work and generation receipts atomically; files use
@@ -107,7 +107,7 @@ not proof that the work has finished.
 
 Run `FAMILIAR_HOME=<temporary-directory> bash scripts/test.sh` for deterministic
 storage and queue tests alongside the existing regression suite. Do not point
-tests at the user's normal Familiar data directory. Build with
+tests at the user's normal Noteling data directory. Build with
 `bash scripts/build.sh release` and inspect the native folder, editing, filing,
 and task-result surfaces. Live execution checks should use local sample
 preparation or an explicitly authorized target.

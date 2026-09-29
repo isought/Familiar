@@ -361,13 +361,13 @@ struct CalendarSourcesView: View {
 
     private var introduction: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Sources Familiar understands.").font(HandFont.font(size: 24))
-            Text("Show Familiar a calendar, inbox, or web page. Explain what it means, which information to collect, and how to recognize when the reading is complete.")
+            Text("Sources Noteling understands.").font(HandFont.font(size: 24))
+            Text("Show Noteling a calendar, inbox, or web page. Explain what it means, which information to collect, and how to recognize when the reading is complete.")
                 .font(.system(size: 13)).foregroundStyle(Pad.inkSoft).fixedSize(horizontal: false, vertical: true)
             Button("Teach a source with Watch Me", action: teach)
                 .buttonStyle(MorningActionButton(primary: sourceCount == 0)).disabled(isRunning)
             if sourceCount == 0 {
-                Text("Review and keep what Familiar learned in chat. Your source will appear here afterward.")
+                Text("Review and keep what Noteling learned in chat. Your source will appear here afterward.")
                     .font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
             }
         }
@@ -437,10 +437,10 @@ struct CalendarSourcesView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Reading rules").font(.system(size: 13, weight: .semibold))
             Text(source.scope).font(.system(size: 13)).textSelection(.enabled)
-            Text("Use Edit source to describe what to collect and where to stop. Familiar uses these instructions during each read.")
+            Text("Use Edit source to describe what to collect and where to stop. Noteling uses these instructions during each read.")
                 .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
             if source.account.isEmpty && !source.url.isEmpty {
-                Text("Uses the account currently shown at this address. Familiar verifies the visible account during each read.")
+                Text("Uses the account currently shown at this address. Noteling verifies the visible account during each read.")
                     .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
             }
             HStack {
@@ -554,7 +554,7 @@ struct ReadingSourceEditor: View {
             }.font(.system(size: 12))
             field("Exact source address (if used)", text: $draft.url)
             field("Account shown in the app (optional with an exact address)", text: $draft.account)
-            Text("If you leave the account blank, Familiar reads only the account currently shown at this address and verifies it each time.")
+            Text("If you leave the account blank, Noteling reads only the account currently shown at this address and verifies it each time.")
                 .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
             notes("Reading rules", text: $draft.scope)
             Text("Describe what to collect and where to stop, using the views and information this source makes available. These instructions guide future reads.")
