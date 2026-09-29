@@ -15,6 +15,12 @@ package final class ClaudeClient: ConversationClient {
     package var serverFallbacks: Bool
     /// Checked before every tool round; when true the loop ends gracefully (pending tool calls get an error result).
     package var shouldStop: () -> Bool = { false }
+    /// Seconds to wait before each retry of a dropped connection or a busy server. Resending is safe: the Messages
+    /// call has no side effects, and tools only run here after a reply arrives.
+    package var retryDelays: [Double] = [0.5, 2]
+
+    private static let retryableErrors: Set<URLError.Code> = [.networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed]
+    private static let retryableStatuses: Set<Int> = [408, 429, 500, 502, 503, 504, 529]
 
     private let session: URLSession
     private let logger: (String) -> Void
@@ -89,7 +95,11 @@ package final class ClaudeClient: ConversationClient {
                         let r = await executor(name, input, toolset)
                         toolCalls += 1
                         block["content"] = r.content
-                        if r.isError { block["is_error"] = true; if toolset == "computer" { computerFailed = true } }
+                        if r.isError {
+                            block["is_error"] = true
+                            if toolset == "computer" { computerFailed = true }
+                            logger("tool error: \(toolset.map { "\($0)." } ?? "")\(name): \(Self.errorLine(r.content))")
+                        }
                     }
                     results.append(block)
                 }
@@ -106,6 +116,13 @@ package final class ClaudeClient: ConversationClient {
             if stop == "max_tokens" { text += "\n\n_(answer was cut off)_" }
             return ClaudeReply(text: text, inputTokens: totalIn, outputTokens: totalOut, cacheRead: cacheRead, toolCalls: toolCalls)
         }
+    }
+
+    /// A tool's error result as one log line.
+    package static func errorLine(_ content: Any) -> String {
+        guard let text = content as? String else { return "(non-text result)" }
+        let flat = text.replacingOccurrences(of: "\n", with: " ")
+        return flat.count > 300 ? String(flat.prefix(300)) + "…" : flat
     }
 
     /// Short, secret-free description of a tool input for the log.
@@ -135,13 +152,68 @@ package final class ClaudeClient: ConversationClient {
         for (k, v) in extraHeaders { req.setValue(v, forHTTPHeaderField: k) }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw ClaudeError(message: "No HTTP response.") }
-        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        guard (200..<300).contains(http.statusCode) else {
+        let host = baseURL.host ?? baseURL.absoluteString
+        var attempt = 0
+        while true {
+            attempt += 1
+            let started = Date()
+            let data: Data
+            let resp: URLResponse
+            do {
+                (data, resp) = try await session.data(for: req)
+            } catch let error as URLError where error.code != .cancelled {
+                let elapsed = Date().timeIntervalSince(started)
+                logger("request to \(host) failed: URLError \(error.code.rawValue) after \(Self.seconds(elapsed)) (attempt \(attempt))")
+                if Self.retryableErrors.contains(error.code), attempt <= retryDelays.count {
+                    try await Task.sleep(nanoseconds: UInt64(retryDelays[attempt - 1] * 1_000_000_000))
+                    continue
+                }
+                throw ClaudeError(message: Self.explain(error, host: host, elapsed: elapsed, attempts: attempt,
+                                                        timeout: session.configuration.timeoutIntervalForRequest))
+            }
+            guard let http = resp as? HTTPURLResponse else { throw ClaudeError(message: "No HTTP response.") }
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+            if (200..<300).contains(http.statusCode) { return json }
             let msg = (json["error"] as? [String: Any])?["message"] as? String ?? String(data: data, encoding: .utf8) ?? "unknown"
-            throw ClaudeError(message: "API error \(http.statusCode): \(msg)")
+            if Self.retryableStatuses.contains(http.statusCode), attempt <= retryDelays.count {
+                let wait = min(Self.retryAfter(http.value(forHTTPHeaderField: "retry-after")) ?? retryDelays[attempt - 1], 30)
+                logger("request to \(host): HTTP \(http.statusCode) (attempt \(attempt)); retrying in \(Self.seconds(wait))")
+                try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                continue
+            }
+            throw ClaudeError(message: "API error \(http.statusCode): \(msg)" + (attempt > 1 ? " (tried \(attempt) times)" : ""))
         }
-        return json
+    }
+
+    /// What someone can act on when Claude can't be reached: where, what happened, how long, and what to try.
+    package static func explain(_ error: URLError, host: String, elapsed: TimeInterval, attempts: Int, timeout: TimeInterval) -> String {
+        let tries = attempts > 1 ? " (tried \(attempts) times)" : ""
+        switch error.code {
+        case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
+            return "This Mac is offline, so Noteling can't reach Claude at \(host). Check your connection and try again."
+        case .networkConnectionLost:
+            return "The connection to \(host) dropped after \(seconds(elapsed))\(tries). This happens on unstable Wi-Fi, right after sleep, or when a VPN or proxy cuts long requests. Check your connection and try again."
+        case .timedOut:
+            return "\(host) didn't answer within \(seconds(timeout)). Claude may be busy, or a VPN or proxy is holding the request. Try again, or ask something shorter."
+        case .cannotFindHost, .dnsLookupFailed:
+            return "Noteling couldn't find \(host)\(tries). Check your connection, or the gateway address in Settings if your company uses one."
+        case .cannotConnectToHost:
+            return "Noteling couldn't connect to \(host)\(tries). Check your connection, or the gateway address in Settings if your company uses one."
+        case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateNotYetValid,
+             .serverCertificateHasUnknownRoot, .clientCertificateRejected, .clientCertificateRequired:
+            return "The secure connection to \(host) failed. A company proxy or network filter may be intercepting it: ask IT, or set your company's gateway in Settings."
+        default:
+            return "Noteling couldn't reach \(host)\(tries): \(error.localizedDescription) Check your connection and try again."
+        }
+    }
+
+    /// A Retry-After header in seconds (the HTTP-date form is ignored).
+    package static func retryAfter(_ value: String?) -> Double? {
+        guard let text = value?.trimmingCharacters(in: .whitespaces), let seconds = Double(text), seconds >= 0 else { return nil }
+        return seconds
+    }
+
+    private static func seconds(_ value: TimeInterval) -> String {
+        value < 10 ? String(format: "%.1f s", value) : "\(Int(value.rounded())) s"
     }
 }

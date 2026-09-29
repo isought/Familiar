@@ -29,6 +29,8 @@ final class CalendarCollectionRunner: ObservableObject {
     /// Source planning can recheck continuing items without coupling ingestion to cards.
     var trackedItems: (UUID) -> [TrackedSourceItem] = { _ in [] }
     var onRunFinished: ((UUID) -> Void)?
+    /// Runs write their story to the activity log: start, each source's result and why, and where it was saved.
+    var log: (String) -> Void = { Log.info($0) }
     private var pendingFinishedRunID: UUID?
 
     typealias PrepareExecution = SourceCollectionTask.PrepareExecution
@@ -272,6 +274,7 @@ final class CalendarCollectionRunner: ObservableObject {
                 return entry
             }
             currentRunID = try store.runStore.begin(entries: entries, origin: origin).id
+            log("run started: \(entries.count) source\(entries.count == 1 ? "" : "s") (\(origin.rawValue))")
             return true
         } catch {
             recordArchiveFailure(error)
@@ -296,6 +299,15 @@ final class CalendarCollectionRunner: ObservableObject {
             entry.readingSnapshot = evidence.readingSnapshot
         }
         try persistEntry(entry, runID: runID)
+        if state != .reading && state != .waiting {
+            let took = entry.startedAt.flatMap { start in entry.finishedAt.map { " after \(Int($0.timeIntervalSince(start).rounded())) s" } } ?? ""
+            log("run: “\(request.sourceName)” \(state.rawValue)\(took): \(Self.oneLine(message))")
+        }
+    }
+
+    private static func oneLine(_ text: String) -> String {
+        let flat = text.replacingOccurrences(of: "\n", with: " ")
+        return flat.count > 800 ? String(flat.prefix(800)) + "…" : flat
     }
 
     private func persistEntry(_ entry: SourceRunEntry, runID: UUID) throws {
@@ -319,6 +331,8 @@ final class CalendarCollectionRunner: ObservableObject {
         let successful = archiveFailure == nil && run.entries.allSatisfy { $0.state == .complete || $0.state == .partial }
         do {
             _ = try store.runStore.finish(runID: runID, status: stopped ? .stopped : (successful ? .completed : .failed))
+            let folder = store.runStore.directory(for: runID).map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "Run history"
+            log("run \(stopped ? "stopped" : (successful ? "completed" : "finished with problems")): saved to \(folder)")
             pendingFinishedRunID = runID
             notifyFinishedRun()
         } catch { recordArchiveFailure(error) }
@@ -404,7 +418,7 @@ final class CalendarCollectionRunner: ObservableObject {
                 resultText = "\(request.collectionLabel) stopped. The previous saved collection was kept."
             case .failed(let failure):
                 resultText = failure.localizedDescription
-            case .reply:
+            case .reply(let reply):
                 if Task.isCancelled || shuttingDown || execution.receipt?.stopped == true {
                     outcome = .stopped
                     resultText = "\(request.collectionLabel) stopped. The previous saved collection was kept."
@@ -421,7 +435,7 @@ final class CalendarCollectionRunner: ObservableObject {
                             outcome = .completed
                             resultText = saved.text
                         } else {
-                            resultText = "No fresh, validated source collection was submitted. The previous saved collection was kept. Open the taught location and account, then try collecting again. Unsupported navigation may need you to position the source first."
+                            resultText = request.nothingSavedMessage(reply: reply.text, rejection: evidence.lastRejection)
                         }
                     } catch {
                         resultText = "\(request.collectionLabel) could not be saved: \(error.localizedDescription)"

@@ -44,7 +44,7 @@ Watch Me recordings, developer-build secrets and the activity log can be read on
 ## How long it is kept
 
 - Watch Me recordings are deleted when you keep or discard the draft, when you clear the chat pad, or when you quit. Anything left behind by a crash is deleted after 7 days.
-- Everything else stays until you delete it. This includes the activity log, which records the apps, window titles and web addresses you use while the app runs, and the actions the app takes.
+- Everything else stays until you delete it. This includes the activity log, which records the apps, window titles and web addresses you use while the app runs, the actions the app takes and any errors, and each source run's result, including the reader's own explanation when a run saves nothing.
 
 ## Deleting your data
 

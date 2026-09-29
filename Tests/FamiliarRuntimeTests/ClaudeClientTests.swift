@@ -174,19 +174,189 @@ struct ClaudeClientTests {
         #expect(NSArray(array: messages).isEqual(to: original))
     }
 
+    // MARK: network failures (the bug: a fresh install showed only "The network connection was lost.")
+
+    @Test
+    func aDroppedConnectionIsRetriedAndTheQuestionStillGetsAnswered() async throws {
+        let success = try HTTPFixture.Response(json: ["stop_reason": "end_turn", "content": [["type": "text", "text": "Ready."]]])
+        let fixture = HTTPFixture(responses: [HTTPFixture.Response(failure: URLError(.networkConnectionLost)), success])
+        defer { fixture.close() }
+        let client = ClaudeClient(options: options(baseURL: fixture.baseURL), session: fixture.session)
+        var messages: [[String: Any]] = [["role": "user", "content": "Hello"]]
+
+        let reply = try await client.converse(system: "Fixture prompt", tools: [], messages: &messages,
+                                              executor: { _, _, _ in Issue.record("Unexpected tool call"); return .text("unexpected") },
+                                              onStatus: { _ in })
+
+        #expect(reply.text == "Ready.")
+        #expect(fixture.requests.count == 2)
+    }
+
+    @Test
+    func aConnectionThatKeepsDroppingSaysWhereWhatAndWhatToTry() async throws {
+        let lost = HTTPFixture.Response(failure: URLError(.networkConnectionLost))
+        let fixture = HTTPFixture(responses: [lost, lost, lost])
+        defer { fixture.close() }
+        let host = try #require(URL(string: fixture.baseURL)?.host)
+        let client = ClaudeClient(options: options(baseURL: fixture.baseURL), session: fixture.session)
+        var messages: [[String: Any]] = [["role": "user", "content": "Hello"]]
+
+        do {
+            _ = try await client.converse(system: "Fixture prompt", tools: [], messages: &messages,
+                                           executor: { _, _, _ in Issue.record("Unexpected tool call"); return .text("unexpected") },
+                                           onStatus: { _ in })
+            Issue.record("Expected a connection error")
+        } catch let error as ClaudeError {
+            #expect(error.message.contains(host))
+            #expect(error.message.contains("dropped"))
+            #expect(error.message.contains("tried 3 times"))
+            #expect(error.message.contains("Check your connection"))
+        }
+        #expect(fixture.requests.count == 3)
+    }
+
+    @Test
+    func aBusyServerIsRetriedThenAnswers() async throws {
+        let busy = try HTTPFixture.Response(json: ["error": ["type": "overloaded_error", "message": "Overloaded"]], status: 529)
+        let success = try HTTPFixture.Response(json: ["stop_reason": "end_turn", "content": [["type": "text", "text": "Ready."]]])
+        let fixture = HTTPFixture(responses: [busy, success])
+        defer { fixture.close() }
+        let reply = try await ask(fixture)
+        #expect(reply.text == "Ready.")
+        #expect(fixture.requests.count == 2)
+    }
+
+    @Test
+    func aRateLimitHonorsRetryAfter() async throws {
+        let limited = try HTTPFixture.Response(json: ["error": ["type": "rate_limit_error", "message": "Slow down"]], status: 429, headers: ["retry-after": "0"])
+        let success = try HTTPFixture.Response(json: ["stop_reason": "end_turn", "content": [["type": "text", "text": "Ready."]]])
+        let fixture = HTTPFixture(responses: [limited, success])
+        defer { fixture.close() }
+        #expect(try await ask(fixture).text == "Ready.")
+        #expect(fixture.requests.count == 2)
+        #expect(ClaudeClient.retryAfter("2") == 2)
+        #expect(ClaudeClient.retryAfter(" 0.5 ") == 0.5)
+        #expect(ClaudeClient.retryAfter("Wed, 21 Oct 2026 07:28:00 GMT") == nil)
+        #expect(ClaudeClient.retryAfter("-1") == nil)
+        #expect(ClaudeClient.retryAfter(nil) == nil)
+    }
+
+    @Test
+    func aServerThatStaysDownSaysHowManyTimesItTried() async throws {
+        let down = try HTTPFixture.Response(json: ["error": ["type": "api_error", "message": "Service unavailable"]], status: 503)
+        let fixture = HTTPFixture(responses: [down, down, down])
+        defer { fixture.close() }
+        do { _ = try await ask(fixture); Issue.record("Expected an API error") }
+        catch let error as ClaudeError { #expect(error.message == "API error 503: Service unavailable (tried 3 times)") }
+        #expect(fixture.requests.count == 3)
+    }
+
+    @Test
+    func beingOfflineIsNotRetriedAndSaysSo() async throws {
+        let fixture = HTTPFixture(responses: [HTTPFixture.Response(failure: URLError(.notConnectedToInternet))])
+        defer { fixture.close() }
+        let host = try #require(URL(string: fixture.baseURL)?.host)
+        do { _ = try await ask(fixture); Issue.record("Expected an offline error") }
+        catch let error as ClaudeError {
+            #expect(error.message.contains("offline"))
+            #expect(error.message.contains(host))
+        }
+        #expect(fixture.requests.count == 1)
+    }
+
+    @Test
+    func aTimeoutIsNotRetriedAndSaysHowLongItWaited() async throws {
+        let fixture = HTTPFixture(responses: [HTTPFixture.Response(failure: URLError(.timedOut))])
+        defer { fixture.close() }
+        do { _ = try await ask(fixture); Issue.record("Expected a timeout error") }
+        catch let error as ClaudeError { #expect(error.message.contains("didn't answer within")) }
+        #expect(fixture.requests.count == 1)
+    }
+
+    @Test
+    func aStoppedRequestStaysAStop() async throws {
+        let fixture = HTTPFixture(responses: [HTTPFixture.Response(failure: URLError(.cancelled))])
+        defer { fixture.close() }
+        do { _ = try await ask(fixture); Issue.record("Expected cancellation") }
+        catch let error as URLError { #expect(error.code == .cancelled) }
+        #expect(fixture.requests.count == 1)
+    }
+
+    @Test
+    func certificateFailuresPointAtAProxy() {
+        let message = ClaudeClient.explain(URLError(.serverCertificateUntrusted), host: "api.anthropic.com", elapsed: 0.2, attempts: 1, timeout: 240)
+        #expect(message.contains("api.anthropic.com"))
+        #expect(message.contains("proxy"))
+    }
+
+    @Test
+    func failedAttemptsAreLoggedWithCodeHostAndAttempt() async throws {
+        let success = try HTTPFixture.Response(json: ["stop_reason": "end_turn", "content": [["type": "text", "text": "Ready."]]])
+        let fixture = HTTPFixture(responses: [HTTPFixture.Response(failure: URLError(.networkConnectionLost)), success])
+        defer { fixture.close() }
+        let host = try #require(URL(string: fixture.baseURL)?.host)
+        let lines = LogLines()
+        let client = ClaudeClient(options: options(baseURL: fixture.baseURL), session: fixture.session, logger: { lines.append($0) })
+        client.retryDelays = [0, 0]
+        var messages: [[String: Any]] = [["role": "user", "content": "Hello"]]
+        _ = try await client.converse(system: "Fixture prompt", tools: [], messages: &messages,
+                                       executor: { _, _, _ in .text("unexpected") }, onStatus: { _ in })
+        #expect(lines.all.contains { $0.contains("URLError -1005") && $0.contains(host) && $0.contains("attempt 1") })
+    }
+
+    @Test
+    func toolErrorsAreLoggedNotJustTheCalls() async throws {
+        let toolUse = try HTTPFixture.Response(json: ["stop_reason": "tool_use", "content": [["type": "tool_use", "id": "call-1", "name": "lookup", "input": ["q": "status"]]]])
+        let done = try HTTPFixture.Response(json: ["stop_reason": "end_turn", "content": [["type": "text", "text": "Done."]]])
+        let fixture = HTTPFixture(responses: [toolUse, done])
+        defer { fixture.close() }
+        let lines = LogLines()
+        let client = ClaudeClient(options: options(baseURL: fixture.baseURL), session: fixture.session, logger: { lines.append($0) })
+        var messages: [[String: Any]] = [["role": "user", "content": "Hello"]]
+        _ = try await client.converse(system: "Fixture prompt", tools: [["name": "lookup"]], messages: &messages,
+                                       executor: { _, _, _ in .text("Lookup service is down.", isError: true) }, onStatus: { _ in })
+        #expect(lines.all.contains("tool error: lookup: Lookup service is down."))
+    }
+
+    private func ask(_ fixture: HTTPFixture) async throws -> ClaudeReply {
+        let client = ClaudeClient(options: options(baseURL: fixture.baseURL), session: fixture.session)
+        client.retryDelays = [0, 0]
+        var messages: [[String: Any]] = [["role": "user", "content": "Hello"]]
+        return try await client.converse(system: "Fixture prompt", tools: [], messages: &messages,
+                                         executor: { _, _, _ in Issue.record("Unexpected tool call"); return .text("unexpected") },
+                                         onStatus: { _ in })
+    }
+
     private func options(baseURL: String) -> ClaudeAPIOptions {
         ClaudeAPIOptions(apiKey: "fixture-api-key", model: "fixture-model", effort: "medium", maxTokens: 1024, baseURL: baseURL)
     }
+}
+
+private final class LogLines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func append(_ line: String) { lock.lock(); lines.append(line); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return lines }
 }
 
 private final class HTTPFixture: @unchecked Sendable {
     struct Response {
         let status: Int
         let data: Data
+        var headers: [String: String] = [:]
+        /// The connection fails instead of answering, e.g. URLError(.networkConnectionLost).
+        var failure: URLError?
 
-        init(json: [String: Any], status: Int = 200) throws {
+        init(json: [String: Any], status: Int = 200, headers: [String: String] = [:]) throws {
             self.status = status
             self.data = try JSONSerialization.data(withJSONObject: json)
+            self.headers = headers
+        }
+
+        init(failure: URLError) {
+            status = 0
+            data = Data()
+            self.failure = failure
         }
     }
 
@@ -294,7 +464,9 @@ private final class FixtureURLProtocol: URLProtocol {
                 throw URLError(.unsupportedURL)
             }
             let fixtureResponse = try fixture.response(for: request)
-            guard let response = HTTPURLResponse(url: url, statusCode: fixtureResponse.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"]) else {
+            if let failure = fixtureResponse.failure { throw failure }
+            let headers = fixtureResponse.headers.merging(["Content-Type": "application/json"]) { given, _ in given }
+            guard let response = HTTPURLResponse(url: url, statusCode: fixtureResponse.status, httpVersion: "HTTP/1.1", headerFields: headers) else {
                 throw URLError(.badServerResponse)
             }
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
