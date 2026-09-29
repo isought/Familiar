@@ -2,18 +2,20 @@ import SwiftUI
 
 @MainActor final class MorningNavigation: ObservableObject {
     enum Route: Equatable {
-        case folders, folder(UUID), card(UUID), people, person(UUID), editPerson(UUID?), editCard(UUID?), editFolder(UUID?)
+        case folders, folder(UUID), card(UUID), people, person(UUID), editPerson(UUID?), editCard(UUID?), editFolder(UUID?), sources
+        case sourceRuns, sourceRun(runID: UUID, sourceID: UUID?)
     }
     @Published var route: Route = .folders
     @Published var disposition: MorningCardDisposition = .unreviewed
     @Published var newCardFolderID: UUID?
+    @Published var calendarSourceID: UUID?
 }
 
 struct MorningLauncherView: View {
     @ObservedObject var store: MorningStore
     let open: () -> Void
     let people: () -> Void
-    private var count: Int { store.cards.filter { $0.disposition == .unreviewed }.count }
+    private var count: Int { store.cards.filter { $0.displayDisposition == .unreviewed }.count }
     var body: some View {
         ZStack {
             WindowDragHandle(onClick: open)
@@ -68,6 +70,11 @@ struct MorningFilesView: View {
     let close: () -> Void
     let filed: () -> Void
     let handoff: (MorningWorkItem) -> Void
+    var calendarSources: CalendarStore? = nil
+    var calendarRunner: CalendarCollectionRunner? = nil
+    var teachCalendar: (() -> Void)? = nil
+    var cardGeneration: CardGenerationService? = nil
+    var discussCard: ((MorningCard) -> Void)? = nil
     @State private var localError: String?
     @State private var undo: MorningCard?
     @State private var notice: String?
@@ -76,6 +83,12 @@ struct MorningFilesView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().overlay(Pad.tabEdge.opacity(0.35))
+            if let cardGeneration, showsGeneration {
+                CardGenerationControls(service: cardGeneration, showCards: {
+                    navigation.disposition = .unreviewed
+                    navigation.route = .folders
+                })
+            }
             if let error = localError ?? store.error {
                 HStack(alignment: .top) {
                     Image(systemName: "exclamationmark.triangle")
@@ -121,6 +134,10 @@ struct MorningFilesView: View {
                 }
                 .frame(height: 24)
             Menu {
+                if calendarSources != nil {
+                    Button("Manage sources") { navigation.route = .sources }
+                    Button("Run history") { navigation.route = .sourceRuns }
+                }
                 Button("Create a note") { createNote() }
                 Button("Who’s Who") { navigation.route = .people }
                 Button("Add folder") { navigation.route = .editFolder(nil) }
@@ -135,6 +152,9 @@ struct MorningFilesView: View {
     private var heading: String {
         switch navigation.route {
         case .folders: return "A little room for your day"
+        case .sources: return "Manage sources"
+        case .sourceRuns: return "Run history"
+        case .sourceRun: return "Collected results"
         case .folder(let id): return store.folders.first { $0.id == id }?.name ?? "Folder"
         case .card: return "On your desk"
         case .people, .person: return "Who’s Who"
@@ -144,8 +164,28 @@ struct MorningFilesView: View {
         }
     }
 
+    private var showsGeneration: Bool {
+        switch navigation.route { case .folders, .sourceRuns, .sourceRun: return true; default: return false }
+    }
+
     @ViewBuilder private var content: some View {
         switch navigation.route {
+        case .sources:
+            if let calendarSources, let calendarRunner {
+                CalendarSourcesHost(store: calendarSources, runner: calendarRunner, initialSourceID: navigation.calendarSourceID,
+                                    teach: { teachCalendar?() }, openRun: openRun)
+            } else { empty("Sources are unavailable.") }
+        case .sourceRuns:
+            if let calendarSources { SourceRunHistoryView(runs: calendarSources.runStore, openRun: openRun) }
+            else { empty("Run history is unavailable.") }
+        case .sourceRun(let runID, let sourceID):
+            if let calendarSources, let calendarRunner {
+                SourceRunResultsHost(store: calendarSources, runner: calendarRunner, runID: runID, sourceID: sourceID,
+                    openRun: openRun, manageSource: { id in
+                        navigation.calendarSourceID = id
+                        navigation.route = .sources
+                    })
+            } else { empty("Run results are unavailable.") }
         case .folders: folders
         case .folder(let id): folder(id)
         case .card(let id):
@@ -173,6 +213,24 @@ struct MorningFilesView: View {
     private var folders: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                if let calendarSources, let calendarRunner {
+                    CalendarBatchHost(store: calendarSources, runner: calendarRunner,
+                                      openSources: { navigation.route = .sources }, openRun: openRun,
+                                      openHistory: { navigation.route = .sourceRuns })
+                } else if calendarSources != nil {
+                    Button { navigation.route = .sources } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "tray.full").font(.system(size: 23))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Read your sources").font(.system(size: 14, weight: .semibold))
+                                Text("Teach Familiar where your information lives, then read it again.")
+                                    .font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                        }.padding(14).background(Pad.paperTop.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                    }.buttonStyle(.plain)
+                }
                 if store.cards.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Your morning starts small.").font(HandFont.font(size: 24))
@@ -203,7 +261,7 @@ struct MorningFilesView: View {
     }
 
     private var folderSubtitle: String {
-        let count = store.cards.filter { $0.disposition == navigation.disposition }.count
+        let count = store.cards.filter { $0.displayDisposition == navigation.disposition }.count
         return count == 0 ? "Nothing here to tend to." : "\(count) \(count == 1 ? "file" : "files"). Start wherever you like."
     }
 
@@ -214,7 +272,7 @@ struct MorningFilesView: View {
     }
 
     private func folderTile(_ folder: MorningFolder) -> some View {
-        let count = store.cards.filter { $0.folderID == folder.id && $0.disposition == navigation.disposition }.count
+        let count = store.cards.filter { $0.folderID == folder.id && $0.displayDisposition == navigation.disposition }.count
         return Button { navigation.route = .folder(folder.id) } label: {
             VStack(alignment: .leading, spacing: 7) {
                 MorningFolderDrawing().frame(height: 100).padding(.horizontal, 12)
@@ -227,7 +285,7 @@ struct MorningFilesView: View {
     }
 
     private func folder(_ id: UUID) -> some View {
-        let cards = store.cards.filter { $0.folderID == id && $0.disposition == navigation.disposition }
+        let cards = store.cards.filter { $0.folderID == id && $0.displayDisposition == navigation.disposition }
         return ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
@@ -264,6 +322,10 @@ struct MorningFilesView: View {
                 Text(card.title).font(HandFont.font(size: 20)).lineLimit(3).multilineTextAlignment(.leading)
                 Text(card.summary.isEmpty ? card.sources.first?.excerpt ?? "Open to review the details." : card.summary)
                     .font(.system(size: 12)).lineSpacing(3).lineLimit(3).fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading).foregroundStyle(Pad.inkSoft)
+                if let tracking = card.tracking {
+                    Text(card.isResolved ? "Resolved" : Calendar.current.isDateInToday(tracking.firstSeenAt) ? "New today" : "Carried forward")
+                        .font(.system(size: 10, weight: .medium)).foregroundStyle(Pad.penInk)
+                }
                 Spacer(minLength: 0)
                 if !card.timing.isEmpty { Label(card.timing, systemImage: "clock").font(.system(size: 11)).lineLimit(1).foregroundStyle(Pad.penInk) }
                 let names = store.people.filter { card.personIDs.contains($0.id) }.map(\.name)
@@ -284,7 +346,7 @@ struct MorningFilesView: View {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 9) {
                     HStack {
-                        Text(card.isSample ? "FICTIONAL SAMPLE" : card.disposition.label.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(Pad.inkSoft)
+                        Text(card.isSample ? "FICTIONAL SAMPLE" : card.displayDisposition.label.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(Pad.inkSoft)
                         Spacer()
                         Button("Edit") { navigation.route = .editCard(card.id) }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk)
                     }
@@ -292,24 +354,26 @@ struct MorningFilesView: View {
                     if !card.summary.isEmpty { Text(card.summary).font(.system(size: 14)).lineSpacing(4).textSelection(.enabled) }
                     if !card.timing.isEmpty { Label(card.timing, systemImage: "clock").font(.system(size: 12)).foregroundStyle(Pad.penInk) }
                     if !card.personIDs.isEmpty { peopleLinks(card) }
-                }
-                if !card.sources.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        sectionLabel("The source", icon: "doc.text")
-                        ForEach(card.sources) { source in
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(alignment: .top) {
-                                    Text(source.title).font(.system(size: 12, weight: .semibold))
-                                    Spacer()
-                                    Text(source.capturedAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
-                                }
-                                Text(source.excerpt).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                                if let url = URL(string: source.url), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
-                                    Link("Open original", destination: url).font(.system(size: 11)).foregroundStyle(Pad.penInk)
-                                }
-                            }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Color.white.opacity(0.65), in: RoundedRectangle(cornerRadius: 7))
-                                .overlay(alignment: .leading) { Rectangle().fill(Pad.tabEdge).frame(width: 2).padding(.vertical, 10) }
+                    if let tracking = card.tracking {
+                        Text("First seen \(tracking.firstSeenAt.formatted(date: .abbreviated, time: .omitted)) · Last observed \(tracking.lastSeenAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
+                        if !tracking.resolutionEvidence.isEmpty {
+                            Label(tracking.resolutionEvidence, systemImage: card.isResolved ? "checkmark.circle" : "info.circle")
+                                .font(.system(size: 12)).foregroundStyle(Pad.inkSoft).fixedSize(horizontal: false, vertical: true)
                         }
+                    }
+                }
+                if let discussCard {
+                    Button { discussCard(card) } label: { Label("Discuss or adjust", systemImage: "bubble.left.and.bubble.right") }
+                        .buttonStyle(MorningActionButton()).disabled(pending != nil)
+                }
+                if let context = card.personalContext, !context.isEmpty { detailSection("Your context", icon: "person.bubble", text: context) }
+                if !card.sources.isEmpty {
+                    if card.tracking != nil {
+                        DisclosureGroup("Source evidence") { sourceEvidence(card).padding(.top, 8) }
+                            .font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
+                    } else {
+                        sourceEvidence(card)
                     }
                 } else {
                     Text("No source excerpt is attached. Review the context before handing off work.").font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
@@ -320,7 +384,13 @@ struct MorningFilesView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     sectionLabel("What Familiar can do", icon: "sparkles")
                     Text(card.action.title).font(.system(size: 14, weight: .semibold))
-                    Text(card.action.instruction).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
+                    if card.tracking != nil {
+                        DisclosureGroup("Task instructions") {
+                            Text(card.action.instruction).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled).padding(.top, 6)
+                        }.font(.system(size: 12))
+                    } else {
+                        Text(card.action.instruction).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
+                    }
                     Text(card.action.mode == .prepare ? "Prepares a result from this file’s context. Doesn’t operate other apps." : "Works in your apps through the background task system. Existing input and action approvals still apply.")
                         .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
                 }.padding(15).frame(maxWidth: .infinity, alignment: .leading).background(Pad.paperTop.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
@@ -331,6 +401,9 @@ struct MorningFilesView: View {
                         if let message = store.queueMessage { Text(message).font(.system(size: 12)).foregroundStyle(Pad.redInk).textSelection(.enabled) }
                         if pending.status == .queued { Button("Remove from queue") { perform { try store.cancelQueued(id: pending.id) } }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk) }
                     }
+                } else if card.isResolved {
+                    Button("Reopen this card") { perform { try store.setCardResolution(cardID: card.id, resolved: false) } }
+                        .buttonStyle(MorningActionButton())
                 } else {
                     if let previous = history.first, let warning = retryWarning(previous) {
                         Label(warning, systemImage: "exclamationmark.circle").font(.system(size: 12)).foregroundStyle(Pad.redInk).fixedSize(horizontal: false, vertical: true)
@@ -344,12 +417,45 @@ struct MorningFilesView: View {
                         Button { enqueue(card, kind: .context) } label: { Label("Help me understand first", systemImage: "questionmark.bubble") }
                             .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk)
                     }
+                    Button("I’ve handled this") { perform { try store.setCardResolution(cardID: card.id, resolved: true) } }
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk)
                     if card.disposition != .unreviewed {
                         Button("Return to review folder") { perform { try store.returnToFolder(cardID: card.id) }; navigation.disposition = .unreviewed }
                             .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
                     }
                 }
+                if let tracking = card.tracking, !tracking.changes.isEmpty {
+                    DisclosureGroup("Card history") {
+                        VStack(alignment: .leading, spacing: 9) {
+                            ForEach(tracking.changes.reversed()) { change in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(change.message).font(.system(size: 12))
+                                    Text(change.at, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
+                                }
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+                    }.font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
+                }
             }.padding(23)
+        }
+    }
+
+    private func sourceEvidence(_ card: MorningCard) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(card.sources) { source in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top) {
+                        Text(source.title).font(.system(size: 12, weight: .semibold))
+                        Spacer()
+                        Text(source.capturedAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
+                    }
+                    Text(source.excerpt).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    if let url = URL(string: source.url), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
+                        Link("Open original", destination: url).font(.system(size: 11)).foregroundStyle(Pad.penInk)
+                    }
+                }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Color.white.opacity(0.65), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(alignment: .leading) { Rectangle().fill(Pad.tabEdge).frame(width: 2).padding(.vertical, 10) }
+            }
         }
     }
 
@@ -446,11 +552,15 @@ struct MorningFilesView: View {
         VStack(alignment: .leading, spacing: 8) { sectionLabel(title, icon: icon); Text(text).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled) }
     }
     private func empty(_ title: String) -> some View { Text(title).font(.system(size: 14)).foregroundStyle(Pad.inkSoft).padding(24) }
+    private func openRun(_ runID: UUID, _ sourceID: UUID?) {
+        navigation.route = .sourceRun(runID: runID, sourceID: sourceID)
+    }
     private func back() {
         switch navigation.route {
+        case .sourceRun: navigation.route = .sourceRuns
         case .card(let id):
             if let card = store.cards.first(where: { $0.id == id }) {
-                navigation.disposition = card.disposition
+                navigation.disposition = card.displayDisposition
                 navigation.route = .folder(card.folderID)
             } else { navigation.route = .folders }
         case .person, .editPerson: navigation.route = .people

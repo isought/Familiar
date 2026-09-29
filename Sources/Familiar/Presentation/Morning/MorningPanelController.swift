@@ -20,10 +20,13 @@ import QuartzCore
     private var adjustingFrame = false
     private weak var draggedWindow: NSWindow?
     var onHandoff: ((MorningWorkItem) -> Void)?
+    var onTeachCalendar: (() -> Void)?
+    var onDiscussCard: ((MorningCard) -> Void)?
     var handoffDestination: (() -> NSRect?)?
 
     /// Only the little folder is shown at launch. Opening a file is always an explicit action.
-    init(store: MorningStore, hideFromScreenShare: Bool) {
+    init(store: MorningStore, hideFromScreenShare: Bool, calendarSources: CalendarStore? = nil,
+         calendarRunner: CalendarCollectionRunner? = nil, cardGeneration: CardGenerationService? = nil) {
         self.store = store
         launcher = MorningPanel(title: "Morning folder", hideFromScreenShare: hideFromScreenShare)
         panel = MorningPanel(title: "Morning files", hideFromScreenShare: hideFromScreenShare)
@@ -42,7 +45,9 @@ import QuartzCore
             handoff: { [weak self] item in
                 self?.animateHandoff()
                 self?.onHandoff?(item)
-            }
+            }, calendarSources: calendarSources, calendarRunner: calendarRunner,
+            teachCalendar: { [weak self] in self?.onTeachCalendar?() }, cardGeneration: cardGeneration,
+            discussCard: { [weak self] card in self?.onDiscussCard?(card) }
         ))
         routeObservation = navigation.$route.combineLatest(store.$workspace)
             .receive(on: RunLoop.main)
@@ -66,6 +71,16 @@ import QuartzCore
 
     func showPeople() {
         navigation.route = .people
+        openContents()
+    }
+
+    func showSources() {
+        navigation.route = .sources
+        openContents()
+    }
+
+    func showRun(id: UUID, sourceID: UUID? = nil) {
+        navigation.route = .sourceRun(runID: id, sourceID: sourceID)
         openContents()
     }
 
@@ -162,11 +177,11 @@ import QuartzCore
 
     static func preferredHeight(for route: MorningNavigation.Route, isEmpty: Bool = false) -> CGFloat {
         switch route {
-        case .folders: return isEmpty ? 540 : 380
+        case .folders: return 640
         case .folder: return 480
         case .people, .person: return 560
         case .editFolder: return 260
-        case .card, .editCard, .editPerson: return 680
+        case .card, .editCard, .editPerson, .sources, .sourceRuns, .sourceRun: return 680
         }
     }
 

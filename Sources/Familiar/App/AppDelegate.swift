@@ -11,8 +11,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var panel: BubblePanel!
     private var taskPanel: BackgroundTaskPanelController!
     private let morning = MorningStore()
+    private let calendarSources = CalendarStore()
+    private var calendarReader: CalendarCollectionRunner!
     private var morningPanel: MorningPanelController!
     private var morningTasks: MorningTaskRunner!
+    private var cardGeneration: CardGenerationService!
     private var hotKey: HotKey?
     private let watcher = ContextWatcher()
     private var runner: ScriptRunner!
@@ -23,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let hideHint = HideHint()
     private let origami = OrigamiFlightController()
     private let settings = SettingsWindowController()
+    private let watchDraftWindow = WatchDraftWindowController()
     private var savedBubbleFrame: NSRect?
     private var dragOffset: NSPoint?     // cursor position relative to the panel origin while dragging
     private let control = ComputerController()
@@ -30,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var desktop = DesktopExecutionService(control: control, activities: activities)
     private let execution = ExecutionCoordinator()
     private lazy var recorder = WatchRecorder(config: config, watcher: watcher)
-    private lazy var learning = WatchLearnComposition.make(recorder: recorder, registry: registry, activities: activities, config: { [weak self] in self?.config ?? Config() })
+    private lazy var learning = WatchLearnComposition.make(recorder: recorder, registry: registry, activities: activities, calendarStore: calendarSources, config: { [weak self] in self?.config ?? Config() })
     private var bubbleWasVisibleBeforeControl = false
     private var cancellables = Set<AnyCancellable>()
 
@@ -55,6 +59,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         assistant = Assistant(config: config, watcher: watcher, registry: registry, shell: shell, learning: learning, execution: execution, desktop: desktop)
         assistant.onStartWand = { [weak self] in self?.startWand() }
         assistant.onCancelWand = { [weak self] in if self?.wand.isActive == true { self?.wand.cancel() } }
+        assistant.onOpenWatchDraft = { [weak self] title, markdown in
+            guard let self else { return }
+            self.watchDraftWindow.show(title: title, markdown: markdown, hideFromScreenShare: self.config.hideFromScreenShare)
+        }
         shell.onHideBubble = { [weak self] in self?.hideBubbleWithHint() }
         shell.onDragBubble = { [weak self] phase in
             guard let self else { return }
@@ -96,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.config.save()
             self.assistant.reconfigure(self.config)
             self.morningTasks?.wake()
+            self.cardGeneration?.start()
             Log.info("control lane: allow=\(allow) background=\(background)")
         }
         shell.onPoke = { [weak self] in
@@ -118,18 +127,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // Desktop tasks have their own surface; starting or finishing one never opens chat.
         control.onBackgroundTaskBegin = { [weak self] in
-            guard let self else { return }
-            if self.morningTasks?.isRunning == true {
-                self.morningTasks.backgroundDidBegin()
-            } else {
-                self.assistant.backgroundTaskDidBegin()
-            }
+            self?.desktop.executor.backgroundDidBegin()
         }
         control.onBegin = { [weak self] in
             guard let self else { return }
             self.origami.cancel()
             if self.control.lane == .background {
-                if self.morningTasks?.isRunning == true { self.morningTasks.backgroundDidBegin() }
+                self.desktop.executor.nativeDidBegin()
                 return
             }
             self.morningPanel?.setHiddenForForegroundGrant(true)
@@ -163,11 +167,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupPanel()
         morningTasks = MorningTaskRunner(store: morning, desktop: desktop, registry: registry,
                                         activities: activities, config: { [weak self] in self?.config ?? Config() })
+        calendarReader = CalendarCollectionRunner(store: calendarSources, desktop: desktop, registry: registry,
+                                                  activities: activities, config: { [weak self] in self?.config ?? Config() })
+        calendarSources.refreshSavedWorkflows(root: registry.root)
         taskPanel = BackgroundTaskPanelController(
             store: desktop.tasks, hideFromScreenShare: config.hideFromScreenShare, morning: morning,
             onCancelQueued: { [weak self] id in self?.morningTasks.cancel(id: id) },
             onOpenCard: { [weak self] id in self?.morningPanel.showCard(id: id) })
-        morningPanel = MorningPanelController(store: morning, hideFromScreenShare: config.hideFromScreenShare)
+        cardGeneration = CardGenerationService(morning: morning, sources: calendarSources, desktop: desktop,
+                                               config: { [weak self] in self?.config ?? Config() })
+        calendarReader.trackedItems = { [weak self] sourceID in self?.morning.trackedItems(sourceID: sourceID) ?? [] }
+        calendarReader.onRunFinished = { [weak self] runID in _ = self?.cardGeneration.generate(runID: runID) }
+        let cardConversation = CardConversation(store: morning)
+        cardConversation.onHandoff = { [weak self] _ in self?.morningTasks.wake() }
+        assistant.cardConversation = cardConversation
+        morningPanel = MorningPanelController(store: morning, hideFromScreenShare: config.hideFromScreenShare,
+                                             calendarSources: calendarSources, calendarRunner: calendarReader, cardGeneration: cardGeneration)
+        morningPanel.onDiscussCard = { [weak self] card in
+            guard let self, self.assistant.discussCard(card) else { return }
+            self.openChat()
+        }
+        morningPanel.onTeachCalendar = { [weak self] in
+            guard let self else { return }
+            if !self.panel.isVisible { self.showBubble() }
+            self.assistant.startWatching(source: true)
+        }
         morningPanel.handoffDestination = { [weak self] in self?.taskPanel.landingFrame }
         morningPanel.onHandoff = { [weak self] _ in
             guard let self else { return }
@@ -183,17 +207,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Secrets.migrateKeychainToFile(keys: (config.connectionMode == "api" ? ["ANTHROPIC_API_KEY"] : []) + registry.packs.flatMap(\.requires))
             if !assistant.hasConnection { assistant.reconfigure(config) }   // pick up a migrated key
             morningTasks.start()
+            cardGeneration.start()
         }
 
         if !assistant.hasConnection {
             Log.info(ConversationBackend.setupMessage(config: config))
         }
+        MainThreadDiagnostics.shared.start()
+        MainThreadDiagnostics.shared.mark(.appReady)
     }
 
     // MARK: setup
 
-    /// A menu-bar-less app has no Edit menu, and macOS routes ⌘C/⌘V/⌘X/⌘A/⌘Z through the menu, so text fields
-    /// silently ignore them. An invisible main menu with the standard items restores them everywhere.
+    /// Standard application and Edit menus provide native Quit and text-editing shortcuts.
     private func setupEditMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem(); main.addItem(appItem)
@@ -221,6 +247,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         edit.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
         edit.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
         edit.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        edit.addItem(.separator())
+        let find = NSMenuItem(title: "Find…", action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "f")
+        find.tag = NSTextFinder.Action.showFindInterface.rawValue
+        edit.addItem(find)
         editItem.submenu = edit
         NSApp.mainMenu = main
     }
@@ -314,7 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotKey = HotKey(keyCode: code, modifiers: mods) { [weak self] in
             guard let self else { return }
             if self.assistant.watching { self.stopWatchingAndShow() }
-            else if self.morningTasks.stopActive() { }
+            else if self.desktop.executor.stopActive() { }
             else if self.control.active, self.control.lane == .background { self.control.stop(reason: HotKey.display(self.config.hotkey)) }
             else if self.wand.isActive { self.wand.cancel() }
             else { self.startWand() }
@@ -377,9 +407,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         watcherMenuItem.title = watcher.isRunning ? "Watcher: On" : "Watcher: Off"
         watchMenuItem.title = assistant.watching ? "Stop Watching   ⌃⌥Space" : "Watch Me"
-        let working = morningTasks.isRunning || (control.active && control.lane == .background)
+        let working = desktop.tasks.activeTask != nil || (control.active && control.lane == .background)
         stopWorkMenuItem.isHidden = !working
-        stopWorkMenuItem.title = morningTasks.isRunning ? "Stop Current Task   \(HotKey.display(config.hotkey))"
+        stopWorkMenuItem.title = desktop.tasks.activeTask != nil ? "Stop Current Task   \(HotKey.display(config.hotkey))"
             : "Stop Working in \(assistant.peek.appName)   \(HotKey.display(config.hotkey))"
         tasksMenuItem.isEnabled = desktop.tasks.hasTasks
         hideMenuItem.isEnabled = panel.isVisible || origami.isFlying
@@ -396,7 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func menuWand() { startWand() }
     @objc private func menuStopWork() {
-        if !morningTasks.stopActive() { control.stop(reason: "menu") }
+        if !desktop.executor.stopActive() { control.stop(reason: "menu") }
     }
     @objc private func menuShowTasks() { desktop.tasks.show() }
     @objc private func menuShowMorning() { morningPanel.show() }
@@ -412,6 +442,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        cardGeneration?.stop()
+        calendarReader?.shutdown()
         morningTasks?.shutdown()
         guard control.isBorrowingOffscreenInput else { return .terminateNow }
         execution.cancel()
@@ -424,9 +456,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Quitting mid-recording leaves nothing behind: the unfinished recording and any draft still under review go.
     func applicationWillTerminate(_ notification: Notification) {
+        MainThreadDiagnostics.shared.stop()
+        cardGeneration?.stop()
         origami.cancel()
+        calendarReader?.shutdown()
         morningTasks?.shutdown()
         morningPanel?.close()
+        watchDraftWindow.close()
         execution.cancel()
         control.end()          // never leave a ghost cursor behind
         taskPanel.close()
@@ -436,7 +472,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         origami.cancel()
         if !panel.isVisible { showBubble() }
         shell.expanded = true
+        MainThreadDiagnostics.shared.mark(.chatPanelShown, itemCount: assistant.transcript.count)
     }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard let panel else { return true }
+        openChat()
+        sender.activate()
+        panel.makeKeyAndOrderFront(nil)
+        return false
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     @objc private func menuHideBubble() { if panel.isVisible || origami.isFlying { hideBubbleWithHint() } }
 
@@ -583,11 +630,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.panel.sharingType = self.config.hideFromScreenShare ? .none : .readOnly
             self.taskPanel.updateSharing(self.config.hideFromScreenShare)
             self.morningPanel.updateSharing(self.config.hideFromScreenShare)
+            self.watchDraftWindow.updateSharing(self.config.hideFromScreenShare)
             self.control.maxLongEdge = self.config.maxImageLongEdge
             self.control.hideFromScreenShare = self.config.hideFromScreenShare
             self.control.preciseClicks = self.config.backgroundPreciseClicks
             self.control.virtualDisplayEnabled = self.config.backgroundVirtualDisplay
             self.morningTasks.wake()
+            self.cardGeneration?.start()
             Log.info("settings saved (connection: \(self.config.connectionMode), ready: \(self.assistant.hasConnection), hotkey: \(self.config.hotkey))")
         }, onOpenTools: { [weak self] in self?.openTools() }, onReloadTools: { [weak self] in self?.reloadTools() })
     }

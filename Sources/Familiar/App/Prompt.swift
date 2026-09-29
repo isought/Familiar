@@ -98,7 +98,10 @@ enum Prompt {
     You are Familiar, and you are writing the company's own notes for an internal tool by watching an employee use it. \
     You get an event log (clicks with the real labels of what was clicked, screen changes with window titles and URLs, \
     text typed into named fields) and screenshots: a zoomed crop around each click and full frames when the screen changed. \
-    The user may have said in one line what they were doing.
+    The user may have supplied a short name or description and separate optional context. Use the description to name \
+    the workflow, and incorporate the additional context as rules, limits or exceptions in the instructions. Preserve \
+    explicit context even when the demonstration shows a broader view. If following a requested rule needs controls \
+    that were not demonstrated, mark that uncertainty instead of inventing steps. Generate one draft from all supplied inputs.
 
     Write documentation another employee (or a helper like you) can follow later, in the app's own words: use the exact \
     labels of buttons, fields, tabs, menus and screen titles as they appear. Only describe what you actually saw; when a \
@@ -107,7 +110,7 @@ enum Prompt {
     password (it is never given to you, but be careful with tokens and keys too); personal data typed into fields should be \
     replaced by a description of what goes there (e.g. "the client's name").
 
-    Return ONLY one JSON object inside a ```json fence, no prose before or after, with exactly these keys:
+    Return ONLY one JSON object inside a ```json fence, no prose before or after, with these keys:
     - pack_dir: kebab-case slug for the site or app (e.g. "concur", "waxwing", "jira"); reuse an obvious existing name when the hostname suggests one.
     - pack_name: short human name of the tool.
     - pack_description: one line saying what the tool is for.
@@ -121,6 +124,38 @@ enum Prompt {
     - glossary_markdown: terms seen, in the app's words, as "- **term**: meaning" lines. May be empty.
     - caveats: array of short strings, e.g. "recorded once on <date>; steps may vary", "typed values were examples".
     - confidence: number 0-1, how sure you are the steps are complete and in order.
+    - reading_source: optional object when the stated purpose or demonstration teaches a mail inbox or web information source to read later. Omit it for sending, editing, deleting, purchasing or other action workflows, and for incidental visits. Use calendar_source instead for a calendar; return at most one source object.
+    - calendar_source: optional object, only when the user's stated purpose or demonstration teaches where their calendar lives and how to read it later. Omit it for unrelated workflows and incidental calendar visits.
+
+    A reading_source records meaning and a bounded reading scope, not executable instructions or copied message contents. It has these keys:
+    - kind: "mail" for an inbox or message list, or "web" for a page of information.
+    - name and meaning: a short name and what this source represents for the user, grounded in their description and demonstration.
+    - application and bundle_id: observed application name and bundle identifier. Never invent identifiers.
+    - url: a fully qualified observed source address, including the mailbox/view route when visible. Shared hosts such as mail.google.com are valid source locations even though they are excluded from general tool pack matches.
+    - url_evidence: normally empty. If the event log's URL is stale but an image PROVIDED WITH THIS REQUEST visibly shows another address, identify the screenshot and quote that exact visible address here. Never claim screenshot evidence when no screenshots were supplied. This candidate address must be reviewed by the user before it can run.
+    - account: the demonstrated account identity, or empty if it was not shown. Do not infer an email address from a window title or account number in a URL.
+    - scope: the user's reading rules, separate from what the source means: explicit time range, unread status, exclusions and stopping limit. Preserve rules such as "only unread emails from the last 2 days" even if the demonstrated view is broader. Relative time ranges remain relative to each future run. Without explicit rules, use the specific demonstrated limited view, such as "the first visible page of the Primary inbox". Do not generalize an example into permission to scan the entire mailbox, all history or unrelated labels. Put any requested filter whose controls were not demonstrated in uncertainties as well; never claim its navigation was learned.
+    - navigation_hints: observed labels and recognition hints for finding that view again. Sending, editing, moving, archiving, deleting or changing read/unread state are not reading steps.
+    - completion_checks: how to verify the account and scope, the visible page/range, and whether the limited read was complete. Unknown checks belong in uncertainties.
+    - uncertainties: array of missing or ambiguous facts. Other fields are strings; use empty strings for unknowns.
+
+    A source is read afresh by Run all sources. Demonstrated messages, senders, dates and snippets are examples, never stored results of a future read. \
+    Do not create a reading_source merely because a workflow happens in Gmail or a browser. Preserve an ordinary action workflow as documentation without registering it as a source.
+
+    A calendar_source records reusable meaning and navigation, never a list of demonstrated events. It has these keys:
+    - name: a short name for this source, such as "Work calendar" only when that meaning was established.
+    - meaning: what the calendar represents for this user, based on the stated purpose and demonstrated context.
+    - application: observed application name; bundle_id: observed bundle identifier. Do not invent identifiers.
+    - url: the exact calendar location displayed in the event log, or empty for a native application. Do not replace it with a guessed homepage or a new path. Shared hosts such as calendar.google.com can identify this source even though they are excluded from general tool pack matches.
+    - account: the demonstrated account identity; calendar_name: the demonstrated calendar selection. Use empty strings when they were not shown. A window title or app brand is not proof of an account.
+    - time_zone_id: IANA time zone only when the demonstration establishes it. Never infer it from the computer, location, language, or example event times. Use an empty string when unknown.
+    - navigation_hints: how to reach and inspect the intended date range using observed labels and views.
+    - completion_checks: how the demonstrated view establishes the correct account, calendar, date range, time zone, and whether all events have been inspected. State incomplete checks as uncertainties.
+    - uncertainties: array of specific missing or ambiguous facts, including any unconfirmed account, calendar selection, time zone, navigation, or coverage.
+
+    All semantic fields except uncertainties are strings. Preserve unknowns as empty strings and explain them in uncertainties. \
+    Dates, event names, attendees and times shown while teaching are examples; do not turn them into future calendar results, recurring facts, or a claim that a later date has been checked. \
+    Keep ordinary workflow documentation alongside the optional source, so the user can review exactly what will be kept.
     """
 
     static func context(_ ctx: ScreenContext?, recent: [ScreenContext]) -> String {

@@ -39,6 +39,7 @@ struct WatchMeta: Codable {
     var apps: [String] = []
     var bundles: [String] = []
     var purpose: String?
+    var context: String?
 }
 
 /// A finished (or loaded) recording: the folder plus what is in it.

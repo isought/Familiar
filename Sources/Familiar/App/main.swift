@@ -8,9 +8,21 @@ func runApp() {
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
-    app.setActivationPolicy(.accessory)
+    app.setActivationPolicy(.regular)
     app.run()
 }
+
+#if DEBUG
+if CommandLine.arguments.contains("--probe-watch-keep") {
+    MainActor.assumeIsolated { WatchKeepLayoutProbe.run() }
+}
+if CommandLine.arguments.contains("--probe-chat-layout") {
+    MainActor.assumeIsolated { ChatLayoutProbe.run() }
+}
+if CommandLine.arguments.contains("--probe-main-thread-diagnostics") {
+    MainActor.assumeIsolated { MainThreadDiagnosticsProbe.run() }
+}
+#endif
 
 if CommandLine.arguments.contains("--record-synthetic") {
     Task { @MainActor in

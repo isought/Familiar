@@ -19,8 +19,9 @@ enum Log {
     }()
 
     static func info(_ message: String) {
-        let line = "\(formatter.string(from: Date())) \(message)\n"
+        let at = Date()
         queue.async {
+            let line = "\(formatter.string(from: at)) \(message)\n"
             FileHandle.standardError.write(line.data(using: .utf8)!)
             handle?.write(line.data(using: .utf8)!)
         }

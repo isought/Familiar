@@ -37,7 +37,7 @@ struct MorningAction: Codable, Identifiable, Equatable {
 }
 
 enum MorningCardDisposition: String, Codable, CaseIterable {
-    case unreviewed, ignored, mine, delegated, completed
+    case unreviewed, ignored, mine, delegated, completed, resolved
     var label: String {
         switch self {
         case .unreviewed: return "To review"
@@ -45,6 +45,7 @@ enum MorningCardDisposition: String, Codable, CaseIterable {
         case .mine: return "I’ll handle it"
         case .delegated: return "With Familiar"
         case .completed: return "Result ready"
+        case .resolved: return "Resolved"
         }
     }
 }
@@ -64,6 +65,8 @@ struct MorningCard: Codable, Identifiable, Equatable {
     var isSample: Bool = false
     var disposition: MorningCardDisposition = .unreviewed
     var updatedAt: Date = Date()
+    var tracking: CardTracking? = nil
+    var personalContext: String? = nil
 }
 
 enum MorningWorkKind: String, Codable { case action, context }
@@ -109,4 +112,5 @@ struct MorningWorkspace: Codable, Equatable {
     var cards: [MorningCard] = []
     var workItems: [MorningWorkItem] = []
     var samplesLoaded = false
+    var cardGenerations: [CardGenerationRecord]? = nil
 }

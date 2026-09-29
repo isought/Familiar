@@ -11,10 +11,17 @@ and morning windows and the task list move by their headers. Their preferred
 positions persist in native window preferences, independently of card storage;
 layout changes keep them within a connected physical display.
 
-This version provides local authoring, persistence, and execution of explicitly
-chosen actions. It does not ingest Outlook or Jira, generate a daily briefing,
-schedule refreshes, or infer relationships. Sample files are fictional, labeled,
-and loaded only on request. They use preparation-only actions.
+This version provides local authoring, persistent cards generated from saved source
+observations, and execution of explicitly chosen actions. Generated cards retain
+identity and human decisions across runs; see [persistent cards](persistent-cards.md). Calendar sources learned through Watch Me can also collect a
+chosen day's schedule and produce a factual briefing. **Run all sources**
+reads registered calendars, inboxes and web views sequentially and reports each outcome.
+**Manage sources** edits reusable setup and rules. Completed rows and **Run history**
+open a separate view of the actual findings, with collection evidence expandable
+after the results. Each collection run has a durable timestamped folder; see
+[calendar ingestion](calendar-ingestion.md). It does not have direct Outlook or
+Jira API connections, scheduled refreshes, or inferred relationships. Sample files
+are fictional, labeled, and loaded only on request. They use preparation-only actions.
 
 ## Boundaries in code
 
@@ -27,19 +34,25 @@ and loaded only on request. They use preparation-only actions.
   same product models and storage as manually authored files.
 - `Presentation/Morning/` and the morning views/editors: native folder launcher,
   reading and editing, and the temporary handoff animation.
-- `App/MorningTaskRunner.swift`: serial dispatch into the existing conversation
-  coordinator and, when requested, the shared desktop execution service.
+- `App/MorningTaskRunner.swift`: serial dispatch of accepted work through
+  `TaskRequest`, `TaskPlan`, and the shared `TaskExecutor`. The runner retains work
+  validation, queue ordering, and durable outcomes.
+- `App/TaskExecutor.swift`: execution handles shared with source ingestion and
+  chat, wrapping the existing conversation coordinator and desktop execution
+  service. See [task execution](task-execution.md).
 - `BackgroundTaskStore` and `BackgroundTaskPanel`: compact queue admission,
   progress, native approvals, and results in the existing top-right task surface.
 - `AppDelegate`: composition only. Card requests do not pass through chat.
 
 ## Local state and decisions
 
-The workspace is versioned JSON under `Config.dir/morning/workspace.json`
-(`~/.familiar/morning/workspace.json` normally). `FAMILIAR_HOME` redirects it for
-tests and isolated runs. Writes are atomic and use owner-only file permissions.
-An unreadable or unsupported workspace is reported and blocked from replacement;
-it is not treated as an empty workspace.
+The workspace is stored through `MorningRepository` in the local SQLite database
+`Config.dir/morning/morning.sqlite` (`~/.familiar/morning/morning.sqlite` normally).
+Existing `workspace.json` data is validated and migrated, keeping the original JSON
+unchanged. `FAMILIAR_HOME` redirects storage for tests and isolated runs. Transactions
+commit card decisions, accepted work and generation receipts atomically; files use
+owner-only permissions. An unreadable or unsupported workspace is reported and
+blocked from replacement; it is not treated as an empty workspace.
 
 Each card keeps a stable identity and category, original excerpts and capture
 times, linked people, an explanation of relevance, proposed action, unresolved
@@ -50,7 +63,9 @@ questions, and its disposition. Category and progress are independent.
 - Delegation commits a work item with snapshots of the card, linked people and your own profile,
   and selected action. A duplicate pending handoff is rejected.
 - A context request is separate work and leaves the original decision open.
-- Successful action work attaches its result and completes the delegated card.
+- Successful action work attaches its result. Manually authored/sample cards retain
+  their result-ready disposition; generated cards return to review/personal ownership
+  until explicit source evidence or the person resolves the underlying matter.
   Failed, stopped, or interrupted work remains inspectable and the card can be
   reviewed again. A local filing reversal does not undo an external action.
 
@@ -69,8 +84,10 @@ Desktop actions require the existing control setting and reuse existing native
 target selection, input borrowing, and action approvals. Queued desktop work
 does not inherit whatever app the person happens to be using when it starts.
 
-The runner saves `running` before invoking work and saves the result afterward.
-It waits while shared desktop resources are busy. Each work item gets an
+The runner saves `running` before invoking work, constructs a `TaskPlan` with the
+chosen capabilities, and saves the result before calling `TaskExecution.finish`.
+The shared executor owns cancellation, native cleanup and task presentation; the
+runner owns the durable work outcome. It waits while shared desktop resources are busy. Each work item gets an
 independent conversation; unrelated card tasks do not inherit chat history.
 One card job executes at a time. A native approval keeps that job occupied;
 resumable jobs that let other work pass an approval wait are outside this phase.

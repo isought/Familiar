@@ -33,7 +33,9 @@ final class Assistant: ObservableObject {
     let registry: ToolRegistry
     var onStartWand: (() -> Void)?
     var onCancelWand: (() -> Void)?       // the app drops an active pen before a recording starts
+    var onOpenWatchDraft: ((_ title: String, _ markdown: String) -> Void)?
     var onSetControlLane: ((_ allow: Bool, _ background: Bool) -> Void)?   // the app persists both and reconfigures
+    var cardConversation: CardConversation?
 
     let learning: WatchLearnSession
     let notes: ContextNotesService
@@ -47,6 +49,7 @@ final class Assistant: ObservableObject {
     var chatResponding: Bool { chatBusy && !backgroundTaskRunning }
     var chatPresentationBusy: Bool { chatResponding || learning.busy }
     private var requestMessageID: UUID?
+    private var diagnosticTurnID: UUID?
 
     /// The pad's hand: on = work in the window you asked from. Clicking it while control is off turns control on
     /// (the user is flipping the gate themselves), in the background lane, which never takes the mouse unasked.
@@ -65,14 +68,18 @@ final class Assistant: ObservableObject {
     private var captureGeneration = 0   // invalidates a screen capture prepared before Clear/provider change
     private var lastCapture: (at: Date, scene: ScreenContext?)?
     private var awaitingPurpose: Bool { learning.awaitingPurpose }
+    private var awaitingContext: Bool { learning.awaitingContext }
     private var draftFailed: Bool { learning.draftFailed }
     private var purposeMessageID: UUID?          // the typed purpose line, folded into the draft note when it arrives
+    private var contextMessageID: UUID?
 
     static let continueTab = "Skip the description"
+    static let skipContextTab = "Skip context"
     static let keepTab = "Keep it"
+    static let fullDraftTab = "Open full draft"
     static let discardTab = "Discard"
     static let retryTab = "Try again"
-    static let reservedTabs = [continueTab, keepTab, discardTab, retryTab]
+    static let reservedTabs = [continueTab, skipContextTab, keepTab, fullDraftTab, discardTab, retryTab]
 
     init(config: Config, watcher: ContextWatcher, registry: ToolRegistry, shell: ShellState, learning: WatchLearnSession,
          execution: ExecutionCoordinator? = nil, desktop: DesktopExecutionService? = nil) {
@@ -110,7 +117,6 @@ final class Assistant: ObservableObject {
     /// Transfer the submitted instruction to the task screen once desktop work starts.
     /// The request continues in the coordinator; closing or clearing chat does not own its result.
     func backgroundTaskDidBegin() {
-        desktop?.backgroundDidBegin()
         guard backgroundTaskRunning else { return }
         if let requestMessageID { transcript.removeAll { $0.id == requestMessageID } }
         status = ""
@@ -121,6 +127,7 @@ final class Assistant: ObservableObject {
     func showBackgroundTasks() { desktop?.tasks.show() }
 
     func clearConversation() {
+        cardConversation?.clear()
         captureGeneration += 1
         transcript.removeAll()
         execution.conversation.clear()
@@ -129,20 +136,46 @@ final class Assistant: ObservableObject {
         lastCapture = nil
         learning.clear()
         purposeMessageID = nil
+        contextMessageID = nil
     }
 
     func startWand() {
         guard !busy else { return }
+        guard !awaitingPurpose, !awaitingContext else { status = "Finish or discard Watch Me before using the pen."; return }
         guard !watching else { status = "Watching — stop watching before picking up the pen."; return }
         onStartWand?()
     }
 
     func askSuggestion(_ s: String) {
+        if s == "Back to general chat", cardConversation?.cardID != nil {
+            cardConversation?.clear()
+            execution.conversation.clear()
+            suggestions = []
+            status = "Back to general chat."
+            return
+        }
         if awaitingPurpose {
-            if s == Self.continueTab { learning.summarize(purpose: nil); return }
+            if s == Self.continueTab {
+                if learning.submitDescription(nil) { question = "" }
+                return
+            }
+            if s == Self.discardTab { learning.discard(); return }
+        }
+        if awaitingContext {
+            if s == Self.skipContextTab {
+                if learning.submitContext(nil) != nil { question = "" }
+                return
+            }
             if s == Self.discardTab { learning.discard(); return }
         }
         if pendingDraft != nil || draftFailed {
+            if s == Self.fullDraftTab, let draft = pendingDraft {
+                onOpenWatchDraft?(Self.reviewExcerpt(draft.parsed ? draft.workflowTitle : "Unparsed Watch Me draft", limit: 100),
+                    Self.draftDocument(draft, purpose: learning.pendingRecording?.meta.purpose,
+                                       context: learning.pendingRecording?.meta.context, root: registry.root,
+                                       teachingCalendar: learning.isTeachingSource))
+                return
+            }
             if s == Self.keepTab { Task { await learning.keep() }; return }
             if s == Self.discardTab { learning.discard(); return }
             if s == Self.retryTab { learning.retry(); return }
@@ -155,8 +188,14 @@ final class Assistant: ObservableObject {
     /// The tabs a note should carry given what is pending, on top of Claude's own follow-ups.
     private func reviewTabs(_ sugg: [String]) -> [String] {
         if awaitingPurpose { return [Self.continueTab, Self.discardTab] }
-        if pendingDraft != nil { return sugg + [Self.keepTab, Self.discardTab] }
+        if awaitingContext { return [Self.skipContextTab, Self.discardTab] }
+        if let draft = pendingDraft {
+            return sugg + [Self.fullDraftTab, draft.parsed ? Self.keepTab : Self.retryTab, Self.discardTab]
+        }
         if draftFailed { return sugg + [Self.retryTab, Self.discardTab] }
+        if cardConversation?.cardID != nil {
+            return sugg.filter { $0 != "Back to general chat" } + ["Back to general chat"]
+        }
         return sugg
     }
 
@@ -170,11 +209,11 @@ final class Assistant: ObservableObject {
     }
 
     /// Permissions and presentation belong to the app; recording/draft lifetime belongs to learning.
-    func startWatching() {
+    func startWatching(calendar: Bool = false, source: Bool = false) {
         guard !busy, !watching, !learning.stopping else { return }
         if learning.hasPendingReview {
             shell.expanded = true
-            transcript.append(ChatMessage(role: .error, text: "Keep or discard the draft on the pad first."))
+            transcript.append(ChatMessage(role: .error, text: "Finish or discard the current Watch Me session first."))
             suggestions = reviewTabs([])
             return
         }
@@ -191,8 +230,8 @@ final class Assistant: ObservableObject {
             warned = true
         }
         do {
-            guard try learning.start() else { return }
-            shell.expanded = warned
+            guard try learning.start(calendar: calendar, source: source) else { return }
+            shell.expanded = warned || calendar || source
         } catch {
             shell.expanded = true
             transcript.append(ChatMessage(role: .error, text: "Could not start recording: \(error.localizedDescription)"))
@@ -208,11 +247,20 @@ final class Assistant: ObservableObject {
             suggestions = []
             status = ""
             contextLine = recordingLine(0)
+            if learning.isTeachingSource {
+                transcript.append(ChatMessage(role: .assistant, text: "Show me the information you want in your morning read: an inbox, a calendar, or another page. Show its address and account, then the limited view I should read—for example, the first page of Primary in Gmail. For a calendar, show its selection and time zone. Stop watching when you're done, then review and keep the source for Run all sources. The information shown while teaching is only an example."))
+            }
         case .stopped:
             contextLine = watcher.current?.summaryLine ?? (watcher.isRunning ? "Watching…" : "Watcher off")
         case .purposeRequested(let recording):
             shell.expanded = true
-            transcript.append(ChatMessage(role: .assistant, text: "Got it — \(recording.meta.clicks) click\(recording.meta.clicks == 1 ? "" : "s"). What were you doing? Write one line below, or use a tab."))
+            let question = "Give this a short name or description—for example, ‘Check unread email.’ You can add context next."
+            transcript.append(ChatMessage(role: .assistant, text: "Got it — \(recording.meta.clicks) click\(recording.meta.clicks == 1 ? "" : "s"). " + question))
+            suggestions = reviewTabs([])
+        case .contextRequested:
+            shell.expanded = true
+            let example = learning.isTeachingSource ? " For example, ‘Only unread emails from the last 2 days. Skip promotions.’" : " Include anything to skip, exceptions, or where to stop."
+            transcript.append(ChatMessage(role: .assistant, text: "Any rules or limits I should follow?" + example + " Add context below, or choose Skip context."))
             suggestions = reviewTabs([])
         case .emptyRecording:
             shell.expanded = true
@@ -220,42 +268,136 @@ final class Assistant: ObservableObject {
             suggestions = []
         case .draftReady(let draft, let recording, _):
             if let id = purposeMessageID { transcript.removeAll { $0.id == id } }
+            if let id = contextMessageID { transcript.removeAll { $0.id == id } }
             purposeMessageID = nil
-            transcript.append(ChatMessage(role: .draft, text: draft.parsed ? draft.workflowTitle : "Could not write this up"))
-            transcript.append(ChatMessage(role: .assistant, text: Self.draftBody(draft, purpose: recording.meta.purpose, root: registry.root)))
+            contextMessageID = nil
+            transcript.append(ChatMessage(role: .draft, text: draft.parsed ? Self.reviewExcerpt(draft.workflowTitle, limit: 100) : "Could not write this up"))
+            transcript.append(ChatMessage(role: .assistant, text: Self.draftBody(draft, purpose: recording.meta.purpose,
+                context: recording.meta.context, root: registry.root, teachingCalendar: learning.isTeachingCalendar)))
             suggestions = reviewTabs([])
         case .kept(let draft, let files):
             let packRoot = registry.root.appendingPathComponent(draft.packDir).path + "/"
             let rel = files.map { $0.path.replacingOccurrences(of: packRoot, with: "") }
-            let whereText = draft.matchURLs.first ?? draft.matchTitles.first.map { "“\($0)”" } ?? draft.matchBundles.first ?? draft.packName
+            let whereText = Self.reviewExcerpt(draft.matchURLs.first ?? draft.matchTitles.first.map { "“\($0)”" } ?? draft.matchBundles.first ?? draft.packName, limit: 100)
             if let i = transcript.lastIndex(where: { $0.role == .draft }) {
                 transcript[i] = ChatMessage(role: .learned, text: transcript[i].text)
             }
-            transcript.append(ChatMessage(role: .assistant, text: "Kept as \(draft.packName). I'll use it whenever you're on \(whereText). The recording itself is deleted.\n" + rel.map { "- \($0)" }.joined(separator: "\n")))
+            var sourceReceipt = draft.calendarSource.map { "Calendar source kept: \(Self.reviewExcerpt($0.name, limit: 80)). It now appears in Sources for Run all sources. Review any missing details before reading.\n\n" } ?? ""
+            if let source = draft.readingSource {
+                sourceReceipt += "Reading source kept: \(Self.reviewExcerpt(source.name, limit: 80)). It now appears in Sources for Run all sources. "
+                sourceReceipt += source.requiresReview ? "Confirm its address in Manage sources before reading; it was learned from screenshot evidence.\n\n" : "Each run reads fresh information within the saved scope.\n\n"
+            }
+            if sourceReceipt.isEmpty { sourceReceipt = "No reading source was registered. Run all sources will not run this workflow.\n\n" }
+            transcript.append(ChatMessage(role: .assistant, text: sourceReceipt + "Kept as \(Self.reviewExcerpt(draft.packName, limit: 80)). I'll use it whenever you're on \(whereText). The recording itself is deleted.\n" + rel.map { "- \($0)" }.joined(separator: "\n")))
             suggestions = []
             status = ""
         case .failed(_, let error):
             transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
             suggestions = reviewTabs([])
-        case .discarded:
+        case .discarded(let savedFiles):
             purposeMessageID = nil
+            contextMessageID = nil
             suggestions = []
             status = ""
-            transcript.append(ChatMessage(role: .assistant, text: "Discarded. The recording was deleted and nothing was saved."))
+            let receipt = savedFiles.isEmpty ? "Discarded. The recording was deleted and nothing was saved."
+                : "Discarded the remaining review. The recording was deleted. These files were already saved and remain on disk:\n" + savedFiles.map { "- \($0.path)" }.joined(separator: "\n")
+            transcript.append(ChatMessage(role: .assistant, text: receipt))
         }
     }
 
-    /// The draft as it reads on a note: what the user said, the steps, a short Screens section, the caveats, where
-    /// the pack would apply, and where Keep would put it.
-    static func draftBody(_ d: PackDraft, purpose: String? = nil, root: URL) -> String {
+    /// Keep generated documents out of the animated chat layout. Only bounded, single-line fields go on the note.
+    static func draftBody(_ d: PackDraft, purpose: String? = nil, context: String? = nil, root: URL, teachingCalendar: Bool = false) -> String {
+        var lines: [String] = []
+        if let purpose, !purpose.isEmpty { lines.append("_You said: “\(reviewExcerpt(purpose, limit: 140))”_") }
+        guard d.parsed else {
+            return (lines + ["I couldn't turn this into a skill. Open full draft to inspect the response, or try again."]).joined(separator: "\n\n")
+        }
+        func field(_ label: String, _ value: String, limit: Int = 100) {
+            lines.append("**\(label):** \(reviewExcerpt(value.isEmpty ? "Not established" : value, limit: limit))")
+        }
+        func uncertainties(_ values: [String]) {
+            guard let first = values.first else { return }
+            field("Still unclear", first, limit: 140)
+            if values.count > 1 { lines.append("\(values.count - 1) more uncertainties in the full draft.") }
+        }
+        if let source = d.readingSource {
+            lines.append("**Reading source to keep**")
+            field("Name", source.name, limit: 70)
+            field("Meaning", source.meaning, limit: 100)
+            field("Account", source.account, limit: 80)
+            field("Location", source.url, limit: 100)
+            field("Reading rules", source.scope, limit: 220)
+            uncertainties(source.uncertainties)
+            lines.append(source.requiresReview
+                ? "Keep adds this source to Sources. Confirm its address there before Run all sources can read it."
+                : "Keep adds this source to Sources for Run all sources.")
+        } else if let source = d.calendarSource {
+            lines.append("**Calendar source to keep**")
+            field("Name", source.name, limit: 70)
+            field("Meaning", source.meaning, limit: 100)
+            field("Account", source.account, limit: 80)
+            field("Calendar", source.calendarName, limit: 80)
+            field("Time zone", source.timeZoneID, limit: 60)
+            uncertainties(source.uncertainties)
+            lines.append("Keep adds this source to Sources for Run all sources.")
+        } else if teachingCalendar {
+            lines.append("**Reading source not established**\nKeep cannot register this draft for Run all sources. Discard it and teach the source address, account and reading boundary again.")
+        } else {
+            field("Skill", d.packName)
+            field("Description", d.packDescription.isEmpty ? d.workflowTitle : d.packDescription, limit: 180)
+            if let context, !context.isEmpty { field("Your context", context, limit: 180) }
+            lines.append("The workflow instructions are ready to review.")
+        }
+        if let caveat = d.caveats.first {
+            field("Caution", caveat, limit: 120)
+            if d.caveats.count > 1 { lines.append("\(d.caveats.count - 1) more cautions in the full draft.") }
+        }
+        lines.append("Open full draft for complete instructions and any shortened details.")
+        return lines.joined(separator: "\n\n")
+    }
+
+    private static func reviewExcerpt(_ value: String, limit: Int) -> String {
+        let line = value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return line.count > limit ? String(line.prefix(limit - 1)) + "…" : line
+    }
+
+    /// Full review is built only on demand and displayed outside the bubble, without changing the saved draft.
+    static func draftDocument(_ d: PackDraft, purpose: String? = nil, context: String? = nil, root: URL, teachingCalendar: Bool = false) -> String {
         var s = ""
         if let purpose, !purpose.isEmpty { s += "_You said: “\(purpose)”_\n\n" }
+        if let context, !context.isEmpty { s += "## Your additional context\n\(context)\n\n" }
         guard d.parsed else {
             return s + "I couldn't turn this into a pack entry. Here is what came back:\n\n" + d.raw.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        s += flatten(d.workflowMarkdown)
-        let screens = flatten(d.screensMarkdown)
-        if !screens.isEmpty { s += "\n\n**Screens**\n" + (screens.count > 1400 ? String(screens.prefix(1400)) + "…" : screens) }
+        s += d.workflowMarkdown
+        if let source = d.readingSource {
+            func known(_ value: String) -> String { value.isEmpty ? "Not established" : value }
+            s += "\n\n**Reading source to keep**\n"
+            let fields = [("Name", source.name), ("Kind", source.kind == .mail ? "Mail" : "Web"),
+                          ("Meaning", source.meaning), ("Application", source.application),
+                          ("Application identifier", source.bundleID), ("Location", source.url), ("Account", source.account),
+                          ("Reading rules", source.scope), ("Navigation", source.navigationHints), ("Completion checks", source.completionChecks)]
+            s += fields.map { "**\($0.0):** \(known($0.1))" }.joined(separator: "\n")
+            s += "\n**Still unclear:** " + (source.uncertainties.isEmpty ? "No additional uncertainties recorded; review any fields marked Not established." : source.uncertainties.joined(separator: "; "))
+            s += source.requiresReview ? "\nKeep adds this source to Sources. Confirm its address there before Run all sources can read it."
+                : "\nKeep adds this source to Sources for Run all sources. Each run reads fresh information within this scope."
+            s += "\nThe demonstration is an example, not a collected result or permission to send, edit, or scan the whole account."
+        }
+        if let source = d.calendarSource {
+            func known(_ value: String) -> String { value.isEmpty ? "Not established" : value }
+            s += "\n\n**Calendar source to keep**\n"
+            let fields = [("Name", source.name), ("Meaning", source.meaning), ("Application", source.application),
+                          ("Application identifier", source.bundleID), ("Location", source.url), ("Account", source.account),
+                          ("Calendar", source.calendarName), ("Time zone", source.timeZoneID),
+                          ("Navigation", source.navigationHints), ("Completion checks", source.completionChecks)]
+            s += fields.map { "**\($0.0):** \(known($0.1))" }.joined(separator: "\n")
+            s += "\n**Still unclear:** " + (source.uncertainties.isEmpty ? "No additional uncertainties recorded; review any fields marked Not established." : source.uncertainties.joined(separator: "; "))
+            s += "\nThe demonstrated dates and events are examples. A calendar read will collect fresh results separately."
+        } else if teachingCalendar && d.readingSource == nil {
+            s += "\n\n**Reading source not established**\nKeep cannot register this draft for Run all sources. Show the source address, account and the bounded information to read, then discard this draft and teach it again."
+        }
+        if !d.screensMarkdown.isEmpty { s += "\n\n## Screens\n" + d.screensMarkdown }
+        if !d.glossaryMarkdown.isEmpty { s += "\n\n## Glossary\n" + d.glossaryMarkdown }
         if !d.caveats.isEmpty { s += "\n\n" + d.caveats.map { "_\($0)_" }.joined(separator: "\n") }
         let matches = d.matchURLs + d.matchTitles.map { "“\($0)”" } + d.matchBundles
         s += "\n\nMatches: " + (matches.isEmpty ? "nothing (would not be saved)" : matches.joined(separator: ", "))
@@ -263,27 +405,36 @@ final class Assistant: ObservableObject {
         return s
     }
 
-    /// The pad renders inline Markdown line by line, so headings become bold lines.
-    private static func flatten(_ md: String) -> String {
-        md.components(separatedBy: "\n").map { line -> String in
-            let t = line.trimmingCharacters(in: .whitespaces)
-            guard t.hasPrefix("#") else { return line }
-            return "**" + t.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces) + "**"
-        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     /// Typed question. Always attaches a fresh screenshot as context (the chat card itself is excluded from the capture),
     /// unless `screenshotReuseSeconds` allows reusing the last one for a quick follow-up on the same screen.
     func ask() {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !busy else { return }
+        diagnosticTurnID = UUID()
+        diagnoseChat(.chatSubmitted)
         question = ""
-        let m = ChatMessage(role: .user, text: q)
+        let teaching = awaitingPurpose || awaitingContext
+        let m = ChatMessage(role: .user, text: teaching ? Self.reviewExcerpt(q, limit: 220) : q)
         transcript.append(m)
-        if awaitingPurpose {   // the line after "what were you doing?" is the purpose
+        diagnoseChat(.transcriptUpdated)
+        if awaitingPurpose {
             purposeMessageID = m.id
             suggestions = []
-            learning.summarize(purpose: q)
+            if !learning.submitDescription(q) {
+                question = q
+                transcript.removeAll { $0.id == m.id }
+                purposeMessageID = nil
+            }
+            return
+        }
+        if awaitingContext {
+            contextMessageID = m.id
+            suggestions = []
+            if learning.submitContext(q) == nil {
+                question = q
+                transcript.removeAll { $0.id == m.id }
+                contextMessageID = nil
+            }
             return
         }
         if pendingDraft != nil || draftFailed {
@@ -298,10 +449,13 @@ final class Assistant: ObservableObject {
         Task {
             var content: [[String: Any]] = []
             let attach: Bool
-            switch config.screenshotMode {
-            case "always": attach = true
-            case "never": attach = false
-            default: attach = Self.soundsScreenRelated(q)
+            if cardConversation?.card != nil { attach = false }
+            else {
+                switch config.screenshotMode {
+                case "always": attach = true
+                case "never": attach = false
+                default: attach = Self.soundsScreenRelated(q)
+                }
             }
             Log.info("ask: screenshot \(attach ? "attached" : "skipped") (mode \(config.screenshotMode))")
             if attach, needsFreshCapture(for: ctx) {
@@ -319,8 +473,10 @@ final class Assistant: ObservableObject {
                 }
             }
             guard generation == captureGeneration else { finishRequest(); return }
-            let text = Prompt.context(ctx, recent: watcher.history) + packsSection(ctx) + "\n## Question\n\(q)\n"
+            let context = cardConversation?.card == nil ? Prompt.context(ctx, recent: watcher.history) + packsSection(ctx) : ""
+            let text = context + "\n## Question\n\(q)\n"
             content.append(["type": "text", "text": text])
+            diagnoseChat(.contextReady)
             await send(content: content, ctx: ctx, title: q, messageID: m.id)
         }
     }
@@ -329,6 +485,7 @@ final class Assistant: ObservableObject {
     /// then a short identify-and-offer reply. Notes stuck on the target go on the pad first, and into the prompt.
     func wandPick(_ target: WandTarget) {
         guard !busy else { return }
+        guard !awaitingPurpose, !awaitingContext else { status = "Finish or discard Watch Me before using the pen."; return }
         shell.expanded = true
         transcript.append(ChatMessage(role: .wand, text: target.shortLabel))
         for n in target.notes { transcript.append(ChatMessage(role: .note, text: n.text, meta: n.byline, warning: n.isWarning)) }
@@ -404,6 +561,23 @@ final class Assistant: ObservableObject {
 
     // MARK: internals
 
+    @discardableResult
+    func discussCard(_ card: MorningCard) -> Bool {
+        guard !busy, !watching, !awaitingPurpose, !awaitingContext, pendingDraft == nil, !draftFailed,
+              let cardConversation else {
+            status = "Finish the current conversation or Watch Me step before discussing this card."
+            return false
+        }
+        cardConversation.select(card.id)
+        execution.conversation.clear()
+        transcript.append(ChatMessage(role: .assistant, text: "Let’s discuss “\(card.title)”. Tell me what you’d like to change or understand."))
+        suggestions = ["What should I do?", "Adjust the action", "Back to general chat"]
+        shell.expanded = true
+        status = "Discussing this card"
+        diagnoseChat(.chatPanelShown)
+        return true
+    }
+
     /// Cheap intent guess for typed questions: deictic words and UI nouns mean "about the screen".
     static func soundsScreenRelated(_ q: String) -> Bool {
         let t = " " + q.lowercased().replacingOccurrences(of: "[^a-z0-9' ]", with: " ", options: .regularExpression) + " "
@@ -471,15 +645,24 @@ final class Assistant: ObservableObject {
         chatBusy = true
         suggestions = []
         status = "Thinking…"
-        let controlAllowed = config.allowControl && desktop != nil && !watching
+        let discussingCard = cardConversation?.card != nil
+        let controlAllowed = config.allowControl && desktop != nil && !watching && !discussingCard
         let background = controlAllowed && backgroundControl
         let id = UUID()
         requestMessageID = messageID
         defer { requestMessageID = nil }
         let generation = captureGeneration
-        var receipt: DesktopExecutionService.Receipt?
+        var task: TaskExecution?
         do {
-            let result = try await execution.run(client: client, content: content, prepare: { [self] in
+            var turnContent = content
+            if discussingCard, let cardConversation {
+                turnContent.append(["type": "text", "text": cardConversation.context])
+            }
+            let plan = TaskPlan(content: turnContent, prepareImages: true, prepare: { [self] in
+                if discussingCard, let cardConversation {
+                    return PreparedExecution(system: Self.cardConversationSystem,
+                        router: try ToolRouter(routes: cardConversation.routes()))
+                }
                 let capture: () async -> ToolResult = { [weak self] in
                     guard let self else { return .text("unavailable", isError: true) }
                     return await self.lookAtScreen(ctx, generation: generation)
@@ -491,17 +674,30 @@ final class Assistant: ObservableObject {
                 let router = try ExecutionTools.make(registry: registry, context: ctx, control: nil,
                                                      background: false, lookAtScreen: capture)
                 return PreparedExecution(system: Prompt.system, router: router)
-            }, stopNative: { [weak desktop] in desktop?.stop(id: id) }, cleanup: { [weak desktop] in
-                receipt = desktop?.finish(id: id)
-            }, onStatus: { [weak self] value in
+            })
+            let onStatus: (String) -> Void = { [weak self] value in
                 guard let self, !self.backgroundTaskRunning else { return }
                 self.status = value
-            })
-            presentExecutionResult(result, requestID: id, receipt: receipt)
-        } catch {
-            if let tasks = desktop?.tasks, tasks.isTracking(id: id) {
-                tasks.finish(id: id, outcome: .failed, text: error.localizedDescription, elapsed: 0)
+            }
+            let result: ExecutionResult
+            diagnoseChat(.executionStarted)
+            if let desktop {
+                let handle = try desktop.executor.begin(
+                    TaskRequest(id: id, title: title, presentation: .conversation), coordinator: execution,
+                    onPromoted: { [weak self] in self?.backgroundTaskDidBegin() })
+                task = handle
+                result = try await handle.run(plan, client: client, onStatus: onStatus)
             } else {
+                // Headless conversations have no desktop or task panel lifetime to manage.
+                result = try await execution.run(client: client, content: plan.content,
+                    prepareImages: plan.prepareImages, prepare: plan.prepare, onStatus: onStatus)
+            }
+            diagnoseChat(.executionReturned)
+            completeExecution(result, task: task)
+        } catch {
+            let wasTask = task?.isPresented == true
+            task?.finish(outcome: .failed, text: error.localizedDescription, elapsed: 0)
+            if !wasTask {
                 transcript.append(ChatMessage(role: .error, text: error.localizedDescription))
             }
             status = ""
@@ -509,19 +705,29 @@ final class Assistant: ObservableObject {
         finishRequest()
     }
 
-    /// Task output has its own lifetime, even if the user clears the chat mid-run.
-    func presentExecutionResult(_ result: ExecutionResult, requestID: UUID, receipt: DesktopExecutionService.Receipt?) {
-        if let tasks = desktop?.tasks, tasks.isTracking(id: requestID) {
+    /// Chat interprets its response; the executor owns any promoted task's result.
+    func completeExecution(_ result: ExecutionResult, task: TaskExecution?) {
+        let wasTask = task?.isPresented == true
+        if let task {
             let outcome: BackgroundTaskOutcome
             let text: String
             switch result.outcome {
             case .reply(let reply):
-                outcome = receipt?.stopped == true ? .stopped : .completed
+                outcome = task.receipt?.stopped == true ? .stopped : .completed
                 text = Self.splitSuggestions(reply.text).0
             case .cancelled: outcome = .stopped; text = "Stopped."
             case .failed(let error): outcome = .failed; text = error.localizedDescription
             }
-            tasks.finish(id: requestID, outcome: outcome, text: text, elapsed: result.elapsed)
+            task.finish(outcome: outcome, text: text, elapsed: result.elapsed)
+        }
+        presentExecutionResult(result, wasTask: wasTask)
+    }
+
+    /// Task output stays outside the chat even if its conversation was cleared mid-run.
+    func presentExecutionResult(_ result: ExecutionResult, wasTask: Bool = false) {
+        diagnoseChat(.presentationStarted)
+        defer { diagnoseChat(.transcriptUpdated) }
+        if wasTask {
             status = ""
             suggestions = []
             return
@@ -549,7 +755,19 @@ final class Assistant: ObservableObject {
 
     private func finishRequest() {
         chatBusy = false
+        diagnoseChat(.requestFinished)
     }
+
+    /// Record transition metadata without retaining the conversation or source contents.
+    private func diagnoseChat(_ phase: MainThreadDiagnostics.Phase) {
+        let characters = transcript.reduce(0) { $0 + $1.text.utf8.count }
+        MainThreadDiagnostics.shared.mark(phase, itemCount: transcript.count, characterCount: characters)
+        let longest = transcript.map { $0.text.utf8.count }.max() ?? 0
+        let lines = transcript.reduce(0) { $0 + $1.text.reduce(1) { $1 == "\n" ? $0 + 1 : $0 } }
+        Log.info("[chat] turn=\(diagnosticTurnID?.uuidString ?? "none") phase=\(phase.rawValue) messages=\(transcript.count) bytes=\(characters) longest=\(longest) lines=\(lines) notes=\(Note.group(transcript).count) tabs=\(suggestions.count) busy=\(chatBusy) card=\(cardConversation?.card != nil) size=\(Int(shell.cardSize.width))x\(Int(shell.cardSize.height))")
+    }
+
+    private static var cardConversationSystem: String { CardConversation.system }
 
     static func splitSuggestions(_ text: String) -> (String, [String]) {
         var lines = text.components(separatedBy: "\n")

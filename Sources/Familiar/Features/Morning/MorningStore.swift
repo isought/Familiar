@@ -1,5 +1,4 @@
 import Combine
-import Darwin
 import Foundation
 
 enum MorningStoreError: LocalizedError {
@@ -13,7 +12,7 @@ enum MorningStoreError: LocalizedError {
     }
 }
 
-/// A local, versioned workspace. A published handoff always has a committed disk record first.
+/// Domain transactions publish only after the repository commits the complete workspace.
 @MainActor
 final class MorningStore: ObservableObject {
     @Published private(set) var workspace = MorningWorkspace()
@@ -25,24 +24,21 @@ final class MorningStore: ObservableObject {
     var cards: [MorningCard] { workspace.cards }
     var workItems: [MorningWorkItem] { workspace.workItems }
 
-    private let directory: URL
-    private var file: URL { directory.appendingPathComponent("workspace.json") }
+    private let repository: any MorningRepository
     private var blockedReason: String?
 
-    init(directory: URL = Config.dir.appendingPathComponent("morning")) {
-        self.directory = directory
+    convenience init(directory: URL = Config.dir.appendingPathComponent("morning")) {
+        self.init(repository: SQLiteMorningRepository(directory: directory))
+    }
+
+    init(repository: any MorningRepository) {
+        self.repository = repository
         do {
-            guard FileManager.default.fileExists(atPath: file.path) else {
-                try persist(workspace)
+            guard let stored = try repository.load() else {
+                try repository.save(workspace)
                 return
             }
-            let data = try Data(contentsOf: file)
-            struct Header: Decodable { var version: Int }
-            let version = try JSONDecoder().decode(Header.self, from: data).version
-            guard version == 1 else {
-                throw MorningStoreError.unavailable("These morning files use version \(version), which this version of Familiar cannot read. Your saved files have been left untouched.")
-            }
-            var loaded = try JSONDecoder().decode(MorningWorkspace.self, from: data)
+            var loaded = stored.workspace
             try Self.validate(loaded)
             workspace = loaded
             var recovered = false
@@ -54,8 +50,8 @@ final class MorningStore: ObservableObject {
                 Self.restoreCard(after: loaded.workItems[index], in: &loaded)
                 recovered = true
             }
-            if recovered {
-                try persist(loaded)
+            if recovered || stored.requiresSave {
+                try repository.save(loaded)
                 workspace = loaded
             }
         } catch {
@@ -94,6 +90,13 @@ final class MorningStore: ObservableObject {
                 // Decisions and sample provenance are not editable form fields.
                 card.disposition = previous.disposition
                 card.isSample = previous.isSample
+                if var tracking = previous.tracking {
+                    tracking.userEdited = true
+                    tracking.changes.append(CardChange(at: Date(), message: "You adjusted this card."))
+                    card.tracking = tracking
+                    card.personalContext = previous.personalContext
+                    card.sources = previous.sources
+                }
             } else {
                 card.disposition = .unreviewed
             }
@@ -129,6 +132,7 @@ final class MorningStore: ObservableObject {
                 throw MorningStoreError.invalid("This file already has work waiting or in progress.")
             }
             let card = next.cards[index]
+            guard !card.isResolved else { throw MorningStoreError.invalid("This matter is resolved. Reopen it before handing over more work.") }
             let action: MorningAction
             switch kind {
             case .action: action = card.action
@@ -178,8 +182,13 @@ final class MorningStore: ObservableObject {
             let item = next.workItems[index]
             guard item.kind == .action, let cardIndex = next.cards.firstIndex(where: { $0.id == item.cardID }) else { return }
             if status == .completed {
-                next.cards[cardIndex].disposition = .completed
-                next.cards[cardIndex].updatedAt = Date()
+                if next.cards[cardIndex].tracking != nil {
+                    // A prepared result is not evidence that the external matter is resolved.
+                    Self.restoreCard(after: item, in: &next)
+                } else if next.cards[cardIndex].disposition == .delegated {
+                    next.cards[cardIndex].disposition = .completed
+                    next.cards[cardIndex].updatedAt = Date()
+                }
             } else if !status.isPending {
                 Self.restoreCard(after: item, in: &next)
             }
@@ -204,13 +213,57 @@ final class MorningStore: ObservableObject {
         try transact { next in MorningSamples.append(to: &next) }
     }
 
+    @discardableResult
+    func applyCardGeneration(observations: [CardObservation], proposals: [CardProposal], runIDs: [UUID], at: Date = Date()) throws -> CardGenerationSummary {
+        let previous = Set((workspace.cardGenerations ?? []).flatMap(\.runIDs))
+        guard runIDs.contains(where: { !previous.contains($0) }) else { return CardGenerationSummary() }
+        var result = CardGenerationSummary()
+        try transact { next in
+            result = try MorningCardReconciliation.apply(observations: observations, proposals: proposals, runIDs: runIDs, at: at, to: &next)
+        }
+        return result
+    }
+
+    func setCardResolution(cardID: UUID, resolved: Bool) throws {
+        try transact { next in
+            try MorningCardReconciliation.setResolution(cardID: cardID, resolved: resolved, at: Date(), in: &next)
+        }
+    }
+
+    func updateCardContext(cardID: UUID, context: String, actionInstruction: String? = nil) throws {
+        try transact { next in
+            guard let index = next.cards.firstIndex(where: { $0.id == cardID }) else {
+                throw MorningStoreError.invalid("This file could not be found.")
+            }
+            if let actionInstruction {
+                let instruction = actionInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !instruction.isEmpty else { throw MorningStoreError.invalid("Describe what Familiar should do.") }
+                next.cards[index].action.instruction = instruction
+            }
+            next.cards[index].personalContext = context.trimmingCharacters(in: .whitespacesAndNewlines)
+            next.cards[index].tracking?.userEdited = true
+            next.cards[index].tracking?.changes.append(CardChange(at: Date(), message: "You added context or adjusted the action."))
+            next.cards[index].updatedAt = Date()
+        }
+    }
+
+    func trackedItems(sourceID: UUID) -> [TrackedSourceItem] {
+        cards.compactMap { card in
+            guard let tracking = card.tracking, tracking.sourceID == sourceID,
+                  !card.isResolved, card.disposition != .ignored else { return nil }
+            let source = card.sources.first
+            return TrackedSourceItem(key: tracking.itemKey, title: source?.title ?? card.title,
+                details: source?.excerpt ?? card.summary, url: source?.url ?? "", identityEvidence: tracking.identityEvidence)
+        }
+    }
+
     private func transact(_ change: (inout MorningWorkspace) throws -> Void) throws {
         do {
             if let blockedReason { throw MorningStoreError.unavailable(blockedReason) }
             var next = workspace
             try change(&next)
             try Self.validate(next)
-            try persist(next)
+            try repository.save(next)
             workspace = next
             error = nil
         } catch {
@@ -219,25 +272,9 @@ final class MorningStore: ObservableObject {
         }
     }
 
-    private func persist(_ next: MorningWorkspace) throws {
-        let fm = FileManager.default
-        try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(next)
-        let temporary = directory.appendingPathComponent(".workspace-\(UUID().uuidString).tmp")
-        defer { try? fm.removeItem(at: temporary) }
-        try data.write(to: temporary, options: .withoutOverwriting)
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
-        // Rename commits one complete document. The private directory also protects the temporary file.
-        guard rename(temporary.path, file.path) == 0 else {
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSFilePathErrorKey: file.path])
-        }
-    }
-
     private static func restoreCard(after item: MorningWorkItem, in workspace: inout MorningWorkspace) {
         guard item.kind == .action, let index = workspace.cards.firstIndex(where: { $0.id == item.cardID }) else { return }
+        guard workspace.cards[index].disposition == .delegated else { return }
         workspace.cards[index].disposition = item.card.disposition == .mine ? .mine : .unreviewed
         workspace.cards[index].updatedAt = Date()
     }
@@ -272,6 +309,17 @@ final class MorningStore: ObservableObject {
             try validateAction(card.action, sample: card.isSample)
             if let contextAction = card.contextAction { try validateAction(contextAction, sample: card.isSample) }
         }
+        let tracked = value.cards.compactMap(\.tracking)
+        try require(Set(tracked.map(\.key)).count == tracked.count, "Two generated cards refer to the same tracked source item.")
+        for tracking in tracked {
+            try require(hasText(tracking.itemKey) && hasText(tracking.identityEvidence), "A generated card needs its item identity and matching evidence.")
+            try require(tracking.firstSeenAt.timeIntervalSince1970.isFinite && tracking.lastSeenAt.timeIntervalSince1970.isFinite && tracking.firstSeenAt <= tracking.lastSeenAt, "A generated card has invalid observation times.")
+            try require(!tracking.resolvedByUser || tracking.resolution == .resolved, "A user-resolved card has inconsistent state.")
+            try require(tracking.resolution != .resolved || hasText(tracking.resolutionEvidence), "A resolved card needs supporting evidence.")
+        }
+        let generations = value.cardGenerations ?? []
+        try require(unique(generations.map(\.id)), "Card generation contains duplicate receipts.")
+        try require(generations.allSatisfy { !$0.runIDs.isEmpty && unique($0.runIDs) && $0.completedAt.timeIntervalSince1970.isFinite }, "Card generation contains an invalid run receipt.")
         var pendingCards: Set<UUID> = []
         for item in value.workItems {
             guard let card = value.cards.first(where: { $0.id == item.cardID }) else {
@@ -286,7 +334,7 @@ final class MorningStore: ObservableObject {
             try validateAction(item.action, sample: item.card.isSample || card.isSample)
             if item.status.isPending {
                 try require(pendingCards.insert(item.cardID).inserted, "This file already has work waiting or in progress.")
-                if item.kind == .action { try require(card.disposition == .delegated, "Waiting work must remain attached to its delegated file.") }
+                if item.kind == .action { try require(card.disposition == .delegated || card.isResolved, "Waiting work must remain attached to its delegated file.") }
             }
         }
     }

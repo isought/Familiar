@@ -15,6 +15,7 @@ final class DesktopExecutionService {
     let peek: PeekFeed
     let tasks: BackgroundTaskStore
     let control: ComputerController
+    lazy var executor = TaskExecutor(desktop: self)
     private var owner: UUID?
     private var requestTitle = "Background task"
     private let activities: NativeActivityGate
@@ -35,6 +36,10 @@ final class DesktopExecutionService {
                  target: TargetWindow? = nil,
                  title: String = "Background task",
                  resolveFrontmost: Bool = true,
+                 policy: ExecutionTools.Policy = .standard,
+                 additionalRoutes: [ToolRoute] = [],
+                 trackedItems: [TrackedSourceItem] = [],
+                 onObservation: (() -> Void)? = nil, onNavigation: (() -> Void)? = nil,
                  lookAtScreen: @escaping () async -> ToolResult) async throws -> PreparedExecution {
         guard owner == nil, tasks.activeTask == nil || tasks.activeTask?.id == id else {
             throw ClaudeError(message: "Another request is using desktop control.")
@@ -43,9 +48,17 @@ final class DesktopExecutionService {
         owner = id
         requestTitle = title
         control.reset()
+        switch policy {
+        case .standard: control.pressRefusal = nil
+        case .calendarRead: control.pressRefusal = CalendarNavigationPolicy.refusal
+        case .sourceRead: control.pressRefusal = ReadingNavigationPolicy.refusal
+        case .sourceFollowUp: control.pressRefusal = { ReadingNavigationPolicy.followUpRefusal($0, trackedItems: trackedItems) }
+        }
         // Snapshot all request capabilities and guard labels before target resolution suspends.
         let router = try ExecutionTools.make(registry: registry, context: context, control: control,
-                                             background: background, lookAtScreen: lookAtScreen)
+                                             background: background, policy: policy, additionalRoutes: additionalRoutes,
+                                             trackedItems: trackedItems, onObservation: onObservation, onNavigation: onNavigation,
+                                             lookAtScreen: lookAtScreen)
         control.lane = background ? .background : .foreground
         control.target = target
         control.declaredIrreversible = registry.select(for: context).active.flatMap(\.irreversible)
@@ -81,6 +94,7 @@ final class DesktopExecutionService {
         guard owner == id else { return nil }
         let receipt = control.summary.map { Receipt(steps: $0.steps, appName: $0.appName, stopped: control.stopped) }
         control.end()
+        control.pressRefusal = nil
         if let lease { activities.release(lease) }
         lease = nil
         owner = nil

@@ -105,7 +105,8 @@ enum ScreenText {
                 let text = [title, desc, value].filter { !$0.isEmpty }.joined(separator: " | ")
                 if !text.isEmpty {
                     let short = role.replacingOccurrences(of: "AX", with: "")
-                    out += String(repeating: "  ", count: min(depth, 8)) + "[\(short)] \(text.prefix(300))\n"
+                    let clipped = text.count > 300 ? " …[element text truncated]" : ""
+                    out += String(repeating: "  ", count: min(depth, 8)) + "[\(short)] \(text.prefix(300))\(clipped)\n"
                 }
             }
             let kids = AX.children(el)

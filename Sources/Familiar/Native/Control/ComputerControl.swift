@@ -60,6 +60,10 @@ final class ComputerController {
     /// Pack-declared irreversible controls and warning stickers for the current scene (set by the app per turn).
     var declaredIrreversible: [String] = []
     var warningNoteLabels: [String] = []
+    /// A request can narrow presses further than the normal action-approval policy.
+    var pressRefusal: ((IrreversibleGuard.ElementInfo) -> String?)? {
+        didSet { ladder?.pressRefusal = pressRefusal }
+    }
 
     /// Set by the app before a turn: foreground drives the real mouse; background drives one target window.
     var lane: Lane = .foreground
@@ -183,6 +187,7 @@ final class ComputerController {
         l.peek = peek
         l.declaredIrreversible = declaredIrreversible
         l.warningNoteLabels = warningNoteLabels
+        l.pressRefusal = pressRefusal
         l.requestApproval = { [weak self, weak l] label in
             guard let self, let l, self.active, !self.stopped, self.ladder === l else { return .cancelled }
             return await self.actionApproval.request(label: label, on: self.peek)

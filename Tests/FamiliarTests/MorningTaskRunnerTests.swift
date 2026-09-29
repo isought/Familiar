@@ -188,7 +188,7 @@ struct MorningTaskRunnerTests {
         runner.start()
         try await until { fixture.store.workItems.first?.status == .needsAttention }
         #expect(fixture.desktop.tasks.activeTask?.id == item.id)
-        runner.backgroundDidBegin()
+        fixture.desktop.executor.backgroundDidBegin()
         fixture.desktop.peek.onStop?()
         try await until { fixture.store.workItems.first?.status == .cancelled }
         #expect(fixture.desktop.tasks.history.first?.outcome == .stopped)
@@ -305,8 +305,8 @@ struct MorningTaskRunnerTests {
                               config: config, makeClient: make, pause: pause)
         }
         func blockWrites() throws {
-            let file = directory.appendingPathComponent("workspace.json")
-            try FileManager.default.moveItem(at: file, to: directory.appendingPathComponent("saved.json"))
+            let file = directory.appendingPathComponent("morning.sqlite")
+            try FileManager.default.moveItem(at: file, to: directory.appendingPathComponent("saved.sqlite"))
             try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
         }
         func remove() { try? FileManager.default.removeItem(at: directory) }

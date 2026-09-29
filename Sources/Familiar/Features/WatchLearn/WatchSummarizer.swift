@@ -20,6 +20,8 @@ struct PackDraft {
     var raw = ""
     var parsed = false
     var json: [String: Any] = [:]
+    var calendarSource: LearnedCalendarSource?
+    var readingSource: LearnedReadingSource?
 
     var prettyJSON: String {
         guard parsed, let d = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) else { return raw }
@@ -48,7 +50,7 @@ enum WatchSummarizer {
         let reply = try await client.converse(system: Prompt.watchSystem, tools: [], messages: &messages,
                                               executor: { _, _, _ in .text("No tools in this mode.", isError: true) }, onStatus: onStatus)
         Log.info("watch: summary \(reply.inputTokens) in, \(reply.outputTokens) out")
-        return parse(reply.text, recording: rec)
+        return parse(reply.text, recording: rec, includedImages: content.contains { $0["type"] as? String == "image" })
     }
 
     // MARK: request
@@ -70,6 +72,10 @@ enum WatchSummarizer {
     static func eventLog(_ rec: Recording, purpose: String?) -> String {
         let m = rec.meta
         var s = "## What the user says they were doing\n\(purpose?.isEmpty == false ? purpose! : (m.purpose ?? "(no description given)"))\n\n"
+        if let context = m.context, !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            s += "## Additional context from the user\n\(context)\n\n"
+            s += "Use this context together with the description and recording in this single draft. Preserve the user's explicit constraints, reading rules and boundaries; do not treat context as evidence that unseen controls or content were demonstrated.\n\n"
+        }
         s += "## Recording\nStarted \(m.startedAt)\(m.endedAt.map { ", ended \($0)" } ?? ""); \(m.clicks) clicks, \(m.frames) full frames, \(rec.events.count) events.\n"
         if !m.hosts.isEmpty { s += "Hosts: \(m.hosts.joined(separator: ", "))\n" }
         if !m.apps.isEmpty { s += "Apps: \(m.apps.joined(separator: ", "))\n" }
@@ -173,7 +179,7 @@ enum WatchSummarizer {
         return genericHosts.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
-    static func parse(_ text: String, recording: Recording) -> PackDraft {
+    static func parse(_ text: String, recording: Recording, includedImages: Bool = false) -> PackDraft {
         var d = PackDraft()
         d.raw = text
         guard let obj = extractJSON(text) else { return d }
@@ -216,7 +222,122 @@ enum WatchSummarizer {
         d.screensMarkdown = str("screens_markdown")
         d.glossaryMarkdown = str("glossary_markdown")
         d.confidence = (obj["confidence"] as? NSNumber)?.doubleValue ?? 0
+        if obj["calendar_source"] as? [String: Any] != nil, obj["reading_source"] as? [String: Any] != nil {
+            d.caveats.append("Choose one source per demonstration. Neither source was registered in this draft.")
+            return d
+        }
+        if let source = obj["calendar_source"] as? [String: Any] {
+            d.calendarSource = parseCalendarSource(source, recording: recording, caveats: &d.caveats)
+            d.calendarSource?.workflowPath = d.packDir + "/docs/workflows/" + d.workflowSlug + ".md"
+        }
+        if let source = obj["reading_source"] as? [String: Any] {
+            d.readingSource = parseReadingSource(source, recording: recording, includedImages: includedImages, caveats: &d.caveats)
+            d.readingSource?.workflowPath = d.packDir + "/docs/workflows/" + d.workflowSlug + ".md"
+        }
         return d
+    }
+
+    static func parseReadingSource(_ obj: [String: Any], recording: Recording, includedImages: Bool,
+                                   caveats: inout [String]) -> LearnedReadingSource? {
+        func str(_ key: String) -> String { (obj[key] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+        var source = LearnedReadingSource(name: str("name"), meaning: str("meaning"), application: str("application"),
+                                         bundleID: str("bundle_id"), url: str("url"), account: str("account"), scope: str("scope"),
+                                         navigationHints: str("navigation_hints"), completionChecks: str("completion_checks"),
+                                         uncertainties: (obj["uncertainties"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        switch str("kind") {
+        case "mail": source.kind = .mail
+        case "web": source.kind = .web
+        default:
+            caveats.append("No reading source was learned: identify mail or web reading separately from actions.")
+            return nil
+        }
+        guard !source.name.isEmpty, !source.meaning.isEmpty else {
+            caveats.append("No reading source was learned: its name or meaning was not established.")
+            return nil
+        }
+        if !source.application.isEmpty, !recording.meta.apps.contains(source.application) {
+            source.application = ""
+            source.uncertainties.append("The application name was not present in the recording metadata.")
+        }
+        if !source.bundleID.isEmpty, !recording.meta.bundles.contains(source.bundleID) {
+            source.bundleID = ""
+            source.uncertainties.append("The proposed application identifier was not observed.")
+        }
+        if !source.url.isEmpty {
+            let observed = Set(recording.events.compactMap(\.url).filter { readableURL($0) != nil })
+            let matches = observed.filter { $0 == source.url || shortURL($0) == source.url }
+            if matches.count == 1, let observedURL = matches.first { source.url = observedURL }
+            else if includedImages, let location = readableURL(source.url),
+                    !str("url_evidence").isEmpty,
+                    str("url_evidence").contains(source.url) || str("url_evidence").contains(shortURL(source.url)) {
+                source.url = location.absoluteString
+                source.requiresReview = true
+                source.uncertainties.append("Confirm this source address before reading: it was identified in a screenshot, while the recorded URL did not match. Evidence: " + str("url_evidence"))
+            } else {
+                source.url = ""
+                source.uncertainties.append("The source address was not established by recorded URLs or supplied screenshot evidence.")
+            }
+        }
+        let nativeAppObserved = !source.bundleID.isEmpty && !ContextWatcher.browserBundles.contains(source.bundleID)
+        guard !source.url.isEmpty || nativeAppObserved else {
+            caveats.append("No reading source was learned: show its address or native application, then teach it again.")
+            return nil
+        }
+        return source
+    }
+
+    private static func readableURL(_ value: String) -> URL? {
+        guard let url = URL(string: value), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              url.host != nil, url.user == nil, url.password == nil else { return nil }
+        return url
+    }
+
+    /// Source identity is separate from a tool pack match. Shared calendar hosts are valid source locations only
+    /// when the recording actually visited them; their exclusion from broad pack matching remains unchanged.
+    static func parseCalendarSource(_ obj: [String: Any], recording: Recording,
+                                    caveats: inout [String]) -> LearnedCalendarSource? {
+        func str(_ key: String) -> String { (obj[key] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+        var source = LearnedCalendarSource(name: str("name"), meaning: str("meaning"), application: str("application"),
+                                           bundleID: str("bundle_id"), url: str("url"), account: str("account"),
+                                           calendarName: str("calendar_name"), timeZoneID: str("time_zone_id"),
+                                           navigationHints: str("navigation_hints"), completionChecks: str("completion_checks"),
+                                           uncertainties: (obj["uncertainties"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        guard !source.name.isEmpty, !source.meaning.isEmpty else {
+            caveats.append("No calendar source was learned: its name or meaning was not established.")
+            return nil
+        }
+        if !source.application.isEmpty, !recording.meta.apps.contains(source.application) {
+            source.application = ""
+            source.uncertainties.append("The application name was not present in the recording metadata.")
+        }
+        if !source.bundleID.isEmpty, !recording.meta.bundles.contains(source.bundleID) {
+            source.bundleID = ""
+            source.uncertainties.append("The proposed application identifier was not observed.")
+        }
+        if !source.url.isEmpty {
+            // The log displays URLs without the scheme and may shorten them. Resolve that displayed location
+            // only when it identifies exactly one full observed URL; never accept an invented path or host.
+            let observed = Set(recording.events.compactMap(\.url).filter {
+                guard let url = URL(string: $0), let scheme = url.scheme?.lowercased() else { return false }
+                return ["http", "https"].contains(scheme) && url.host != nil
+            })
+            let matches = observed.filter { $0 == source.url || shortURL($0) == source.url }
+            if matches.count == 1, let observedURL = matches.first { source.url = observedURL }
+            else {
+                source.url = ""
+                source.uncertainties.append("The proposed calendar URL was not uniquely identified in the recording.")
+            }
+        }
+        let nativeAppObserved = !source.bundleID.isEmpty && !ContextWatcher.browserBundles.contains(source.bundleID)
+        guard !source.url.isEmpty || nativeAppObserved else {
+            caveats.append("No calendar source was learned: show its calendar URL or native application in the recording.")
+            return nil
+        }
+        if !source.timeZoneID.isEmpty, TimeZone(identifier: source.timeZoneID) == nil {
+            source.timeZoneID = ""
+            source.uncertainties.append("The demonstrated time zone could not be identified as an IANA time zone.")
+        }
+        return source
     }
 
     /// The object inside the ```json fence, tolerating a fenced block inside one of its markdown strings; then the
