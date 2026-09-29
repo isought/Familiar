@@ -39,6 +39,8 @@ Start with a view you already use, such as your email inbox.
 
 Click a completed run to read its findings. **Manage sources** is where you change the instructions; **Run history** is where you find earlier results.
 
+You can also do this from chat, any time later: ask “what did my inbox check find?”, or say “change it to only unread email from today”. Noteling changes the saved source, shows a note of what it saved, and offers **Open Manage sources**. When you ask it to run a source now, it offers a **Run now** button. Nothing runs until you tap it.
+
 ## Pick up where you left off
 
 Cards stay with you across days. Noteling tries to update the same card when it sees the same item again, and can update its status when it finds new evidence. An item disappearing from a scan doesn’t mean it is finished.

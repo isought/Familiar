@@ -33,6 +33,10 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    **Esc** or menu bar → **Land Noteling** brings it back early. Starting work brings it back too. Available while idle;
    with macOS Reduce Motion enabled, the fold and gentle flap stay at home.
 6. Claude can call the pack's scripts, `read_file` / `grep` over the docs, and `read_screen` (accessibility text).
+   General chat also knows the saved sources (the jobs taught with Watch Me).
+   - **Context:** every turn carries a short "Your saved jobs" list: name, kind, address, reading rules, and when each was taught and last run.
+   - **Tools** (`SourceConversation`): `get_source` shows one job with its latest findings, `update_source` edits it through the same store and checks as Manage sources, `remove_source` / `restore_source` take it out of future runs and bring it back, and `offer_run_source` adds a Run now tab.
+   - **Rules:** only the person's tap runs a job. Edits wait while a read is running, and they never clear a source's "needs review" flag. Each change leaves a receipt on the pad and an Open Manage sources tab.
 7. **Control** (off by default, Settings → "Allow Noteling to control the mouse and keyboard"): ask it to do something
    ("type the sum formula for me") and it does it through Claude's computer toolset. By default it works **in the
    background**: it drives the window you were in when you asked through Accessibility and events sent to that app, so

@@ -181,6 +181,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let cardConversation = CardConversation(store: morning)
         cardConversation.onHandoff = { [weak self] _ in self?.morningTasks.wake() }
         assistant.cardConversation = cardConversation
+        let sourceConversation = SourceConversation(store: calendarSources)
+        sourceConversation.isRunning = { [weak self] in self?.calendarReader.isRunning ?? false }
+        assistant.sourceConversation = sourceConversation
+        assistant.onOpenSources = { [weak self] in self?.morningPanel.showSources() }
+        assistant.onRunSource = { [weak self] id in self?.runSavedSource(id) }
         morningPanel = MorningPanelController(store: morning, hideFromScreenShare: config.hideFromScreenShare,
                                              calendarSources: calendarSources, calendarRunner: calendarReader, cardGeneration: cardGeneration)
         morningPanel.onDiscussCard = { [weak self] card in
@@ -643,6 +648,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openTools() { NSWorkspace.shared.open(config.resolvedToolsDir) }
     @objc private func openConfig() { NSWorkspace.shared.open(Config.file) }
     @objc private func openLog() { NSWorkspace.shared.open(Config.logFile) }
+
+    /// The chat's Run now tab: read one saved source, then show its progress in Manage sources.
+    private func runSavedSource(_ id: UUID) {
+        let started: Task<Void, Never>?
+        if let source = calendarSources.readingSources.first(where: { $0.id == id }) {
+            started = calendarReader.collect(source: source)
+        } else if let source = calendarSources.sources.first(where: { $0.id == id }) {
+            started = calendarReader.collect(source: source, day: Date())
+        } else {
+            assistant.status = "That job is no longer in your sources."
+            return
+        }
+        assistant.status = started == nil ? (calendarReader.error ?? "That job could not start.") : "Reading your source. Progress is in Manage sources."
+        morningPanel.showSources()
+    }
     @objc private func fixScreenPermission() { if !Permissions.requestScreenRecording() { Permissions.openScreenRecordingSettings() } }
     @objc private func fixAXPermission() { Permissions.requestAccessibility(); Permissions.openAccessibilitySettings() }
 }
