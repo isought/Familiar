@@ -135,6 +135,7 @@ struct ReadingCollectionRunnerTests {
         #expect(message.contains("Google Chrome"))
         #expect(message.contains(fixture.mail.url))
         #expect(message.contains(fixture.mail.account))
+        #expect(message.contains("It opens that address itself when no tab shows it, but can't sign in, switch accounts or use menus"))
         #expect(fixture.store.runStore.runs.last?.entries.first?.message == message)
     }
 
@@ -170,6 +171,75 @@ struct ReadingCollectionRunnerTests {
         #expect(task.setupChecklist.hasPrefix("open Calendar, signed in as employee@example.test, with the Work calendar showing."))
         #expect(task.nothingSavedMessage(reply: " \n", rejection: nil)
                 == "Noteling read this source but saved nothing new, so your earlier results are kept. Before running it again, " + task.setupChecklist)
+    }
+
+    @Test func aJobOpensItsOwnPageAndItsResultShowsWhatItAssumed() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        try fixture.store.saveReadingSource(fixture.mail)
+        let opening = "Noteling opened the saved address in a new Google Chrome tab for this read."
+        let summary = "Read Inbox (employee@example.test), today in New York time; couldn't check which were unread, so this includes all of today's."
+        var lines: [String] = []
+        var opened: [UUID] = []
+        let runner = fixture.runner { _, _, messages, executor in
+            #expect(ReadingCollectionRunnerTests.text(messages).contains(opening))
+            _ = await executor("read_screen", [:], nil)
+            var payload = try fixture.payload(messages: messages)
+            payload["summary"] = summary
+            #expect(!(await executor("submit_reading_collection", payload, nil)).isError)
+            return "Finished"
+        }
+        runner.log = { lines.append($0) }
+        runner.openSource = { source in opened.append(source.id); return opening }
+
+        await (try #require(runner.collect(source: fixture.mail, requestedAt: fixture.day))).value
+
+        #expect(opened == [fixture.mail.id])
+        #expect(lines.contains("run: “Gmail inbox”: " + opening))
+        #expect(fixture.store.latestReading(for: fixture.mail.id)?.summary == summary)
+        let entry = try #require(fixture.store.runStore.runs.first?.entries.first)
+        #expect(entry.message == "Saved 1 item. " + summary)
+        #expect(lines.contains { $0.hasPrefix("run: “Gmail inbox” complete") && $0.contains("today in New York time") })
+    }
+
+    @Test func aReadWithoutASummaryStillShowsTheAccountItSawAndWhatItCouldNotCheck() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let request = ReadingReadRequest(source: fixture.mail, requestedAt: fixture.day)
+        let complete = try ReadingSubmission.parse(fixture.payload(source: fixture.mail, requestID: request.id), request: request)
+        #expect(complete.summary == nil)
+        #expect(complete.assumptions == "Account seen: Account menu displays employee@example.test.")
+        let partial = try ReadingSubmission.parse(fixture.payload(source: fixture.mail, requestID: request.id, coverage: .partial), request: request)
+        #expect(partial.assumptions == "Account seen: Account menu displays employee@example.test. Couldn't check: Only the visible inbox list was readable; more messages remain")
+    }
+
+    @Test func aSourceTurnedDownBeforeReadingIsLoggedWithWhatToFix() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let noRules = LearnedReadingSource(kind: .mail, name: "Mail inbox", meaning: "My incoming mail", application: "Mail",
+                                           bundleID: "com.apple.mail")
+        let noAccount = LearnedReadingSource(kind: .mail, name: "Mail app inbox", meaning: "My incoming mail", application: "Mail",
+                                             bundleID: "com.apple.mail", scope: "Only unread messages from today")
+        try fixture.store.saveReadingSource(noRules)
+        try fixture.store.saveReadingSource(noAccount)
+        var lines: [String] = []
+        var readers = 0
+        let runner = fixture.runner { _, _, _, _ in readers += 1; return "Nothing new." }
+        runner.log = { lines.append($0) }
+
+        await (try #require(runner.collectAll(day: fixture.day))).value
+
+        let line = try #require(lines.first { $0.hasPrefix("run: “Mail inbox” failed before reading: ") })
+        #expect(line.contains("Its reading rules are empty"))
+        #expect(readers == 1)   // the job without an account still runs
+        #expect(lines.contains { $0.hasPrefix("run: “Mail app inbox” failed after") })
+        let message = try #require(fixture.store.runStore.runs.first?.entries.first { $0.sourceName == "Mail inbox" }?.message)
+        #expect(message.hasPrefix("Noteling didn't start this source. Its reading rules are empty"))
+        #expect(message.hasSuffix("Fix it in Manage sources (Edit source), or say what to change in chat."))
+
+        lines = []
+        #expect(runner.collect(source: noRules) == nil)
+        #expect(lines.contains { $0.hasPrefix("run: “Mail inbox” failed before reading: Noteling didn't start this source.") })
     }
 
     @Test func freshReadingIsRequiredAndNavigationAndInvalidReplacementDiscardStagedMail() async throws {

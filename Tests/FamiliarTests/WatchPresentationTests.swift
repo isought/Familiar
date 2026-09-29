@@ -136,6 +136,9 @@ struct WatchPresentationTests {
             bundleID: long, url: long, account: long, scope: long, navigationHints: long,
             completionChecks: long, uncertainties: [long, long], requiresReview: true)
         check()
+        draft.readingSource?.scope = ""              // nothing to read: the note says it can't run yet
+        draft.readingSource?.requiresReview = false
+        check()
         draft.readingSource = nil
         draft.calendarSource = LearnedCalendarSource(name: long, meaning: long, application: long, bundleID: long,
             url: long, account: long, calendarName: long, timeZoneID: long, navigationHints: long,

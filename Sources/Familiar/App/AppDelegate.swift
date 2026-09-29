@@ -177,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cardGeneration = CardGenerationService(morning: morning, sources: calendarSources, desktop: desktop,
                                                config: { [weak self] in self?.config ?? Config() })
         calendarReader.trackedItems = { [weak self] sourceID in self?.morning.trackedItems(sourceID: sourceID) ?? [] }
+        calendarReader.openSource = { await SourcePageOpener().prepare($0) }
         calendarReader.onRunFinished = { [weak self] runID in _ = self?.cardGeneration.generate(runID: runID) }
         let cardConversation = CardConversation(store: morning)
         cardConversation.onHandoff = { [weak self] _ in self?.morningTasks.wake() }

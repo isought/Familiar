@@ -4,6 +4,19 @@ import Testing
 
 @Suite
 struct TargetPolicyTests {
+
+    @Test
+    func chromesInvisibleStripsAreNotWindows() {
+        let gmail = CGRect(x: 100, y: 60, width: 1400, height: 900)
+        // Chrome with no window open still owns four 1710x34 strips and a 500x500 box, all off screen and untitled.
+        #expect(TargetWindow.isHelperSurface(title: "", onScreen: false, bounds: CGRect(x: 0, y: 0, width: 1710, height: 34), axFrames: []))
+        #expect(TargetWindow.isHelperSurface(title: "", onScreen: false, bounds: CGRect(x: 0, y: 607, width: 500, height: 500), axFrames: [gmail]))
+        // A minimized window keeps its Accessibility window; one on another desktop keeps its title.
+        #expect(!TargetWindow.isHelperSurface(title: "", onScreen: false, bounds: gmail, axFrames: [gmail.offsetBy(dx: 0.5, dy: 0)]))
+        #expect(!TargetWindow.isHelperSurface(title: "Inbox - Gmail", onScreen: false, bounds: gmail, axFrames: []))
+        #expect(!TargetWindow.isHelperSurface(title: "", onScreen: true, bounds: gmail, axFrames: []))
+    }
+
     @Test
     func refusedBundlesCoverTerminalsAndSecurityUI() {
         for id in ["com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.github.wez.wezterm",

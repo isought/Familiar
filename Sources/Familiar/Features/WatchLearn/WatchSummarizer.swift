@@ -271,8 +271,7 @@ enum WatchSummarizer {
                     !str("url_evidence").isEmpty,
                     str("url_evidence").contains(source.url) || str("url_evidence").contains(shortURL(source.url)) {
                 source.url = location.absoluteString
-                source.requiresReview = true
-                source.uncertainties.append("Confirm this source address before reading: it was identified in a screenshot, while the recorded URL did not match. Evidence: " + str("url_evidence"))
+                source.uncertainties.append("The address read from a screenshot is right (the recorded one didn't match); each run checks it against the address bar. Evidence: " + str("url_evidence"))
             } else {
                 source.url = ""
                 source.uncertainties.append("The source address was not established by recorded URLs or supplied screenshot evidence.")

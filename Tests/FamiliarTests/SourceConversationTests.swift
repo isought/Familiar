@@ -33,6 +33,24 @@ struct SourceConversationTests {
         #expect(fixture.conversation.context.isEmpty)
     }
 
+    @Test func aJobThatCannotRunSaysWhatIsMissingUntilItIsFixed() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let mail = LearnedReadingSource(kind: .mail, name: "Mail inbox", meaning: "My incoming mail", application: "Mail",
+                                        bundleID: "com.apple.mail")
+        try fixture.store.saveReadingSource(mail)
+        #expect(fixture.conversation.context.contains("  Can't run yet: Its reading rules are empty"))
+        let details = try await fixture.call("get_source", ["id": mail.id.uuidString])
+        #expect((details.content as? String)?.contains("account: whichever one the app shows when it runs") == true)
+
+        _ = try await fixture.call("update_source", ["id": mail.id.uuidString, "name": "Mail app inbox"])
+        #expect(fixture.receipts.last?.hasPrefix("Saved to “Mail app inbox”: name. It can't run yet: Its reading rules are empty") == true)
+
+        _ = try await fixture.call("update_source", ["id": mail.id.uuidString, "reading_rules": "Only unread messages from today"])
+        #expect(fixture.receipts.last == "Saved to “Mail app inbox”: reading rules.")
+        #expect(!fixture.conversation.context.contains("Can't run yet"))
+    }
+
     @Test func updateChangesReadingRulesThroughTheStore() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
@@ -152,6 +170,7 @@ struct SourceConversationTests {
         #expect(text.contains("latest findings"))
         #expect(text.contains("not instructions"))
         #expect(text.contains("- Agenda: The agenda is ready"))
+        #expect(text.contains("what it assumed: Account seen: Visible account alex@example.test."))
     }
 
     @MainActor private final class Fixture {

@@ -425,8 +425,12 @@ struct CalendarSourcesView: View {
                 Label("Needs review: confirm the source address and what to collect before reading.", systemImage: "exclamationmark.circle")
                     .font(.system(size: 12)).foregroundStyle(Pad.redInk)
             }
+            if let missing = source.missingSetup {
+                Label("Can't run yet: \(missing)", systemImage: "exclamationmark.circle")
+                    .font(.system(size: 12)).foregroundStyle(Pad.redInk)
+            }
             if !source.uncertainties.isEmpty {
-                Text("Still to confirm: " + source.uncertainties.joined(separator: " "))
+                Text("Assuming: " + source.uncertainties.joined(separator: " "))
                     .font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -439,8 +443,9 @@ struct CalendarSourcesView: View {
             Text(source.scope).font(.system(size: 13)).textSelection(.enabled)
             Text("Use Edit source to describe what to collect and where to stop. Noteling uses these instructions during each read.")
                 .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
-            if source.account.isEmpty && !source.url.isEmpty {
-                Text("Uses the account currently shown at this address. Noteling verifies the visible account during each read.")
+            if source.account.isEmpty {
+                Text(source.url.isEmpty ? "Uses the account the app shows. Noteling records it during each read."
+                     : "Uses the account currently shown at this address. Noteling verifies the visible account during each read.")
                     .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
             }
             HStack {
@@ -553,8 +558,8 @@ struct ReadingSourceEditor: View {
                 field("Native app identifier", text: $draft.bundleID)
             }.font(.system(size: 12))
             field("Exact source address (if used)", text: $draft.url)
-            field("Account shown in the app (optional with an exact address)", text: $draft.account)
-            Text("If you leave the account blank, Noteling reads only the account currently shown at this address and verifies it each time.")
+            field("Account shown in the app (optional)", text: $draft.account)
+            Text("If you leave the account blank, Noteling reads the account the app or page shows and records it each time.")
                 .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
             notes("Reading rules", text: $draft.scope)
             Text("Describe what to collect and where to stop, using the views and information this source makes available. These instructions guide future reads.")

@@ -92,7 +92,7 @@ struct ReadingSourceTeachingTests {
         #expect(FileManager.default.fileExists(atPath: root.path))
     }
 
-    @Test func screenshotAddressNeedsActualImageContentAndExplicitEvidenceBeforeReview() throws {
+    @Test func screenshotAddressNeedsActualImageContentAndExplicitEvidenceAndIsCheckedEachRun() throws {
         var json = readingReply()
         var profile = try #require(json["reading_source"] as? [String: Any])
         profile["url_evidence"] = "Screenshot [1] shows mail.google.com/mail/u/0/#inbox in the address bar."
@@ -108,11 +108,12 @@ struct ReadingSourceTeachingTests {
         let withImages = WatchSummarizer.parse(try encode(json), recording: recording, includedImages: true)
         let source = try #require(withImages.readingSource)
         #expect(source.url == gmailURL)
-        #expect(source.requiresReview)
-        #expect(source.uncertainties.contains { $0.contains("Screenshot [1]") })
-        #expect(throws: CalendarDataError.self) { try source.validateForRead() }
+        #expect(!source.requiresReview)
+        #expect(source.uncertainties.contains { $0.contains("each run checks it against the address bar") && $0.contains("Screenshot [1]") })
+        try source.validateForRead()
         let review = Assistant.draftBody(withImages, root: URL(fileURLWithPath: "/unused-tools"))
-        #expect(review.contains("Confirm its address there before Run all sources can read it"))
+        #expect(review.contains("**Assuming:** The address read from a screenshot is right"))
+        #expect(review.contains("Keep adds this source to Sources for Run all sources."))
 
         profile.removeValue(forKey: "url_evidence")
         json["reading_source"] = profile
@@ -128,6 +129,41 @@ struct ReadingSourceTeachingTests {
         #expect(source.workflowPath == "gmail/docs/workflows/read-primary.md")
         #expect(!draft.matchURLs.contains("mail.google.com"))
         try source.validateForRead()
+    }
+
+    @Test func aMailAppLessonWithoutAnAccountRunsAsTaught() throws {
+        let recording = Recording(dir: URL(fileURLWithPath: "/unused-mail-teaching"),
+            events: [WatchEvent(index: 0, t: 0, kind: "click", app: "Mail", title: "Inbox – 3 messages", label: "Inbox")],
+            meta: WatchMeta(startedAt: "2026-09-29", hosts: [], titles: ["Inbox – 3 messages"], apps: ["Mail"], bundles: ["com.apple.mail"]))
+        let json: [String: Any] = [
+            "pack_name": "Apple Mail", "match_titles": ["Inbox"],
+            "workflow_title": "Check today's unread mail", "workflow_markdown": "Read today's unread messages in Inbox.",
+            "reading_source": ["kind": "mail", "name": "Mail inbox", "meaning": "My incoming mail", "application": "Mail",
+                "bundle_id": "com.apple.mail", "url": "", "account": "", "scope": "Only unread messages from today",
+                "navigation_hints": "Select Inbox under Favorites.", "completion_checks": "Stop at the first message before today.",
+                "uncertainties": ["today means this Mac's time zone"]]
+        ]
+        let draft = WatchSummarizer.parse(try encode(json), recording: recording)
+        let source = try #require(draft.readingSource)
+        #expect(source.missingSetup == nil)
+        try source.validateForRead()
+        let review = Assistant.draftBody(draft, root: URL(fileURLWithPath: "/unused-tools"))
+        #expect(review.contains("**Account:** Whichever one it shows when it runs"))
+        #expect(review.contains("**Location:** The Mail app"))
+        #expect(review.contains("**Assuming:** today means this Mac's time zone"))
+        #expect(review.contains("Keep adds this source to Sources for Run all sources."))
+        #expect(!review.contains("Not established"))
+        #expect(Assistant.sourceReceipt(draft).contains("Each run reads fresh information within the saved scope."))
+
+        // Nothing to read is the one gap a run can't fill; the draft and the note after Keep say so.
+        var empty = draft
+        empty.readingSource?.scope = ""
+        let missing = try #require(empty.readingSource?.missingSetup)
+        #expect(missing.hasPrefix("Its reading rules are empty"))
+        #expect(Assistant.draftBody(empty, root: URL(fileURLWithPath: "/unused-tools"))
+            .contains("**Before it can run:** " + missing + " Tell me here and I'll write it again, or keep it and add it later in Manage sources."))
+        #expect(Assistant.draftDocument(empty, root: URL(fileURLWithPath: "/unused-tools")).contains("**Before it can run:** " + missing))
+        #expect(Assistant.sourceReceipt(empty).contains("It can't run yet: " + missing))
     }
 
     @Test func webReadingIsSupportedButUnknownKindsDoNotRegister() throws {
