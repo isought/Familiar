@@ -10,9 +10,12 @@ final class CalendarCollectionEvidence {
     private(set) var hasFreshObservation = false
     private(set) var snapshot: CalendarSnapshot?
     private(set) var readingSnapshot: ReadingSnapshot?
+    /// Why the last submission was turned down, so a read that saves nothing can say so.
+    private(set) var lastRejection: String?
     private var trackedItems: [TrackedSourceItem] = []
 
     fileprivate func track(_ items: [TrackedSourceItem]) { trackedItems = Array(items.prefix(ReadingSubmission.trackedItemLimit)) }
+    fileprivate func rejected(_ reason: String) { lastRejection = reason }
     func observed() { hasFreshObservation = true }
     func navigated() { hasFreshObservation = false; snapshot = nil; readingSnapshot = nil }
 
@@ -68,6 +71,36 @@ enum SourceCollectionTask {
     var submissionSchema: [String: Any] { switch self { case .calendar: return CalendarSubmission.schema; case .reading: return ReadingSubmission.schema } }
 
     func validate() throws { switch self { case .calendar(let value): try value.validate(); case .reading(let value): try value.validate() } }
+
+    /// Why a read saved nothing new, in plain words: the reader's own last message, why its findings were turned
+    /// down (if they were), and what to set up before trying again. The reader only reads: it cannot open pages,
+    /// switch accounts or use menus, so the taught window has to be ready first.
+    func nothingSavedMessage(reply: String?, rejection: String?) -> String {
+        var s = "Noteling read this source but saved nothing new, so your earlier results are kept."
+        if let rejection = Self.sentence(rejection, limit: 300) { s += " Its findings were turned down: \(rejection)" }
+        if let reply = Self.sentence(reply, limit: 400) { s += " It said: “\(reply)”" }
+        return s + " Before running it again, " + setupChecklist
+    }
+
+    /// The taught app, address, account and view, as a sentence.
+    var setupChecklist: String {
+        let (application, url, account, calendarName): (String, String, String, String)
+        switch self {
+        case .calendar(let value): (application, url, account, calendarName) = (value.source.application, value.source.url, value.source.account, value.source.calendarName)
+        case .reading(let value): (application, url, account, calendarName) = (value.source.application, value.source.url, value.source.account, "")
+        }
+        var s = "open " + (application.isEmpty ? "the app you showed it" : application)
+        if !url.isEmpty { s += " at \(url)" }
+        s += account.isEmpty ? ", signed in to the account you showed it" : ", signed in as \(account)"
+        s += calendarName.isEmpty ? ", and leave it on the view you showed it." : ", with the \(calendarName) calendar showing."
+        return s + " It can't open pages, switch accounts or use menus by itself; it only uses the tabs, page buttons and scrolling it learned."
+    }
+
+    private static func sentence(_ text: String?, limit: Int) -> String? {
+        guard let flat = text?.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces), !flat.isEmpty else { return nil }
+        return flat.count > limit ? String(flat.prefix(limit)) + "…" : flat
+    }
+
     // Keep the captured profile on edits, but removal revokes permission to
     // read it. The type check also rejects stale callers with a reused ID.
     func isActive(in store: CalendarStore) -> Bool {
@@ -142,7 +175,10 @@ enum SourceCollectionTask {
                 try validatePermission()
                 try self.submit(input, evidence: evidence)
                 return .text("Source collection validated. It will be saved locally after this read finishes successfully. Do not navigate again unless you intend to replace this submission.")
-            } catch { return .text(error.localizedDescription, isError: true) }
+            } catch {
+                evidence.rejected(error.localizedDescription)
+                return .text(error.localizedDescription, isError: true)
+            }
         }
         return TaskPlan(content: [["type": "text", "text": prompt + followUpPrompt(tracked)]], prepare: {
             try validatePermission()

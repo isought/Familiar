@@ -309,7 +309,7 @@ struct CalendarCollectionRunnerTests {
         await task.value
 
         #expect(fixture.store.snapshots == [previous])
-        #expect(runner.error?.contains("No fresh, validated") == true)
+        #expect(runner.error?.contains("saved nothing new") == true)
         #expect(fixture.desktop.tasks.history.first?.outcome == .failed)
     }
 

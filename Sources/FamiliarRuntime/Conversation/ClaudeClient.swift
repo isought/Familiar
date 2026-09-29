@@ -95,7 +95,11 @@ package final class ClaudeClient: ConversationClient {
                         let r = await executor(name, input, toolset)
                         toolCalls += 1
                         block["content"] = r.content
-                        if r.isError { block["is_error"] = true; if toolset == "computer" { computerFailed = true } }
+                        if r.isError {
+                            block["is_error"] = true
+                            if toolset == "computer" { computerFailed = true }
+                            logger("tool error: \(toolset.map { "\($0)." } ?? "")\(name): \(Self.errorLine(r.content))")
+                        }
                     }
                     results.append(block)
                 }
@@ -112,6 +116,13 @@ package final class ClaudeClient: ConversationClient {
             if stop == "max_tokens" { text += "\n\n_(answer was cut off)_" }
             return ClaudeReply(text: text, inputTokens: totalIn, outputTokens: totalOut, cacheRead: cacheRead, toolCalls: toolCalls)
         }
+    }
+
+    /// A tool's error result as one log line.
+    package static func errorLine(_ content: Any) -> String {
+        guard let text = content as? String else { return "(non-text result)" }
+        let flat = text.replacingOccurrences(of: "\n", with: " ")
+        return flat.count > 300 ? String(flat.prefix(300)) + "…" : flat
     }
 
     /// Short, secret-free description of a tool input for the log.

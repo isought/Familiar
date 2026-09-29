@@ -304,6 +304,20 @@ struct ClaudeClientTests {
         #expect(lines.all.contains { $0.contains("URLError -1005") && $0.contains(host) && $0.contains("attempt 1") })
     }
 
+    @Test
+    func toolErrorsAreLoggedNotJustTheCalls() async throws {
+        let toolUse = try HTTPFixture.Response(json: ["stop_reason": "tool_use", "content": [["type": "tool_use", "id": "call-1", "name": "lookup", "input": ["q": "status"]]]])
+        let done = try HTTPFixture.Response(json: ["stop_reason": "end_turn", "content": [["type": "text", "text": "Done."]]])
+        let fixture = HTTPFixture(responses: [toolUse, done])
+        defer { fixture.close() }
+        let lines = LogLines()
+        let client = ClaudeClient(options: options(baseURL: fixture.baseURL), session: fixture.session, logger: { lines.append($0) })
+        var messages: [[String: Any]] = [["role": "user", "content": "Hello"]]
+        _ = try await client.converse(system: "Fixture prompt", tools: [["name": "lookup"]], messages: &messages,
+                                       executor: { _, _, _ in .text("Lookup service is down.", isError: true) }, onStatus: { _ in })
+        #expect(lines.all.contains("tool error: lookup: Lookup service is down."))
+    }
+
     private func ask(_ fixture: HTTPFixture) async throws -> ClaudeReply {
         let client = ClaudeClient(options: options(baseURL: fixture.baseURL), session: fixture.session)
         client.retryDelays = [0, 0]

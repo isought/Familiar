@@ -112,6 +112,66 @@ struct ReadingCollectionRunnerTests {
         #expect(run.entries[1].readingSnapshot?.source == fixture.mail)
     }
 
+    /// The bug: a failed read only said "No fresh, validated source collection was submitted…", dropping the
+    /// reader's own explanation and the reason its findings were turned down.
+    @Test func aReadThatSavesNothingSaysWhyAndWhatToSetUp() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        try fixture.store.saveReadingSource(fixture.mail)
+        let runner = fixture.runner { _, _, messages, executor in
+            _ = await executor("read_screen", [:], nil)
+            var payload = try fixture.payload(messages: messages)
+            payload["requestID"] = UUID().uuidString
+            #expect((await executor("submit_reading_collection", payload, nil)).isError)
+            return "The page shows a Google sign-in screen, so I could not read the inbox."
+        }
+        let task = try #require(runner.collect(source: fixture.mail, requestedAt: fixture.day))
+        await task.value
+
+        let message = try #require(runner.error)
+        #expect(message.contains("saved nothing new"))
+        #expect(message.contains("It said: “The page shows a Google sign-in screen, so I could not read the inbox.”"))
+        #expect(message.contains("turned down"))
+        #expect(message.contains("Google Chrome"))
+        #expect(message.contains(fixture.mail.url))
+        #expect(message.contains(fixture.mail.account))
+        #expect(fixture.store.runStore.runs.last?.entries.first?.message == message)
+    }
+
+    @Test func aRunTellsItsStoryInTheLog() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        try fixture.store.saveReadingSource(fixture.mail)
+        var lines: [String] = []
+        let failing = fixture.runner { _, _, _, _ in "The page shows a Google sign-in screen." }
+        failing.log = { lines.append($0) }
+        await (try #require(failing.collect(source: fixture.mail, requestedAt: fixture.day))).value
+        #expect(lines.first == "run started: 1 source (single)")
+        #expect(lines.contains { $0.hasPrefix("run: “Gmail inbox” failed") && $0.contains("sign-in screen") })
+        #expect(lines.last?.hasPrefix("run finished with problems: saved to ") == true)
+
+        lines = []
+        let working = fixture.runner { _, _, messages, executor in
+            _ = await executor("read_screen", [:], nil)
+            let payload = try fixture.payload(messages: messages)
+            #expect(!(await executor("submit_reading_collection", payload, nil)).isError)
+            return "Finished"
+        }
+        working.log = { lines.append($0) }
+        await (try #require(working.collect(source: fixture.mail, requestedAt: fixture.day))).value
+        #expect(lines.contains { $0.hasPrefix("run: “Gmail inbox” complete") })
+        #expect(lines.last?.hasPrefix("run completed: saved to ") == true)
+    }
+
+    @Test func aCalendarChecklistNamesTheCalendarToShow() {
+        let source = LearnedCalendarSource(name: "Work", meaning: "My meetings", application: "Calendar", bundleID: "com.apple.iCal",
+                                           account: "employee@example.test", calendarName: "Work", timeZoneID: "America/New_York")
+        let task = SourceCollectionTask.calendar(CalendarReadRequest(source: source, day: Date()))
+        #expect(task.setupChecklist.hasPrefix("open Calendar, signed in as employee@example.test, with the Work calendar showing."))
+        #expect(task.nothingSavedMessage(reply: " \n", rejection: nil)
+                == "Noteling read this source but saved nothing new, so your earlier results are kept. Before running it again, " + task.setupChecklist)
+    }
+
     @Test func freshReadingIsRequiredAndNavigationAndInvalidReplacementDiscardStagedMail() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
@@ -133,7 +193,7 @@ struct ReadingCollectionRunnerTests {
         }
         let task = try #require(runner.collect(source: fixture.mail, requestedAt: fixture.day))
         await task.value
-        #expect(runner.error?.contains("No fresh, validated") == true)
+        #expect(runner.error?.contains("saved nothing new") == true)
         #expect(fixture.store.latestReading(for: fixture.mail.id) == previous)
         #expect(fixture.desktop.tasks.history.first?.outcome == .failed)
     }
