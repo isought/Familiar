@@ -101,7 +101,8 @@ struct ClaudeClientTests {
             #expect(captured.request.value(forHTTPHeaderField: "x-api-key") == "fixture-key-one")
             #expect(captured.request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-gateway-one")
             #expect(captured.request.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01")
-            #expect(captured.request.value(forHTTPHeaderField: "anthropic-beta") == "server-side-fallback-2026-07-01")
+            #expect(captured.request.value(forHTTPHeaderField: "anthropic-beta") == nil)
+            #expect(captured.body["fallbacks"] == nil)
             #expect(captured.body["model"] as? String == "fixture-model-one")
             #expect(captured.body["max_tokens"] as? Int == 321)
             #expect((captured.body["output_config"] as? [String: Any])?["effort"] as? String == "low")
@@ -115,6 +116,43 @@ struct ClaudeClientTests {
         #expect(second.body["model"] as? String == "fixture-model-two")
         #expect(second.body["max_tokens"] as? Int == 654)
         #expect((second.body["output_config"] as? [String: Any])?["effort"] as? String == "high")
+    }
+
+    @Test
+    func anthropicsOwnAPIGetsServerSideFallbacks() async throws {
+        let success = try HTTPFixture.Response(json: ["stop_reason": "end_turn", "content": [["type": "text", "text": "Ready."]]])
+        let fixture = HTTPFixture(responses: [success], host: "api.anthropic.com")
+        defer { fixture.close() }
+        let client = ClaudeClient(options: options(baseURL: ""), session: fixture.session)
+        #expect(client.serverFallbacks)
+        var messages: [[String: Any]] = [["role": "user", "content": "Hello"]]
+        _ = try await client.converse(system: "Fixture system prompt", tools: [], messages: &messages,
+                                       executor: { _, _, _ in Issue.record("Unexpected tool call"); return .text("unexpected") },
+                                       onStatus: { _ in })
+        let captured = try #require(fixture.requests.first)
+        #expect(captured.request.url?.absoluteString == "https://api.anthropic.com/v1/messages")
+        #expect(captured.request.value(forHTTPHeaderField: "anthropic-beta") == "server-side-fallback-2026-07-01")
+        #expect(captured.body["fallbacks"] as? String == "default")
+    }
+
+    @Test
+    func gatewayWithoutAnAnthropicKeyAuthenticatesThroughItsOwnHeader() async throws {
+        let success = try HTTPFixture.Response(json: ["stop_reason": "end_turn", "content": [["type": "text", "text": "Ready."]]])
+        let fixture = HTTPFixture(responses: [success])
+        defer { fixture.close() }
+        let client = ClaudeClient(options: ClaudeAPIOptions(apiKey: "", model: "fixture-model", effort: "medium", maxTokens: 1024,
+                                                            baseURL: fixture.baseURL, headers: ["Authorization": "Bearer fixture-gateway"]),
+                                  session: fixture.session)
+        #expect(!client.serverFallbacks)
+        var messages: [[String: Any]] = [["role": "user", "content": "Hello"]]
+        _ = try await client.converse(system: "Fixture system prompt", tools: [], messages: &messages,
+                                       executor: { _, _, _ in Issue.record("Unexpected tool call"); return .text("unexpected") },
+                                       onStatus: { _ in })
+        let captured = try #require(fixture.requests.first)
+        #expect(captured.request.value(forHTTPHeaderField: "x-api-key") == nil)
+        #expect(captured.request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-gateway")
+        #expect(captured.request.value(forHTTPHeaderField: "anthropic-beta") == nil)
+        #expect(captured.body["fallbacks"] == nil)
     }
 
     @Test
@@ -164,14 +202,20 @@ private final class HTTPFixture: @unchecked Sendable {
     private var responses: [Response]
     private var captured: [CapturedRequest] = []
 
-    init(responses: [Response]) {
+    /// A made-up gateway host by default; pass a host to stand in for a real one (requests never leave the process).
+    init(responses: [Response], host: String? = nil) {
         self.responses = responses
-        host = "fixture-\(UUID().uuidString.lowercased()).example.test"
-        baseURL = "https://\(host)/gateway"
+        if let host {
+            self.host = host
+            baseURL = "https://\(host)"
+        } else {
+            self.host = "fixture-\(UUID().uuidString.lowercased()).example.test"
+            baseURL = "https://\(self.host)/gateway"
+        }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FixtureURLProtocol.self]
         session = URLSession(configuration: configuration)
-        FixtureURLProtocol.registry.register(self, host: host)
+        FixtureURLProtocol.registry.register(self, host: self.host)
     }
 
     var requests: [CapturedRequest] {

@@ -244,9 +244,9 @@ The docs were generated from the app's repo and use its real button labels.
 | connectionMode | api | `api` for the Messages API; `claudeCode` for the local Claude Code CLI |
 | claudePath | "" | Claude Code executable path; empty = find automatically |
 | claudeModel | "" | CLI model; empty = Claude Code's default |
-| apiKey | "" | fallback only; Settings stores the key in the Keychain (or use `ANTHROPIC_API_KEY`) |
-| apiBaseURL | "" | corporate gateway base URL; empty = api.anthropic.com |
-| apiHeaders | {} | extra headers for the gateway |
+| apiKey | "" | a key here overrides the one Settings saves (in the Keychain); with neither, `ANTHROPIC_API_KEY` is used |
+| apiBaseURL | "" | corporate gateway base URL; empty = api.anthropic.com. With a gateway, an Anthropic key is optional, and Anthropic-only request extras (server-side refusal fallbacks) are not sent |
+| apiHeaders | {} | extra headers for the gateway, e.g. `{"Authorization": "Bearer …"}` when it authenticates without an Anthropic key |
 | model | claude-opus-5 | API model id |
 | effort | medium | API: low / medium / high / xhigh / max; CLI: low / medium / high |
 | maxTokens | 4096 | answer length cap |

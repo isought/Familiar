@@ -10,7 +10,10 @@ enum ConversationBackend {
             guard ClaudeCodeClient.executable(config: config) != nil else { return nil }
             return ClaudeCodeClient(config: config)
         }
-        return config.resolvedApiKey.map { ClaudeClient(config: config, apiKey: $0) }
+        if let key = config.resolvedApiKey { return ClaudeClient(config: config, apiKey: key) }
+        // A company gateway may authenticate through its own headers (apiHeaders), so it needs no Anthropic key.
+        let gateway = config.apiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        return gateway.isEmpty ? nil : ClaudeClient(config: config, apiKey: "")
     }
 
     static func setupMessage(config: Config) -> String {
