@@ -105,9 +105,10 @@ final class AttentionLedger: ObservableObject {
             let active = Set(sources.sources.map(\.id) + sources.readingSources.map(\.id))
             let missing = receipts.filter { $0.completedAt >= startedAt && !isRecorded($0.runIDs) }
             let events = missing.compactMap { receipt in
-                let observations = Self.scriptReads(runIDs: receipt.runIDs, runs: sources.runStore).flatMap {
-                    CardGenerationInput.observations(run: $0.run, entry: $0.entry)
-                }.filter { active.contains($0.sourceID) }
+                let reads = Self.scriptReads(runIDs: receipt.runIDs, runs: sources.runStore)
+                    + Self.screenMailReads(runIDs: receipt.runIDs, runs: sources.runStore)
+                let observations = reads.flatMap { CardGenerationInput.observations(run: $0.run, entry: $0.entry) }
+                    .filter { active.contains($0.sourceID) }
                 return sorted(observations, runIDs: receipt.runIDs, runs: sources.runStore, cards: cards, backfilled: true, at: receipt.completedAt)
             }
             append(events)
@@ -157,6 +158,21 @@ final class AttentionLedger: ObservableObject {
         return tracking.key
     }
 
+    /// The shown message a card from another job names by its Message-ID, as the card step matched it, or nil. What the
+    /// person does to that card is about that message, and the rest's Shown row labels it; the card itself has no
+    /// thumbs, so it stays as it was. A card from a source the test reads is only its own message's.
+    func shownKey(namedBy card: MorningCard) -> String? {
+        guard !index.shownByMessageID.isEmpty, !card.isSample, let tracking = card.tracking, !reads(tracking.sourceID) else { return nil }
+        return AttentionMessageID.named(by: [card]).sorted().lazy.compactMap { self.index.shownByMessageID[$0] }.first
+    }
+
+    /// The card that showed `key`: its own, or else one from another job that names its Message-ID. Nil once it is gone.
+    func card(showing key: String, in cards: [MorningCard]) -> MorningCard? {
+        if let own = cards.first(where: { $0.tracking?.key == key }) { return own }
+        guard let id = AttentionMessageID.of(key: key), index.shownByMessageID[id] == key else { return nil }
+        return cards.first { shownKey(namedBy: $0) == key }
+    }
+
     /// A thumb only labels the item: it never changes the card, its folder or its work.
     func tapThumb(key: String, card: MorningCard?, thumb: AttentionLabels.Thumb, via: AttentionVia) {
         label(key: key, card: card, value: AttentionLabels.next(current: effective(for: key).explicit, tapped: thumb), via: via)
@@ -181,7 +197,7 @@ final class AttentionLedger: ObservableObject {
     /// screen that shows the ledger gives labels, so none comes before the launch read is in.
     @discardableResult
     func label(key: String, card: MorningCard?, value: AttentionLabelValue, via: AttentionVia, text: String? = nil) -> Bool {
-        let card = card ?? store?.cards.first { $0.tracking?.key == key }
+        let card = card ?? store.flatMap { self.card(showing: key, in: $0.cards) }
         guard let item = item(for: key, card: card) else { return true }
         let now = clock()
         let label = AttentionEvent.Label(key: item.key, value: value, weight: AttentionLabels.weight(value), prior: effective(for: item.key).state,
@@ -248,13 +264,18 @@ final class AttentionLedger: ObservableObject {
     /// or one whose read waits to be written, it is the item as the card knows it, without mail facts. Only a source
     /// the test reads keeps the card's words; a calendar or screen read is recorded by which item it was, never by what
     /// it said. Its key can be made of the item's own words, such as a sender, a subject and a date, so it is recorded
-    /// by a digest of that key.
+    /// by a digest of that key, unless the card names the Message-ID of a message the script read and the card step
+    /// counted it as shown: then it is that message.
     private func item(for key: String, card: MorningCard?) -> AttentionItem? {
         if var item = index.item[key] {
             item.shown = index.shownKeys.contains(key) || card != nil
             return item
         }
         guard let card, let tracking = card.tracking, tracking.key == key else { return nil }
+        if let shown = shownKey(namedBy: card), var item = index.item[shown] {
+            item.shown = true
+            return item
+        }
         let source = card.sources.first, counted = reads(tracking.sourceID)
         let itemID = counted ? tracking.itemKey : SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
         return AttentionItem(key: counted ? key : CardObservation.key(sourceID: tracking.sourceID, itemKey: itemID),
@@ -382,11 +403,13 @@ final class AttentionLedger: ObservableObject {
     // MARK: - What a card step read
 
     /// The `sorted` event for one receipt, or nil when its runs are already recorded or it read no script source. A
-    /// message an earlier line holds is listed by its key alone; one read twice in the receipt is listed once.
+    /// message an earlier line holds is listed by its key alone; one read twice in the receipt is listed once. A
+    /// message counts as shown when it has a card, or when a card from another job, such as one that reads the same
+    /// mail from the screen, names its Message-ID.
     private func sorted(_ observations: [CardObservation], runIDs: [UUID], runs: SourceRunStore, cards: [MorningCard],
                         backfilled: Bool, at: Date) -> AttentionEvent? {
         guard !isRecorded(runIDs) else { return nil }
-        let shown = Set(cards.compactMap { $0.tracking?.key })
+        let shown = Set(cards.compactMap { $0.tracking?.key }), named = AttentionMessageID.named(by: cards)
         var sources: [AttentionEvent.Sorted.Source] = [], items: [AttentionItem] = [], again: [AttentionEvent.Sorted.Seen] = []
         var listed: Set<String> = []
         for read in Self.scriptReads(runIDs: runIDs, runs: runs) {
@@ -398,7 +421,7 @@ final class AttentionLedger: ObservableObject {
             }, uniquingKeysWith: { first, _ in first })
             for observation in observed {
                 guard let item = byKey[observation.id], listed.insert(observation.id).inserted else { continue }
-                let wasShown = shown.contains(observation.id)
+                let wasShown = shown.contains(observation.id) || AttentionMessageID.of(itemKey: observation.itemKey).map(named.contains) == true
                 guard index.firstDay[observation.id] == nil else {
                     again.append(.init(key: observation.id, shown: wasShown))
                     continue
@@ -412,17 +435,32 @@ final class AttentionLedger: ObservableObject {
                 truncated: counts?.truncated ?? false, cutOffSinceLastRead: counts?.cutOffSinceLastRead))
         }
         guard !sources.isEmpty else { return nil }
-        return event(.sorted(.init(runIDs: runIDs, backfilled: backfilled, sources: sources, items: items, seen: again.isEmpty ? nil : again)), at: at)
+        // A mail job read from the screen whose items the step saw could take a message's card from the script's copy.
+        let screen = Self.screenMailReads(runIDs: runIDs, runs: runs)
+            .filter { read in observations.contains { $0.runID == read.run.id && $0.sourceID == read.entry.sourceID } }
+            .map { AttentionEvent.Sorted.ScreenRead(sourceID: $0.entry.sourceID, sourceName: $0.entry.sourceName) }
+        return event(.sorted(.init(runIDs: runIDs, backfilled: backfilled, sources: sources, items: items, seen: again.isEmpty ? nil : again,
+                                   screenRead: screen.isEmpty ? nil : screen)), at: at)
     }
+
+    private typealias StepRead = (run: SourceRunRecord, entry: SourceRunEntry, snapshot: ReadingSnapshot)
 
     /// Each script source's read in a card step: its latest complete or partial one among the step's runs, which is
     /// the one the step took.
-    private static func scriptReads(runIDs: [UUID], runs: SourceRunStore)
-        -> [(run: SourceRunRecord, entry: SourceRunEntry, snapshot: ReadingSnapshot)] {
-        var latest: [UUID: (run: SourceRunRecord, entry: SourceRunEntry, snapshot: ReadingSnapshot)] = [:]
+    private static func scriptReads(runIDs: [UUID], runs: SourceRunStore) -> [StepRead] {
+        latestReads(runIDs: runIDs, runs: runs) { $0.readsThroughScript }
+    }
+
+    /// Each mail job's read from the screen in a card step, taken the same way.
+    private static func screenMailReads(runIDs: [UUID], runs: SourceRunStore) -> [StepRead] {
+        latestReads(runIDs: runIDs, runs: runs) { $0.kind == .mail && !$0.readsThroughScript }
+    }
+
+    private static func latestReads(runIDs: [UUID], runs: SourceRunStore, of kind: (LearnedReadingSource) -> Bool) -> [StepRead] {
+        var latest: [UUID: StepRead] = [:]
         for run in runIDs.compactMap(runs.run(id:)) {
             for entry in run.entries where [.complete, .partial].contains(entry.state) {
-                guard let snapshot = entry.readingSnapshot, snapshot.source.readsThroughScript else { continue }
+                guard let snapshot = entry.readingSnapshot, kind(snapshot.source) else { continue }
                 if let previous = latest[entry.sourceID], previous.snapshot.collectedAt >= snapshot.collectedAt { continue }
                 latest[entry.sourceID] = (run, entry, snapshot)
             }

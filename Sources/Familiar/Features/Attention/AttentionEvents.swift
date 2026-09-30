@@ -51,11 +51,21 @@ struct AttentionEvent: Equatable, Identifiable {
         var items: [AttentionItem]
         /// Messages an earlier line already holds, read again. Nil when there were none, and in lines from before it.
         var seen: [Seen]? = nil
+        /// Mail jobs the same step read from the screen, not through a script. A card from one can show a message the
+        /// script also read, which then counts as left out, so the screens say when one ran. Nil when none did, and in
+        /// lines from before it.
+        var screenRead: [ScreenRead]? = nil
 
         /// A message read again: its key, and whether this step showed it.
         struct Seen: Codable, Equatable {
             var key: String
             var shown: Bool
+        }
+
+        /// A mail job read from the screen, by its id and name only: nothing it read is kept.
+        struct ScreenRead: Codable, Equatable {
+            var sourceID: UUID
+            var sourceName: String
         }
 
         /// One script read in the step, including a read that found nothing.

@@ -191,7 +191,10 @@ struct MorningFilesView: View {
                     })
             } else { empty("Run results are unavailable.") }
         case .attention(let screen):
-            if let attention { AttentionScreenView(ledger: attention, store: store, navigation: navigation, screen: screen) } else { empty("The numbers are unavailable.") }
+            if let attention {
+                AttentionScreenView(ledger: attention, store: store, navigation: navigation, screen: screen,
+                                    activeSources: calendarSources.map { sources in { Set(sources.readingSources.map(\.id)) } })
+            } else { empty("The numbers are unavailable.") }
         case .folders: folders
         case .folder(let id): folder(id)
         case .card(let id):

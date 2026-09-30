@@ -10,9 +10,12 @@ struct AttentionThumbs: View {
     @ObservedObject var ledger: AttentionLedger
     let card: MorningCard
     var via: AttentionVia = .card
+    /// The message the thumbs label when it is not the card's own: one a card from another job showed by naming its
+    /// Message-ID. Only the rest's Shown row gives one, so that card itself stays as it was.
+    var message: String? = nil
 
     /// Nil for a card the test does not label.
-    var key: String? { ledger.labelKey(for: card) }
+    var key: String? { message.flatMap { ledger.isRunning ? $0 : nil } ?? ledger.labelKey(for: card) }
 
     var body: some View {
         if let key {

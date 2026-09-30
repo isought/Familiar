@@ -1,9 +1,10 @@
 import Foundation
 
 /// What the attention ledger holds, folded from its events: when the test started, which runs a card step has
-/// sorted, the day each item was first read, whether it was ever shown, each script read's own counts, each item's
-/// label, the items marked missed, the days whose rest was looked through, and when the pack was first opened and first
-/// used each day. Pure, so the numbers can be worked out and tested without a file.
+/// sorted, the day each item was first read, whether it was ever shown, each script read's own counts, the mail jobs
+/// read from the screen beside them, each item's label, the items marked missed, the days whose rest was looked through,
+/// and when the pack was first opened and first used each day. Pure, so the numbers can be worked out and tested
+/// without a file.
 struct AttentionIndex {
     /// Items first read within this many days keep their full copy for the rest screen; older ones keep only their day.
     static let itemDays = 14
@@ -32,10 +33,16 @@ struct AttentionIndex {
     private(set) var keysByDay: [String: Set<String>] = [:]
     /// Keys a card step showed in any `sorted` event.
     private(set) var shownKeys: Set<String> = []
+    /// Each shown key by its Message-ID, so a card from another job that names it, such as one read from the screen,
+    /// is found as that message's card.
+    private(set) var shownByMessageID: [String: String] = [:]
     /// The copy of each recently read key from the `sorted` event that first held it.
     private(set) var item: [String: AttentionItem] = [:]
     /// Each script source's reads, oldest first.
     private(set) var sortedReads: [UUID: [Read]] = [:]
+    /// The mail jobs a card step read from the screen beside a script read, by the local day of its `sorted` event,
+    /// each with its name as last written that day.
+    private(set) var screenReads: [String: [UUID: String]] = [:]
     /// Each key's thumbs, explanation and what the person did, in the order they were written.
     private(set) var labels: [String: AttentionLabels.Effective] = [:]
     /// Items the person said should have been shown, and has not taken back.
@@ -93,6 +100,7 @@ struct AttentionIndex {
             }
             for item in sorted.items { read(item.key, shown: item.shown, copy: item, on: event.day, backfilled: sorted.backfilled) }
             for again in sorted.seen ?? [] { read(again.key, shown: again.shown, copy: nil, on: event.day, backfilled: sorted.backfilled) }
+            for screen in sorted.screenRead ?? [] { screenReads[event.day, default: [:]][screen.sourceID] = screen.sourceName }
         case .label(let label):
             labels[label.key, default: .init()].add(label.value, text: label.text)
         case .implicit(let implicit):
@@ -148,7 +156,9 @@ struct AttentionIndex {
     /// later one only adds whether it was shown. Only a receipt backfilled after a later step's line dates a message
     /// earlier: a read that merely carries an earlier day, after the Mac's zone or clock moved back, never moves it.
     private mutating func read(_ key: String, shown: Bool, copy: AttentionItem?, on day: String, backfilled: Bool) {
-        if shown { shownKeys.insert(key) }
+        if shown, shownKeys.insert(key).inserted, let id = AttentionMessageID.of(key: key), shownByMessageID[id] == nil {
+            shownByMessageID[id] = key
+        }
         if let first = firstDay[key] {
             guard backfilled, day < first else { return }
             keysByDay[first]?.remove(key)
@@ -159,5 +169,43 @@ struct AttentionIndex {
         // Events fold in the order they were written, so a later read, or a receipt backfilled after the rest was
         // looked through, leaves the day's rest to check again.
         if !shownKeys.contains(key) { restCheckedDays.remove(day) }
+    }
+}
+
+/// Message-IDs as the attention test matches them. A script item's key is its message's Message-ID, and a card from
+/// another job, such as one that reads the same mail from the screen, can name one in its item key, its identity
+/// evidence or its original's link. A card's own words are never searched.
+enum AttentionMessageID {
+    /// A script item key's Message-ID, lowercased, or nil for a key that is none, such as a message's number in its
+    /// mailbox.
+    static func of(itemKey: String) -> String? {
+        let id = itemKey.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "<>"))).lowercased()
+        return id.contains("@") ? id : nil
+    }
+
+    /// The Message-ID of a message's key: its source's id, a colon, then its item key.
+    static func of(key: String) -> String? {
+        key.firstIndex(of: ":").flatMap { of(itemKey: String(key[key.index(after: $0)...])) }
+    }
+
+    /// The Message-IDs cards name, lowercased, as in "Message-ID <id>" or a Gmail link that searches for
+    /// "rfc822msgid:id". Anything with an "@" is taken, addresses too; they only ever match a Message-ID that is the
+    /// same text.
+    static func named(by cards: [MorningCard]) -> Set<String> {
+        var ids: Set<String> = []
+        for card in cards where !card.isSample {
+            guard let tracking = card.tracking else { continue }
+            for text in [tracking.itemKey, tracking.identityEvidence] + card.sources.map(\.url) where text.contains("@") || text.contains("%40") {
+                let decoded = (text.removingPercentEncoding ?? text).lowercased()
+                for token in decoded.split(whereSeparator: { $0.isWhitespace || "<>\"'(),;:[]?&".contains($0) }) where token.contains("@") {
+                    // An id at the end of a path or a query's value, and without a sentence's full stop.
+                    for part in [token, token.split(separator: "/").last ?? token, token.split(separator: "=").last ?? token] {
+                        let id = part.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                        if id.contains("@") { ids.insert(id) }
+                    }
+                }
+            }
+        }
+        return ids
     }
 }

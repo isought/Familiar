@@ -217,8 +217,24 @@ final class SourceConversation {
             receipt += " Connect it first: add \(way.missingSecrets.joined(separator: " and ")) in Settings."
             onOfferConnect?(way.pack)
         }
+        // A mail job read from the screen runs in the same card steps. If it reads the same inbox, a message on its card
+        // can land in the attention test's rest instead of counting as shown. It is only named: the person decides. Until
+        // this job can read, removing it is only mentioned for later, so no one gives up the mail reading they have for a
+        // job that can't run yet. The receipt is in the chat already, so the model is told not to say it again.
+        let screen = store.readingSources.filter { $0.kind == .mail && !$0.readsThroughScript }.map { "“\(Self.clip($0.name, 80))”" }
+        let one = screen.count == 1
+        if !screen.isEmpty {
+            let names = one ? screen[0] : screen.dropLast().joined(separator: ", ") + " and " + screen[screen.count - 1]
+            receipt += " \(names) also read\(one ? "s" : "") mail from the screen. If \(one ? "it reads" : "they read") the same inbox, "
+            receipt += way.missingSecrets.isEmpty
+                ? "a message shown on \(one ? "its card" : "one of their cards") can land in the attention test’s rest, and removing"
+                    + " \(one ? "it" : "them") in Manage sources keeps the test’s numbers clean."
+                : "you can remove \(one ? "it" : "them") in Manage sources once this job reads your mail, for clean attention-test numbers."
+        }
         onChange?(receipt)
         return receipt + " (id \(source.id.uuidString)) Offer Run now with offer_run_source when they want to see it."
+            + (screen.isEmpty ? "" : " The receipt already told the person about \(one ? "that screen-read job" : "those screen-read jobs");"
+                + " don't repeat it, and use remove_source only if they ask.")
     }
 
     private func route(_ name: String, _ description: String, _ properties: [String: Any], required: [String],

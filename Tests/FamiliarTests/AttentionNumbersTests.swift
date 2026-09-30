@@ -369,6 +369,41 @@ struct AttentionNumbersTests {
         #expect(measure(one, now: Self.at("2026-09-29", "10:00")).week?.power == "0 of 1 can't rule out a true miss rate up to 100% (95%)")
     }
 
+    /// A mail job read from the screen beside the script can take a message's card, and the message then counts as left
+    /// out. One quiet line says on which days that could happen, names each job as last read, and suggests removing
+    /// only the ones still in Manage sources.
+    @Test func screenReadMailJobsAreNamedByTheDaysTheyRan() {
+        let gmail = UUID(), apple = UUID()
+        let screen = { (id: UUID, name: String) in AttentionEvent.Sorted.ScreenRead(sourceID: id, sourceName: name) }
+        var events = [sorted(Self.at("2026-09-27"), keys: ["a"]),
+                      sorted(Self.at("2026-09-28"), keys: ["b"], screenRead: [screen(gmail, "Gmail inbox")]),
+                      sorted(Self.at("2026-09-29"), keys: ["c"], screenRead: [screen(gmail, "Gmail inbox – today’s unread")]),
+                      sorted(Self.at("2026-09-30"), keys: ["d"])]
+        let now = Self.at("2026-09-30", "09:00"), week = Self.days
+        var numbers = measure(events, now: now)
+        #expect(numbers.screenRead(on: week) == "Your screen-read mail job “Gmail inbox – today’s unread” also ran on 2 days. If it reads"
+            + " the same inbox, a message shown on its card can land in the rest here, and removing it in Manage sources keeps the numbers clean.")
+        // A rest names its own day, and a day without one says nothing.
+        #expect(numbers.screenRead(on: ["2026-09-29"])?.hasPrefix("Your screen-read mail job “Gmail inbox – today’s unread” also ran yesterday.") == true)
+        #expect(numbers.screenRead(on: ["2026-09-28"])?.hasPrefix("Your screen-read mail job “Gmail inbox” also ran on Mon.") == true)
+        #expect(numbers.screenRead(on: ["2026-09-30"]) == nil && numbers.screenRead(on: ["2026-09-27"]) == nil)
+        #expect(measure(events, now: Self.at("2026-09-29", "09:00")).screenRead(on: ["2026-09-29"])?.contains(" also ran today.") == true)
+        // On Monday the week so far holds only Monday's, named as today.
+        #expect(measure(events, now: Self.at("2026-09-28", "09:00")).screenRead(on: week)?.contains("“Gmail inbox” also ran today.") == true)
+
+        // Two jobs are named together, and only the one still in Manage sources is suggested for removal.
+        events.append(sorted(Self.at("2026-09-30", "10:00"), keys: [], screenRead: [screen(apple, "Mail inbox"), screen(gmail, "Gmail inbox – today’s unread")]))
+        numbers = measure(events, now: Self.at("2026-09-30", "11:00"))
+        #expect(numbers.screenRead(on: week) == "Your screen-read mail jobs “Gmail inbox – today’s unread” and “Mail inbox” also ran on"
+            + " 3 days. If they read the same inbox, a message shown on one of their cards can land in the rest here, and removing them"
+            + " in Manage sources keeps the numbers clean.")
+        #expect(numbers.screenRead(on: week, active: [apple])?.hasSuffix("can land in the rest here, and removing “Mail inbox” in Manage sources"
+            + " keeps the numbers clean.") == true)
+        #expect(numbers.screenRead(on: week, active: [])?.hasSuffix("also ran on 3 days. If they read the same inbox, a message shown on"
+            + " one of their cards can land in the rest here.") == true)
+        #expect(measure([sorted(Self.at("2026-09-30"), keys: ["x"])], now: now).screenRead(on: week) == nil)
+    }
+
     @Test @MainActor func theLedgerGivesItsNumbersInItsOwnZone() {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("attention-numbers-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -531,10 +566,11 @@ struct AttentionNumbersTests {
 
     /// One card step's read at `at`, returning `keys` and showing `shown`.
     private func sorted(_ at: Date, keys: [String], shown: Set<String> = [], source id: UUID? = nil, name: String = "Example Gmail",
-                        since: Date? = nil, arrived: Int? = nil, returned: Int? = nil, truncated: Bool = false) -> AttentionEvent {
+                        since: Date? = nil, arrived: Int? = nil, returned: Int? = nil, truncated: Bool = false,
+                        screenRead: [AttentionEvent.Sorted.ScreenRead]? = nil) -> AttentionEvent {
         let items = keys.map { item($0, at: at, shown: shown.contains($0)) }
         let read = source(at, id: id, name: name, since: since, count: keys.count, arrived: arrived, returned: returned, truncated: truncated)
-        return event(.sorted(.init(runIDs: [read.runID], backfilled: false, sources: [read], items: items)), at: at)
+        return event(.sorted(.init(runIDs: [read.runID], backfilled: false, sources: [read], items: items, screenRead: screenRead)), at: at)
     }
 
     private func label(_ key: String, _ value: AttentionLabelValue, text: String? = nil, at: Date) -> AttentionEvent {

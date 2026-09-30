@@ -95,6 +95,38 @@ struct AttentionScreenTests {
         #expect(fixture.navigation.route == .attention(.rest(day: Self.wednesday)))
     }
 
+    /// A mail job read from the screen ran in Wednesday's card step. It is named at the top of Wednesday's rest and
+    /// among the week's footnotes, and removing it is suggested only while it is still in Manage sources.
+    @Test func aScreenReadMailJobIsNamedWhereItsDayIsCounted() throws {
+        let gmail = LearnedReadingSource(kind: .mail, name: "Gmail inbox – today’s unread", meaning: "My personal inbox",
+            application: "Google Chrome", url: "https://mail.google.com/mail/u/0/#inbox", scope: "Today's unread messages")
+        let fixture = try Fixture(screenRead: gmail)
+        defer { fixture.remove() }
+        let sources = CalendarStore(directory: fixture.root.appendingPathComponent("calendar"))
+        try sources.saveReadingSource(gmail)
+        let ran = "Your screen-read mail job “Gmail inbox – today’s unread” also ran today."
+        let remove = " If it reads the same inbox, a message shown on its card can land in the rest here, and removing it in Manage sources"
+            + " keeps the numbers clean."
+        let numbers = fixture.ledger.numbers, days = try #require(numbers.week)
+        let rest = try fixture.restView(sources: sources), week = try fixture.weekView(sources: sources)
+        #expect(rest.screenRead(numbers) == ran + remove && week.screenRead(numbers, days) == ran + remove)
+        #expect(try fixture.restView(Self.tuesday, sources: sources).screenRead(numbers) == nil)
+        // Their numbers are the same: the line only says why a message on its card can be in the rest.
+        #expect(numbers.day(Self.wednesday).read == 42 && numbers.day(Self.wednesday).shown == 6)
+
+        try sources.removeSource(id: gmail.id)
+        let removed = ran + " If it read the same inbox, a message shown on its card can land in the rest here."
+        #expect(rest.screenRead(numbers) == removed && week.screenRead(numbers, days) == removed)
+        // A pack that doesn't know the jobs still suggests it.
+        #expect(try fixture.restView().screenRead(numbers) == ran + remove)
+        // Without one, neither screen has the line.
+        let plain = try Fixture()
+        defer { plain.remove() }
+        let plainWeek = try #require(plain.ledger.numbers.week)
+        #expect(try plain.restView().screenRead(plain.ledger.numbers) == nil)
+        #expect(try plain.weekView().screenRead(plain.ledger.numbers, plainWeek) == nil)
+    }
+
     @Test func routesAreExhaustive() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -231,6 +263,37 @@ struct AttentionScreenTests {
         #expect(gone.card == nil && find(AttentionThumbs.self, in: gone.body) == nil && find(Text.self, in: gone.body) != nil)
     }
 
+    /// A shown message whose only card came from a job that reads the mail from the screen, and named its Message-ID,
+    /// opens that card from its row and has thumbs for the message there; the card itself stays as it was.
+    @Test func aShownRowFindsTheScreenCardThatNamedItsMessage() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let screenID = UUID()
+        let observation = CardObservation(runID: UUID(), sourceID: screenID, itemKey: "row-1", sourceName: "Gmail inbox – today’s unread",
+            kind: "mail", title: "Plumber visit", excerpt: "The plumber comes Thursday.",
+            url: "https://mail.google.com/mail/u/0/#search/rfc822msgid%3Aw1%40mail.example.test", identityEvidence: "Visible row",
+            observedAt: Fixture.at("2026-09-30", "09:00"), state: .open, stateEvidence: "Not confirmed yet.")
+        try fixture.store.applyCardGeneration(observations: [observation], proposals: [CardProposal(observationKey: observation.id,
+            title: "Confirm the plumber for Thursday", meaning: "He needs a yes by noon.",
+            action: MorningAction(title: "Draft a reply", instruction: "Draft a short yes."))], runIDs: [observation.runID])
+        let screenCard = try #require(fixture.store.cards.first { $0.tracking?.sourceID == screenID })
+        let before = fixture.store.workspace
+        let row = try fixture.restView().shownRow(fixture.key("w", 1))
+        #expect(row.card?.id == screenCard.id)
+        let thumbs = try #require(find(AttentionThumbs.self, in: row.body))
+        #expect(thumbs.message == fixture.key("w", 1) && thumbs.key == fixture.key("w", 1) && thumbs.via == .shown)
+        thumbs.tap(.down)
+        #expect(fixture.labels.map(\.key) == [fixture.key("w", 1)] && fixture.labels.first?.value == .no)
+        #expect(fixture.labels.first?.card?.cardID == screenCard.id && fixture.labels.first?.item.shown == true)
+        #expect(fixture.store.workspace == before && fixture.ledger.labelKey(for: screenCard) == nil)
+        row.open(screenCard.id)
+        #expect(fixture.navigation.route == .card(screenCard.id))
+        // Its own card still comes first, with the card's own thumbs, and a message no card names keeps its subject.
+        let own = try fixture.restView().shownRow(fixture.key("w", 0))
+        #expect(own.card?.id == fixture.cardID && find(AttentionThumbs.self, in: own.body)?.message == nil)
+        #expect(try fixture.restView().shownRow(fixture.key("w", 2)).card == nil)
+    }
+
     @Test func aRestRowCanBeExplained() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -274,12 +337,13 @@ struct AttentionScreenTests {
         /// A local time in New York, four hours behind UTC in September.
         nonisolated static func at(_ day: String, _ time: String) -> Date { AttentionTime.date("\(day)T\(time):00.000-04:00")! }
 
-        init(now: Date = Fixture.at("2026-09-30", "09:30"), read: Bool = true) throws {
+        init(now: Date = Fixture.at("2026-09-30", "09:30"), read: Bool = true, screenRead: LearnedReadingSource? = nil) throws {
             let started = Self.at("2026-09-29", "07:00")
             var events = [AttentionEvent(.started, at: started, timeZone: Self.zone)]
             if read {
                 events.append(Self.sorted(Self.at("2026-09-29", "08:00"), prefix: "t", count: 5, shown: 1, source: sourceID))
-                events.append(Self.sorted(Self.at("2026-09-30", "09:00"), prefix: "w", count: 42, shown: 6, source: sourceID))
+                events.append(Self.sorted(Self.at("2026-09-30", "09:00"), prefix: "w", count: 42, shown: 6, source: sourceID,
+                    screenRead: screenRead.map { [.init(sourceID: $0.id, sourceName: $0.name)] }))
             }
             try AttentionLogFile(url: root.appendingPathComponent("attention/signals.jsonl")).append(events)
             store = MorningStore(directory: root.appendingPathComponent("morning"))
@@ -303,7 +367,8 @@ struct AttentionScreenTests {
 
         /// One card step's read of the inbox at `at`: messages a minute apart, newest first. The seventh is marked
         /// important, and from the 21st on they are promotions from mailing lists.
-        private static func sorted(_ at: Date, prefix: String, count: Int, shown: Int, source sourceID: UUID) -> AttentionEvent {
+        private static func sorted(_ at: Date, prefix: String, count: Int, shown: Int, source sourceID: UUID,
+                                   screenRead: [AttentionEvent.Sorted.ScreenRead]? = nil) -> AttentionEvent {
             let runID = UUID()
             let items = (0..<count).map { (index: Int) -> AttentionItem in
                 let list = index >= 20, received = at.addingTimeInterval(-Double(index) * 60)
@@ -315,20 +380,28 @@ struct AttentionScreenTests {
             }
             let read = AttentionEvent.Sorted.Source(sourceID: sourceID, sourceName: "Example Gmail", script: "imap-mail__today",
                 runID: runID, collectedAt: at, since: at.addingTimeInterval(-86_400), arrived: count, returned: count, truncated: false)
-            return AttentionEvent(.sorted(.init(runIDs: [runID], backfilled: false, sources: [read], items: items)), at: at, timeZone: Self.zone)
+            return AttentionEvent(.sorted(.init(runIDs: [runID], backfilled: false, sources: [read], items: items, screenRead: screenRead)),
+                                  at: at, timeZone: Self.zone)
         }
 
-        /// The pack on `route`, as the panel builds it, with the ledger unless `attention` is false.
-        func view(_ route: MorningNavigation.Route? = nil, attention: Bool = true) -> MorningFilesView {
+        /// The pack on `route`, as the panel builds it, with the ledger unless `attention` is false, and with the jobs
+        /// in Manage sources when `sources` gives them.
+        func view(_ route: MorningNavigation.Route? = nil, attention: Bool = true, sources: CalendarStore? = nil) -> MorningFilesView {
             if let route { navigation.route = route }
             return MorningFilesView(store: store, navigation: navigation, close: {}, filed: {}, handoff: { _ in },
-                                    discussCard: { _ in }, attention: attention ? ledger : nil)
+                                    calendarSources: sources, discussCard: { _ in }, attention: attention ? ledger : nil)
         }
 
         /// The rest screen of `day`, Wednesday unless it says otherwise, as the pack shows it.
-        func restView(_ day: String = AttentionScreenTests.wednesday) throws -> AttentionRestView {
-            let screen = try #require(find(AttentionScreenView.self, in: view(.attention(.rest(day: day))).body))
+        func restView(_ day: String = AttentionScreenTests.wednesday, sources: CalendarStore? = nil) throws -> AttentionRestView {
+            let screen = try #require(find(AttentionScreenView.self, in: view(.attention(.rest(day: day)), sources: sources).body))
             return try #require(find(AttentionRestView.self, in: screen.body))
+        }
+
+        /// The week, as the pack shows it.
+        func weekView(sources: CalendarStore? = nil) throws -> AttentionWeekView {
+            let screen = try #require(find(AttentionScreenView.self, in: view(.attention(.week), sources: sources).body))
+            return try #require(find(AttentionWeekView.self, in: screen.body))
         }
 
         /// A card step reads a second example inbox at `at` and shows none of it, as a read from chat would.

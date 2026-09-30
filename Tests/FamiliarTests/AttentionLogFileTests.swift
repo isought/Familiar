@@ -86,7 +86,7 @@ struct AttentionLogFileTests {
     @Test func theFeatureSchemaIsFrozen() throws {
         let envelope: Set = ["schema", "id", "type", "at", "day", "tz", "app"]
         let payloads: [AttentionEventType: Set<String>] = [
-            .started: [], .sorted: ["runIDs", "backfilled", "sources", "items", "seen"],
+            .started: [], .sorted: ["runIDs", "backfilled", "sources", "items", "seen", "screenRead"],
             .label: ["key", "value", "weight", "prior", "text", "via", "item", "card"],
             .implicit: ["key", "signal", "retracts", "optionIndex", "optionMode", "item", "card"],
             .miss: ["key", "retract", "item"], .opened: ["trigger", "route", "desk"],
@@ -99,6 +99,7 @@ struct AttentionLogFileTests {
             "hasPersonalContext", "createdByRun"]
         let sourceKeys: Set = ["sourceID", "sourceName", "script", "runID", "collectedAt", "since", "arrived", "returned", "truncated"]
         let seenKeys: Set = ["key", "shown"]
+        let screenReadKeys: Set = ["sourceID", "sourceName"]
 
         let events = everyEvent()
         #expect(Set(events.map(\.type)) == Set(AttentionEventType.allCases) && Set(payloads.keys) == Set(AttentionEventType.allCases))
@@ -117,16 +118,19 @@ struct AttentionLogFileTests {
             for item in json["items"] as? [[String: Any]] ?? [] { #expect(Set(item.keys) == itemKeys) }
             for source in json["sources"] as? [[String: Any]] ?? [] { #expect(Set(source.keys) == sourceKeys) }
             for again in json["seen"] as? [[String: Any]] ?? [] { #expect(Set(again.keys) == seenKeys) }
+            for screen in json["screenRead"] as? [[String: Any]] ?? [] { #expect(Set(screen.keys) == screenReadKeys) }
         }
-        // A line from before messages read again were listed by key has no `seen`, and reads back without one.
+        // A line from before messages read again were listed by key, or before screen reads were named, has no `seen`
+        // or `screenRead`, and reads back without them.
         var older = try object(event(.sorted(sorted(items: [item()]))).line())
         older["seen"] = nil
+        older["screenRead"] = nil
         let read = try AttentionEvent(line: JSONSerialization.data(withJSONObject: older))
         guard case .sorted(let sorted) = read.payload else {
             Issue.record("An older line did not read back as `sorted`.")
             return
         }
-        #expect(sorted.seen == nil && sorted.items == [item()])
+        #expect(sorted.seen == nil && sorted.screenRead == nil && sorted.items == [item()])
 
         #expect(AttentionEventType.allCases.map(\.rawValue) == ["started", "sorted", "label", "implicit", "miss", "opened", "rest_viewed", "engaged"])
         #expect(AttentionLabelValue.allCases.map(\.rawValue) == ["yes", "no", "strong_yes", "strong_no", "explain", "clear"])
@@ -166,7 +170,8 @@ struct AttentionLogFileTests {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let notice = try String(contentsOf: root.appendingPathComponent("PRIVACY.md"), encoding: .utf8)
         let row = try #require(notice.split(separator: "\n").first { $0.hasPrefix("|") && $0.hasSuffix("| `attention/` |") })
-        for held in ["subject", "sender", "address", "preview", "link", "thumbs", "explanations", "open the pack"] {
+        for held in ["subject", "sender", "address", "preview", "link", "names of mail jobs that read from the screen", "thumbs",
+                     "explanations", "open the pack"] {
             #expect(row.contains(held), "The row doesn't say it holds \(held).")
         }
         let paragraph = try #require(notice.components(separatedBy: "\n\n").first { $0.hasPrefix("The attention test") })
@@ -275,17 +280,21 @@ struct AttentionLogFileTests {
 
     /// One event of every type, every field filled.
     private func everyEvent() -> [AttentionEvent] {
-        [event(.started), event(.sorted(sorted(items: [item(), item(index: 1)], seen: [.init(key: "k2", shown: true)]))), event(.label(label())),
+        [event(.started), event(.sorted(sorted(items: [item(), item(index: 1)], seen: [.init(key: "k2", shown: true)],
+                                               screenRead: [.init(sourceID: UUID(), sourceName: "Gmail inbox – today’s unread")]))),
+         event(.label(label())),
          event(.implicit(.init(key: "k", signal: .retract, retracts: .optionTapped, optionIndex: 1, optionMode: .prepare, item: item(), card: card()))),
          event(.miss(.init(key: "k", retract: true, item: item()))), event(.opened(.init(trigger: .taskPanel, route: "card", desk: 4))),
          event(.restViewed(.init(restDay: "2026-09-29", count: 36, reachedEnd: true, seconds: 41.5))),
          event(.engaged(.init(key: "k", what: .cardOpened, card: card())))]
     }
 
-    private func sorted(items: [AttentionItem], seen: [AttentionEvent.Sorted.Seen]? = nil) -> AttentionEvent.Sorted {
+    private func sorted(items: [AttentionItem], seen: [AttentionEvent.Sorted.Seen]? = nil,
+                        screenRead: [AttentionEvent.Sorted.ScreenRead]? = nil) -> AttentionEvent.Sorted {
         AttentionEvent.Sorted(runIDs: [runID], backfilled: true, sources: [.init(sourceID: sourceID, sourceName: "Example Gmail",
             script: "imap-mail__today", runID: runID, collectedAt: Date(timeIntervalSinceReferenceDate: 812_345_600.000_4),
-            since: Date(timeIntervalSinceReferenceDate: 812_259_200.5), arrived: 240, returned: 200, truncated: true)], items: items, seen: seen)
+            since: Date(timeIntervalSinceReferenceDate: 812_259_200.5), arrived: 240, returned: 200, truncated: true)], items: items, seen: seen,
+            screenRead: screenRead)
     }
 
     private func label() -> AttentionEvent.Label {

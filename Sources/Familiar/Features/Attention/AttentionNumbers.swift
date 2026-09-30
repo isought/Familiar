@@ -304,6 +304,39 @@ struct AttentionNumbers {
         return lines
     }
 
+    // MARK: - Mail read from the screen
+
+    /// One quiet line saying that a mail job read from the screen ran in the same card steps as the script on `days`,
+    /// such as the week's days read or the one day a rest shows. If it reads the same inbox, a message shown on its card
+    /// counts as shown only when the card names the message's Message-ID, and otherwise lands in the rest. Which inbox
+    /// it reads is not known here, so the line says "if". Removing the job is only suggested, and only while it is
+    /// `active`, if that is known. Nil when none ran on those days.
+    func screenRead(on days: [String], active: Set<UUID>? = nil) -> String? {
+        let ran = days.filter { day in day <= today && index.screenReads[day]?.isEmpty == false }
+        guard let last = ran.max() else { return nil }
+        var names: [UUID: String] = [:]
+        for day in ran.sorted() { names.merge(index.screenReads[day] ?? [:]) { _, later in later } }
+        let jobs = names.sorted { ($0.value, $0.key.uuidString) < ($1.value, $1.key.uuidString) }
+        let removable = jobs.filter { active?.contains($0.key) ?? true }
+        let one = jobs.count == 1
+        let when = ran.count == 1 ? last == today ? "today" : last == day(today, plus: -1) ? "yesterday" : "on " + weekday(last)
+            : "on \(ran.count) days"
+        var text = "Your screen-read mail job\(one ? "" : "s") \(Self.list(jobs.map(\.value))) also ran \(when). "
+            + "If \(one ? removable.isEmpty ? "it read" : "it reads" : "they read") the same inbox, "
+            + "a message shown on \(one ? "its card" : "one of their cards") can land in the rest here"
+        if !removable.isEmpty {
+            text += ", and removing \(removable.count == jobs.count ? one ? "it" : "them" : Self.list(removable.map(\.value)))"
+                + " in Manage sources keeps the numbers clean"
+        }
+        return text + "."
+    }
+
+    /// “A”, “B” and “C”.
+    private static func list(_ names: [String]) -> String {
+        let quoted = names.map { "“\($0)”" }
+        return quoted.count < 2 ? quoted.joined() : quoted.dropLast().joined(separator: ", ") + " and " + quoted[quoted.count - 1]
+    }
+
     // MARK: - Days and dates
 
     /// Noon on the day, which steps across days without tripping on a clock change.

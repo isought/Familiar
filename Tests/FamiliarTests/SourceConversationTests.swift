@@ -50,6 +50,76 @@ struct SourceConversationTests {
         #expect(fixture.conversation.context.contains("reads through mail__today"))
     }
 
+    /// A mail job read from the screen runs in the same card steps as a new script job, and if it reads the same inbox a
+    /// message on its card can land in the attention test's rest. The receipt says so and suggests removing it; nothing
+    /// is removed, and the model is told the receipt already said it.
+    @Test func aNewScriptJobSaysWhichScreenReadMailJobsStillRun() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        fixture.conversation.sourceScripts = { [SourceScript(id: "imap-mail__today", pack: "Mail over IMAP", description: "Inbox", missingSecrets: [])] }
+        let gmail = fixture.inbox(name: "Gmail inbox – today’s unread")
+        let web = LearnedReadingSource(kind: .web, name: "Team wiki", meaning: "Changes to our wiki", url: "https://wiki.example.test",
+                                       scope: "Pages changed today")
+        try fixture.store.saveReadingSource(gmail)
+        try fixture.store.saveReadingSource(web)
+
+        let result = try await fixture.call("create_source", ["name": "Morning mail", "meaning": "My inbox", "reading_rules": "Skip promotions",
+                                                               "script": "imap-mail__today"])
+
+        #expect(!result.isError)
+        #expect(fixture.receipts == ["Created “Morning mail”: it reads through Mail over IMAP. It can run now. “Gmail inbox – today’s unread”"
+            + " also reads mail from the screen. If it reads the same inbox, a message shown on its card can land in the attention test’s"
+            + " rest, and removing it in Manage sources keeps the test’s numbers clean."])
+        let text = try #require(result.content as? String)
+        #expect(text.hasSuffix(" The receipt already told the person about that screen-read job; don't repeat it, and use remove_source"
+            + " only if they ask."))
+        #expect(!text.contains("Suggest"))
+        #expect(fixture.store.readingSources.map(\.id).contains(gmail.id))
+        #expect(fixture.store.readingSources.count == 3 && fixture.store.removedSources.isEmpty)
+
+        // Two of them are named together; a script job already there is not one of them.
+        let apple = LearnedReadingSource(kind: .mail, name: "Mail inbox", meaning: "My incoming mail", application: "Mail",
+                                         bundleID: "com.apple.mail", scope: "Today's unread messages")
+        try fixture.store.saveReadingSource(apple)
+        let second = try await fixture.call("create_source", ["name": "Work mail", "meaning": "Work", "reading_rules": "Skip lists",
+                                                               "script": "imap-mail__today"])
+        #expect(fixture.receipts.last == "Created “Work mail”: it reads through Mail over IMAP. It can run now. “Gmail inbox – today’s unread”"
+            + " and “Mail inbox” also read mail from the screen. If they read the same inbox, a message shown on one of their cards can land"
+            + " in the attention test’s rest, and removing them in Manage sources keeps the test’s numbers clean.")
+        #expect((second.content as? String)?.contains("about those screen-read jobs; don't repeat it") == true)
+        #expect(fixture.store.readingSources.count == 5 && fixture.store.removedSources.isEmpty)
+
+        // Without one, the receipt is as it was.
+        try fixture.store.removeSource(id: gmail.id)
+        try fixture.store.removeSource(id: apple.id)
+        let plain = try await fixture.call("create_source", ["name": "Side mail", "meaning": "Side", "reading_rules": "All", "script": "imap-mail__today"])
+        #expect(fixture.receipts.last == "Created “Side mail”: it reads through Mail over IMAP. It can run now.")
+        #expect((plain.content as? String)?.contains("remove_source") == false)
+    }
+
+    /// A new script job that still needs connecting can't read yet, and the screen-read job may be the person's only
+    /// working mail reader, so removing it is mentioned only for once the new job reads.
+    @Test func aScriptJobThatNeedsConnectingLeavesTheScreenReadJobForLater() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        fixture.conversation.sourceScripts = {
+            [SourceScript(id: "imap-mail__today", pack: "Mail over IMAP", description: "Inbox", missingSecrets: ["IMAP_PASSWORD"])]
+        }
+        let gmail = fixture.inbox(name: "Gmail inbox – today’s unread")
+        try fixture.store.saveReadingSource(gmail)
+
+        let result = try await fixture.call("create_source", ["name": "Morning mail", "meaning": "My inbox", "reading_rules": "Skip promotions",
+                                                               "script": "imap-mail__today"])
+
+        #expect(fixture.receipts == ["Created “Morning mail”: it reads through Mail over IMAP. Connect it first: add IMAP_PASSWORD in Settings."
+            + " “Gmail inbox – today’s unread” also reads mail from the screen. If it reads the same inbox, you can remove it in Manage sources"
+            + " once this job reads your mail, for clean attention-test numbers."])
+        let text = try #require(result.content as? String)
+        #expect(!text.contains("Suggest") && text.contains("don't repeat it, and use remove_source only if they ask."))
+        #expect(fixture.connectOffers == ["Mail over IMAP"])
+        #expect(fixture.store.readingSources.map(\.id).contains(gmail.id) && fixture.store.removedSources.isEmpty)
+    }
+
     @Test func aNewJobThatNeedsConnectingPointsToSettings() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }

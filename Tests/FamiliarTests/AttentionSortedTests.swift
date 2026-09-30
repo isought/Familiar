@@ -166,6 +166,114 @@ struct AttentionSortedTests {
         #expect(ledger.isRunning && ledger.labelKey(for: mail) == mailKey)
     }
 
+    /// The founder's Gmail is read twice in one card step: through the script and by a job taught on the screen. The
+    /// step cards only the screen's copies, so each script copy counts as shown only when a card names its Message-ID.
+    @Test func aScreenReadCardThatNamesTheMessageShowsTheScriptCopy() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let ledger = fixture.ledger()
+        try fixture.read(3)
+        let screen = try fixture.readTheScreen(Self.screenCopies)
+        let input = try fixture.sort { $0.sourceID == screen.id }
+        #expect(fixture.morning.cards.count == 3 && fixture.morning.cards.allSatisfy { $0.tracking?.sourceID == screen.id })
+        ledger.recordSorted(input.observations, runIDs: input.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+
+        let sorted = try #require(fixture.sorted.first)
+        // m0 is named by the Message-ID the screen saw, m1 by its Gmail link; m2's card names only its sender and subject.
+        #expect(sorted.items.map(\.key) == (0..<3).map { CardObservation.key(sourceID: fixture.job.id, itemKey: "m\($0)@example.test") })
+        #expect(sorted.items.map(\.shown) == [true, true, false])
+        // The line names the screen's job, by its id and name only, so the numbers can say it ran that day.
+        let line = try #require(String(contentsOf: fixture.file, encoding: .utf8).split(separator: "\n").last)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        let named = try #require(json["screenRead"] as? [[String: String]])
+        #expect(named == [["sourceID": screen.id.uuidString, "sourceName": "Gmail inbox – today’s unread"]])
+        #expect(sorted.screenRead == [.init(sourceID: screen.id, sourceName: "Gmail inbox – today’s unread")])
+        let today = AttentionTime.day(of: Date(), in: ledger.timeZone), numbers = ledger.numbers
+        #expect(numbers.day(today).read == 3 && numbers.day(today).shown == 2)
+        #expect(numbers.screenRead(on: [today]) == "Your screen-read mail job “Gmail inbox – today’s unread” also ran today. If it reads"
+            + " the same inbox, a message shown on its card can land in the rest here, and removing it in Manage sources keeps the numbers clean.")
+        // A step that read only the script names nothing, and a card that names no Message-ID shows nothing else.
+        try fixture.read(2, key: { "later-\($0)@example.test" })
+        let alone = try fixture.sort(showing: 0)
+        ledger.recordSorted(alone.observations, runIDs: alone.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+        #expect(fixture.sorted.count == 2 && fixture.sorted.last?.screenRead == nil && fixture.sorted.last?.items.contains(where: \.shown) == false)
+    }
+
+    /// What the person does to a screen-read card that named a message's Message-ID is about that message: the yes
+    /// guessed from it counts for the script's copy, and the rest's Shown row finds the card. A screen card that named
+    /// no Message-ID is still recorded by a digest of its own key, and no screen card gets thumbs on its face.
+    @Test func actingOnAScreenCardThatNamedTheMessageLabelsTheScriptCopy() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let ledger = fixture.ledger()
+        ledger.watch(fixture.morning)
+        try fixture.read(3)
+        let screen = try fixture.readTheScreen(Self.screenCopies)
+        let input = try fixture.sort { $0.sourceID == screen.id }
+        ledger.recordSorted(input.observations, runIDs: input.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+        let script = (0..<3).map { CardObservation.key(sourceID: fixture.job.id, itemKey: "m\($0)@example.test") }
+        let cards = fixture.morning.cards
+        func card(_ index: Int) throws -> MorningCard { try #require(cards.first { $0.title == "About Message \(index)" }) }
+        let m0 = try card(0), m1 = try card(1), m2 = try card(2)
+        #expect(ledger.shownKey(namedBy: m0) == script[0] && ledger.shownKey(namedBy: m1) == script[1] && ledger.shownKey(namedBy: m2) == nil)
+        #expect(ledger.card(showing: script[0], in: cards)?.id == m0.id && ledger.card(showing: script[1], in: cards)?.id == m1.id)
+        #expect(ledger.card(showing: script[2], in: cards) == nil)
+        #expect(cards.allSatisfy { ledger.labelKey(for: $0) == nil })   // the cards stay as they were
+
+        try fixture.morning.setDisposition(cardID: m0.id, to: .mine)
+        ledger.cardOpened(m1)
+        try fixture.morning.setDisposition(cardID: m2.id, to: .ignored)
+        let events = AttentionLogFile.read(fixture.file).events
+        let implicit = events.compactMap { if case .implicit(let value) = $0.payload { return value }; return nil }
+        let engaged = events.compactMap { if case .engaged(let value) = $0.payload { return value }; return nil }
+        #expect(implicit.count == 2 && implicit[0].key == script[0] && implicit[0].item.key == script[0] && implicit[0].item.shown)
+        #expect(implicit[0].item.subject == "Message 0" && implicit[0].card.cardID == m0.id)
+        #expect(implicit[1].key.hasPrefix(screen.id.uuidString.lowercased() + ":") && implicit[1].item.subject.isEmpty)
+        #expect(engaged.map(\.key) == [script[1]])
+        let today = AttentionTime.day(of: Date(), in: ledger.timeZone)
+        var day = ledger.numbers.day(today)
+        #expect(day.shown == 2 && day.yesGuessed == 1 && day.yesTapped == 0 && day.leftAlone == 1)
+
+        // A thumb for the message, as the rest's Shown row gives it, counts as tapped.
+        ledger.tapThumb(key: script[1], card: m1, thumb: .up, via: .shown)
+        day = ledger.numbers.day(today)
+        #expect(day.yesTapped == 1 && day.leftAlone == 0 && ledger.effective(for: script[1]).explicit == .yes)
+        let label = try #require(AttentionLogFile.read(fixture.file).events.last?.payload)
+        guard case .label(let written) = label else { Issue.record("Expected a label"); return }
+        #expect(written.key == script[1] && written.item.shown && written.card?.cardID == m1.id)
+    }
+
+    /// Monday's step, with the screen's job beside the script, is written at once; Tuesday's is saved just before
+    /// Noteling quit, and the next launch writes its line with the same job named and the same Message-ID matched.
+    @Test func aBackfilledStepNamesTheScreenReadJobToo() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let monday = Self.date("2026-09-28T12:00:00Z"), tuesday = Self.date("2026-09-29T12:00:00Z")
+        let ledger = fixture.ledger(clock: monday)
+        try fixture.read(3, at: monday)
+        let screen = try fixture.readTheScreen(Self.screenCopies, at: monday)
+        let first = try fixture.sort(at: monday) { $0.sourceID == screen.id }
+        ledger.recordSorted(first.observations, runIDs: first.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+
+        try fixture.read(2, key: { "t\($0)@example.test" }, at: tuesday)
+        try fixture.readTheScreen([ReadingItem(id: "row-t0", title: "Message 0", text: "Sender 0 · Message 0", evidence: "Visible row",
+            identityKey: "t0@example.test", identityEvidence: "Message-ID in the headers")], at: tuesday)
+        try fixture.sort(at: tuesday) { $0.sourceID == screen.id }
+        let relaunched = fixture.ledger(clock: tuesday.addingTimeInterval(3_600))
+        relaunched.backfill(receipts: fixture.morning.workspace.cardGenerations ?? [], sources: fixture.sources, cards: fixture.morning.cards)
+
+        let lines = fixture.sorted
+        #expect(lines.count == 2 && lines[1].backfilled && lines.allSatisfy { $0.screenRead?.map(\.sourceID) == [screen.id] })
+        #expect(lines[1].items.map(\.shown) == [true, false])
+        let numbers = relaunched.numbers
+        #expect(numbers.screenRead(on: ["2026-09-28", "2026-09-29"]) == "Your screen-read mail job “Gmail inbox – today’s unread”"
+            + " also ran on 2 days. If it reads the same inbox, a message shown on its card can land in the rest here, and removing it"
+            + " in Manage sources keeps the numbers clean.")
+        // Once it is removed there is nothing to suggest, but those days were still read beside it.
+        #expect(numbers.screenRead(on: ["2026-09-28", "2026-09-29"], active: [fixture.job.id]) == "Your screen-read mail job"
+            + " “Gmail inbox – today’s unread” also ran on 2 days. If it read the same inbox, a message shown on its card can land in the rest here.")
+    }
+
     @Test func theCardStepWritesSortedOnlyWhenItSucceeds() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -625,6 +733,18 @@ struct AttentionSortedTests {
                               at: at, timeZone: zone ?? newYork)
     }
 
+    /// What a Gmail job taught on the screen read of the script's m0, m1 and m2: the Message-ID in m0's headers, a
+    /// Gmail link that searches for m1's, and only m2's sender address, subject and date.
+    private static let screenCopies = [
+        ReadingItem(id: "row-0", title: "Message 0", text: "Sender 0 · Message 0", evidence: "Visible row, headers open",
+                    identityKey: "<M0@Example.test>", identityEvidence: "Message-ID <M0@Example.test> in the headers"),
+        ReadingItem(id: "row-1", title: "Message 1", text: "Sender 1 · Message 1", evidence: "Visible row",
+                    url: "https://mail.google.com/mail/u/0/#search/rfc822msgid%3Am1%40example.test"),
+        ReadingItem(id: "row-2", title: "Message 2", text: "Sender 2 · Message 2", evidence: "Visible row",
+                    url: "https://mail.google.com/mail/u/0/#inbox/FMfcgzQXJWDsKmbLdtPq", identityKey: "sender2@example.test | Message 2 | Sep 30",
+                    identityEvidence: "Sender <sender2@example.test>, subject and date shown in the row"),
+    ]
+
     private static func proposal(_ key: String) -> [String: Any] {
         ["observationKey": key, "title": "Reply about the lease", "meaning": "The renewal lapses Friday.",
          "options": [["title": "Draft a reply", "instruction": "Draft a short reply using the saved message.", "mode": "prepare"]]]
@@ -691,13 +811,37 @@ struct AttentionSortedTests {
                 coverage: .complete, accountEvidence: "Current account", sourceEvidence: "Inbox", scopeEvidence: "Recent rows"))
         }
 
+        /// Saves one read of the Gmail inbox by a job taught on the screen, not through a script, and returns the job.
+        @discardableResult
+        func readTheScreen(_ items: [ReadingItem], name: String = "Gmail inbox – today’s unread", at: Date = Date()) throws
+            -> LearnedReadingSource {
+            let job = sources.readingSources.first { $0.name == name } ?? LearnedReadingSource(kind: .mail, name: name,
+                meaning: "My personal inbox", application: "Google Chrome", url: "https://mail.google.com/mail/u/0/#inbox",
+                scope: "Today's unread messages")
+            try sources.saveReadingSource(job)
+            try sources.saveReadingSnapshot(ReadingSnapshot(requestID: UUID(), sourceID: job.id, source: job, collectedAt: at, items: items,
+                coverage: .complete, accountEvidence: "Signed in as me@example.test", sourceEvidence: "Gmail inbox",
+                scopeEvidence: "Today's unread messages"))
+            return job
+        }
+
         /// What a card step does with every saved run that has no receipt: a card for each of the first `count`
         /// observations, then the receipt.
         @discardableResult
         func sort(showing count: Int, at: Date = Date()) throws -> CardGenerationInput {
+            try sort(at: at) { observations in Array(observations.prefix(count)) }
+        }
+
+        /// The same, with a card for each observation `carding` picks.
+        @discardableResult
+        func sort(at: Date = Date(), carding: @escaping (CardObservation) -> Bool) throws -> CardGenerationInput {
+            try sort(at: at) { observations in observations.filter(carding) }
+        }
+
+        private func sort(at: Date, picking: ([CardObservation]) -> [CardObservation]) throws -> CardGenerationInput {
             let processed = Set((morning.workspace.cardGenerations ?? []).flatMap(\.runIDs))
             let input = CardGenerationInput.saved(in: sources, runID: nil, excluding: processed)
-            let proposals = input.observations.prefix(count).map {
+            let proposals = picking(input.observations).map {
                 CardProposal(observationKey: $0.id, title: "About \($0.title)", meaning: "It needs a reply.",
                     action: MorningAction(title: "Draft a reply", instruction: "Draft a short reply."))
             }

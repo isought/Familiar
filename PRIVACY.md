@@ -14,7 +14,7 @@ The app stores its data in `~/.noteling`, or in `$NOTELING_HOME` if you set it. 
 | Sources you set up, run history and findings | `calendar/`, `runs/` |
 | Cards, your decisions and context, Who's Who, queued work | `morning/` |
 | Watch Me recordings, only while a draft is being written | `recordings/` |
-| The attention test: each message a mail job read through a script (its subject, sender and address, a short preview and its link) and whether it became a card; your thumbs, explanations and “Should have shown me” marks; what you do with your cards; and when you open the pack | `attention/` |
+| The attention test: each message a mail job read through a script (its subject, sender and address, a short preview and its link) and whether it became a card, and the names of mail jobs that read from the screen beside it; your thumbs, explanations and “Should have shown me” marks; what you do with your cards; and when you open the pack | `attention/` |
 | Activity log | `noteling.log` |
 
 Watch Me recordings, developer-build secrets, the attention test and the activity log can be read only by your macOS user account.

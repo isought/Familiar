@@ -63,14 +63,16 @@ struct AttentionScreenView: View {
     @ObservedObject var store: MorningStore
     @ObservedObject var navigation: MorningNavigation
     let screen: AttentionScreen
+    /// The jobs still in Manage sources, asked each time a screen is drawn; nil when that is not known.
+    var activeSources: (() -> Set<UUID>)? = nil
 
     var body: some View {
         switch screen {
         case .rest(let day):
             // Each day's rest is its own visit, so reaching one day's end never checks another.
-            AttentionRestView(ledger: ledger, store: store, navigation: navigation, day: day).id(day)
+            AttentionRestView(ledger: ledger, store: store, navigation: navigation, day: day, activeSources: activeSources).id(day)
         case .week:
-            AttentionWeekView(ledger: ledger, navigation: navigation)
+            AttentionWeekView(ledger: ledger, navigation: navigation, activeSources: activeSources)
         }
     }
 }
@@ -84,8 +86,14 @@ struct AttentionRestView: View {
     @ObservedObject var navigation: MorningNavigation
     /// "yyyy-MM-dd".
     let day: String
+    /// The jobs still in Manage sources; nil when that is not known.
+    var activeSources: (() -> Set<UUID>)? = nil
     @State private var appeared: Date?
     @State private var reachedTheEnd = false
+
+    /// Says when a mail job read from the screen ran beside the script this day, so a message shown on its card can
+    /// be in the rest.
+    func screenRead(_ numbers: AttentionNumbers) -> String? { numbers.screenRead(on: [day], active: activeSources?()) }
 
     var body: some View {
         let numbers = ledger.numbers
@@ -96,6 +104,10 @@ struct AttentionRestView: View {
                 chips(numbers).padding(.bottom, 10)
                 Text(summary(counts, numbers)).font(.system(size: 13)).foregroundStyle(Pad.inkSoft)
                     .fixedSize(horizontal: false, vertical: true).padding(.bottom, 12)
+                if let screenRead = screenRead(numbers) {
+                    Text(screenRead).font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
+                        .fixedSize(horizontal: false, vertical: true).padding(.bottom, 12)
+                }
                 if let error = ledger.error {
                     Text(error).font(.system(size: 12)).foregroundStyle(Pad.redInk).textSelection(.enabled).padding(.bottom, 8)
                 }
@@ -147,9 +159,10 @@ struct AttentionRestView: View {
         ledger.restViewed(day: day, count: counts.restCount, reachedEnd: false, seconds: seconds)
     }
 
-    /// The row the screen shows for a shown message: its card, or its subject once the card is gone.
+    /// The row the screen shows for a shown message: its card, or the card from another job that named its
+    /// Message-ID, or its subject once the card is gone.
     func shownRow(_ key: String) -> AttentionShownRow {
-        AttentionShownRow(ledger: ledger, key: key, card: store.cards.first { $0.tracking?.key == key }) { navigation.route = .card($0) }
+        AttentionShownRow(ledger: ledger, key: key, card: ledger.card(showing: key, in: store.cards)) { navigation.route = .card($0) }
     }
 
     /// The row the screen shows for a message in the rest.
@@ -211,7 +224,8 @@ struct AttentionRestView: View {
 }
 
 /// A message a card step showed, by its card's title, with the card's thumbs, so a guess can be fixed after acting
-/// on the card put it away.
+/// on the card put it away. A card from another job that named the message's Message-ID gets thumbs for the message
+/// here only.
 struct AttentionShownRow: View {
     @ObservedObject var ledger: AttentionLedger
     let key: String
@@ -225,7 +239,7 @@ struct AttentionShownRow: View {
                 Button { open(card.id) } label: {
                     Text(card.title).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).help("Open this file")
-                AttentionThumbs(ledger: ledger, card: card, via: .shown)
+                AttentionThumbs(ledger: ledger, card: card, via: .shown, message: card.tracking?.key == key ? nil : key)
             } else {
                 Text(ledger.index.item[key]?.subject ?? "A message whose card is gone").lineLimit(1).foregroundStyle(Pad.inkSoft)
                 Spacer(minLength: 0)
@@ -318,9 +332,16 @@ struct AttentionRowExplainField: View {
 struct AttentionWeekView: View {
     @ObservedObject var ledger: AttentionLedger
     @ObservedObject var navigation: MorningNavigation
+    /// The jobs still in Manage sources; nil when that is not known.
+    var activeSources: (() -> Set<UUID>)? = nil
 
     private static let widths: [CGFloat] = [62, 42, 52, 84, 30, 50, 62, 52]
     private static let titles = ["", "Read", "Showed", "Yes (tapped)", "No", "Missed", "Rest", "Opened"]
+
+    /// Says on how many of the week's days a mail job read from the screen ran beside the script.
+    func screenRead(_ numbers: AttentionNumbers, _ week: AttentionNumbers.Week) -> String? {
+        numbers.screenRead(on: week.days.map(\.day), active: activeSources?())
+    }
 
     var body: some View {
         let numbers = ledger.numbers
@@ -350,6 +371,7 @@ struct AttentionWeekView: View {
                         bar(week.opened)
                     }
                     VStack(alignment: .leading, spacing: 4) {
+                        if let screenRead = screenRead(numbers, week) { Text(screenRead) }
                         ForEach(week.gaps, id: \.self) { Text($0) }
                         if let power = week.power { Text(power) }
                         Text("Labels: " + week.labels)

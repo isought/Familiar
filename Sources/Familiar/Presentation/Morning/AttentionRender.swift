@@ -28,7 +28,34 @@ extension MorningRender {
         // A second copy of the week, so the labels the size check gives leave the rendered week as it was.
         try checkThumbSizes(week: try AttentionWeek(directory: fixtures.appendingPathComponent("attention-sizes")), title: lease)
         try renderAttentionScreens(week: week, directory: directory)
+        try renderScreenRead(fixtures: fixtures, directory: directory)
         try renderUnsaved(fixtures: fixtures, directory: directory)
+    }
+
+    /// Today's rest and the week when a Gmail job taught on the screen read the inbox beside the script on the last
+    /// three mornings: one quiet line names it under the rest's summary and first among the week's footnotes. The
+    /// numbers are the week's own, as the job's cards took none of them here.
+    @MainActor private static func renderScreenRead(fixtures: URL, directory: URL) throws {
+        let today = "2026-09-30"
+        let week = try AttentionWeek(directory: fixtures.appendingPathComponent("attention-screen-read"),
+                                     screenRead: ["2026-09-28", "2026-09-29", today])
+        week.visit(leaving: ["2026-09-28", today])
+        let ledger = week.ledger, navigation = MorningNavigation()
+        ledger.clock = { AttentionWeek.time("2026-09-30T09:30:00") }
+        guard ledger.numbers.screenRead(on: [today]) != nil, ledger.numbers.day(today).read == 40 else {
+            throw AttentionRenderFailure("The screen’s Gmail job was not named beside today’s read.")
+        }
+        func save(_ name: String, _ route: MorningNavigation.Route) throws {
+            navigation.route = route
+            try image(MorningFilesView(store: week.store, navigation: navigation, close: {}, filed: {}, handoff: { _ in },
+                                       calendarSources: week.sources, discussCard: { _ in }, attention: ledger),
+                      size: NSSize(width: 650, height: MorningPanelController.preferredHeight(for: route)),
+                      to: directory.appendingPathComponent(name))
+        }
+        try save("attention-rest-screen-read.png", .attention(.rest(day: today)))
+        ledger.restViewed(day: today, count: ledger.numbers.day(today).restCount, reachedEnd: true, seconds: 48)
+        try save("attention-week-screen-read.png", .attention(.week))
+        if let error = ledger.error { throw AttentionRenderFailure(error) }
     }
 
     /// The folders screen when a file stands where the ledger's folder goes, so the first read's line couldn't be
@@ -175,15 +202,22 @@ private struct AttentionRenderFailure: Error, CustomStringConvertible {
     let store: MorningStore
     let ledger: AttentionLedger
     let job: LearnedReadingSource
+    /// A Gmail job taught on the screen, and the mornings it read the inbox beside the script.
+    let screenJob: LearnedReadingSource
+    let screenRead: Set<String>
 
-    init(directory: URL) throws {
+    init(directory: URL, screenRead: Set<String> = []) throws {
         sources = CalendarStore(directory: directory.appendingPathComponent("sources"))
         store = MorningStore(directory: directory.appendingPathComponent("morning"))
         let start = Self.time(Self.mornings[0].at)
         ledger = AttentionLedger(directory: directory.appendingPathComponent("attention"), clock: { start }, timeZone: Self.zone)
         job = LearnedReadingSource(kind: .mail, name: "Example Gmail", meaning: "My personal inbox · fictional example",
             scope: "Show what needs me: replies, deadlines, bills and appointments.", script: "imap-mail__today")
+        screenJob = LearnedReadingSource(kind: .mail, name: "Gmail inbox – today’s unread", meaning: "My personal inbox · fictional example",
+            application: "Google Chrome", url: "https://mail.example.test/inbox", scope: "Today’s unread messages")
+        self.screenRead = screenRead
         try sources.saveReadingSource(job)
+        if !screenRead.isEmpty { try sources.saveReadingSource(screenJob) }
         ledger.watch(store)
         for (day, morning) in Self.mornings.enumerated() { try read(morning, day: day) }
         if let error = ledger.error { throw AttentionRenderFailure(error) }
@@ -237,7 +271,21 @@ private struct AttentionRenderFailure: Error, CustomStringConvertible {
         guard let run = sources.runStore.runs.first(where: { $0.entries.contains { $0.readingSnapshot?.id == snapshot.id } }) else {
             throw AttentionRenderFailure("The \(stamp) read was not saved.")
         }
-        let input = CardGenerationInput.saved(in: sources, runID: run.id, excluding: [])
+        // On the mornings the screen's job ran it read the first two unread messages too, and the same card step
+        // took both reads.
+        let screenRan = screenRead.contains(String(morning.at.prefix(10)))
+        if screenRan {
+            let rows = morning.shown.prefix(2).enumerated().map { index, shown in
+                ReadingItem(id: "screen-\(stamp)-\(index)", title: shown.mail.subject, text: shown.mail.preview,
+                            evidence: "Visible row from \(shown.mail.from)", url: "https://mail.example.test/inbox/\(stamp)-\(index)")
+            }
+            try sources.saveReadingSnapshot(ReadingSnapshot(requestID: UUID(), sourceID: screenJob.id, source: screenJob, collectedAt: at,
+                items: rows, coverage: .complete, accountEvidence: "alex@example.test", sourceEvidence: "Inbox in Google Chrome",
+                scopeEvidence: "Today’s unread messages"))
+        }
+        let input = screenRan
+            ? CardGenerationInput.saved(in: sources, runID: nil, excluding: Set((store.workspace.cardGenerations ?? []).flatMap(\.runIDs)))
+            : CardGenerationInput.saved(in: sources, runID: run.id, excluding: [])
         let proposals = morning.shown.enumerated().map { index, shown in
             CardProposal(observationKey: CardObservation.key(sourceID: job.id, itemKey: "\(stamp)-\(index)@mail.example.test"),
                 title: shown.title, meaning: shown.meaning,
