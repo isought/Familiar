@@ -182,6 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.attention.recordSorted(observations, runIDs: runIDs, runs: self.calendarSources.runStore, cards: self.morning.cards)
         }
         attention.backfill(receipts: morning.workspace.cardGenerations ?? [], sources: calendarSources, cards: morning.cards)
+        attention.watch(morning)
         calendarReader.trackedItems = { [weak self] sourceID in self?.morning.trackedItems(sourceID: sourceID) ?? [] }
         calendarReader.openSource = { await SourcePageOpener().prepare($0) }
         calendarReader.onRunFinished = { [weak self] runID in _ = self?.cardGeneration.generate(runID: runID) }

@@ -1,8 +1,8 @@
 import Foundation
 
 /// What the attention ledger holds, folded from its events: when the test started, which runs a card step has
-/// sorted, the day each item was first read, whether it was ever shown, and each script read's own counts. Pure, so
-/// the numbers can be worked out and tested without a file.
+/// sorted, the day each item was first read, whether it was ever shown, each script read's own counts, each item's
+/// label and the items marked missed. Pure, so the numbers can be worked out and tested without a file.
 struct AttentionIndex {
     /// Items first read within this many days keep their full copy for the rest screen; older ones keep only their day.
     static let itemDays = 14
@@ -29,6 +29,10 @@ struct AttentionIndex {
     private(set) var item: [String: AttentionItem] = [:]
     /// Each script source's reads, oldest first.
     private(set) var sortedReads: [UUID: [Read]] = [:]
+    /// Each key's thumbs, explanation and what the person did, in the order they were written.
+    private(set) var labels: [String: AttentionLabels.Effective] = [:]
+    /// Items the person said should have been shown, and has not taken back.
+    private(set) var missedKeys: Set<String> = []
     /// Keys first read before this day keep only their `firstDay`.
     let keepsItemsFrom: String
 
@@ -63,7 +67,13 @@ struct AttentionIndex {
                 firstDay[item.key] = event.day
                 self.item[item.key] = event.day >= keepsItemsFrom ? item : nil
             }
-        case .label, .implicit, .miss, .opened, .restViewed, .engaged:
+        case .label(let label):
+            labels[label.key, default: .init()].add(label.value, text: label.text)
+        case .implicit(let implicit):
+            labels[implicit.key, default: .init()].add(implicit.signal, retracts: implicit.retracts)
+        case .miss(let miss):
+            if miss.retract { missedKeys.remove(miss.key) } else { missedKeys.insert(miss.key) }
+        case .opened, .restViewed, .engaged:
             break
         }
     }

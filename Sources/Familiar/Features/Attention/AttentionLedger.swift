@@ -1,9 +1,10 @@
 import Combine
 import Foundation
 
-/// The attention test's record on this Mac: what each card step read from script sources and which of those items
-/// it showed. It is kept apart from cards, runs and chat, is never given to a model and never goes into
-/// noteling.log. The file is read once at launch; an event joins the index only once it is on disk.
+/// The attention test's record on this Mac: what each card step read from script sources, which of those items it
+/// showed, and what the person said and did about them. It is kept apart from cards, runs and chat, is never given
+/// to a model and never goes into noteling.log. The file is read once at launch; an event joins the index only once
+/// it is on disk.
 @MainActor
 final class AttentionLedger: ObservableObject {
     /// Bumped after every write, so views that read the index redraw.
@@ -18,6 +19,10 @@ final class AttentionLedger: ObservableObject {
     /// By default it follows the Mac's zone while Noteling keeps running; each event keeps the zone it was written in.
     let timeZone: TimeZone
     private let file: AttentionLogFile
+    /// The watched store, for finding a label's card, and its last saved workspace.
+    private weak var store: MorningStore?
+    private var last: MorningWorkspace?
+    private var watching: AnyCancellable?
 
     init(directory: URL = Config.dir.appendingPathComponent("attention"), clock: @escaping () -> Date = Date.init,
          timeZone: TimeZone = .autoupdatingCurrent) {
@@ -51,6 +56,91 @@ final class AttentionLedger: ObservableObject {
             return sorted(observations, runIDs: receipt.runIDs, runs: sources.runStore, cards: cards, backfilled: true, at: receipt.completedAt)
         }
         append(events)
+    }
+
+    // MARK: - What the person did
+
+    /// Counts what the person already does to cards as labels, from every saved change to the store, so a change
+    /// made from chat counts the same as one made on the card.
+    func watch(_ store: MorningStore) {
+        self.store = store
+        last = store.workspace
+        watching = store.$workspace.dropFirst().sink { [weak self] next in self?.observe(next) }
+    }
+
+    /// `@Published` sends the new workspace before the store holds it, so this compares it with its own copy of the
+    /// last one. Everything one save did goes out in one write.
+    private func observe(_ next: MorningWorkspace) {
+        guard let previous = last else { return }
+        last = next
+        let now = clock()
+        let events = AttentionImplicit.signals(from: previous, to: next).compactMap { change -> AttentionEvent? in
+            guard let card = next.cards.first(where: { $0.id == change.cardID }), let item = item(for: change.key, card: card) else { return nil }
+            return event(.implicit(.init(key: change.key, signal: change.signal, retracts: change.retracts, optionIndex: change.optionIndex,
+                optionMode: change.optionMode, item: item, card: AttentionCardContext(card, at: now))), at: now)
+        }
+        guard !events.isEmpty else { return }
+        append(events)
+    }
+
+    // MARK: - Labels
+
+    /// The label as it stands: the latest thumb, else a guess from what the person did, and any explanation.
+    func effective(for key: String) -> AttentionLabels.Effective { index.labels[key] ?? .init() }
+
+    func explanation(for key: String) -> String? { index.labels[key]?.explanation }
+
+    /// A thumb only labels the item: it never changes the card, its folder or its work.
+    func tapThumb(key: String, card: MorningCard?, thumb: AttentionLabels.Thumb, via: AttentionVia) {
+        label(key: key, card: card, value: AttentionLabels.next(current: effective(for: key).explicit, tapped: thumb), via: via)
+    }
+
+    /// Saves why an item was worth the person's notice, or not, and ends explaining it. The words never change the label.
+    func explain(key: String, card: MorningCard?, text: String, via: AttentionVia) {
+        if explaining == key { explaining = nil }
+        // Trimmed again after the cut, so the file holds what the index keeps and the same words are saved once.
+        let text = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(AttentionLabels.explanationLimit))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text != explanation(for: key) ?? "" else { return }
+        label(key: key, card: card, value: .explain, via: via, text: text)
+    }
+
+    /// Records the label with the one in effect before it. An item neither read by a card step nor on a card has
+    /// nothing to label.
+    func label(key: String, card: MorningCard?, value: AttentionLabelValue, via: AttentionVia, text: String? = nil) {
+        let card = card ?? store?.cards.first { $0.tracking?.key == key }
+        guard let item = item(for: key, card: card) else { return }
+        let now = clock()
+        append([event(.label(.init(key: key, value: value, weight: AttentionLabels.weight(value), prior: effective(for: key).state,
+            text: text, via: via, item: item, card: card.map { AttentionCardContext($0, at: now) })), at: now)])
+    }
+
+    func beginExplaining(_ key: String) { explaining = key }
+
+    func cancelExplaining() { explaining = nil }
+
+    /// "Should have shown me" on an item a card step read, or taking it back.
+    func miss(key: String, retract: Bool = false) {
+        guard var item = index.item[key] else { return }
+        item.shown = index.shownKeys.contains(key)
+        append([event(.miss(.init(key: key, retract: retract, item: item)), at: clock())])
+    }
+
+    /// The item as a card step first read it. For a card the ledger has no copy of, such as one from before the ledger,
+    /// it is the item as the card knows it, without mail facts. Only a source the test reads keeps the card's words; a
+    /// calendar or screen read is recorded by which item it was, never by what it said.
+    private func item(for key: String, card: MorningCard?) -> AttentionItem? {
+        if var item = index.item[key] {
+            item.shown = index.shownKeys.contains(key) || card != nil
+            return item
+        }
+        guard let card, let tracking = card.tracking, tracking.key == key else { return nil }
+        let source = card.sources.first, counted = index.sortedReads[tracking.sourceID] != nil
+        return AttentionItem(key: key, sourceID: tracking.sourceID, sourceName: tracking.sourceName, kind: source?.kind ?? "",
+            runID: tracking.changes.first { $0.runID != nil }?.runID ?? tracking.lastRunID, itemID: tracking.itemKey,
+            readAt: tracking.firstSeenAt, subject: counted ? source?.title ?? card.title : "",
+            preview: counted ? String((source?.excerpt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(AttentionItem.previewLimit)) : "",
+            url: counted ? (source?.url).flatMap { $0.isEmpty ? nil : $0 } : nil, shown: true)
     }
 
     // MARK: - Writing
