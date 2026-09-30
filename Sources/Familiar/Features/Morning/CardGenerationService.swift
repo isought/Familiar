@@ -76,6 +76,21 @@ final class CardGenerationService: ObservableObject {
         Set(sources.sources.map(\.id) + sources.readingSources.map(\.id))
     }
 
+    /// For a workspace saved before judgments were kept: every item of a run that already has a receipt, at its
+    /// revision today, so the first step after updating doesn't put mail the app already sorted to the model again.
+    private func sortedBefore() -> [String: String] {
+        let processed = processedRunIDs, active = activeSourceIDs
+        var revisions: [String: String] = [:]
+        // Newest run first, so an item read more than once keeps its latest revision.
+        for run in sources.runStore.runs.sorted(by: { $0.startedAt > $1.startedAt }) where processed.contains(run.id) {
+            for entry in run.entries where active.contains(entry.sourceID) && [.complete, .partial].contains(entry.state) {
+                let rules = CardGenerationInput.rules(for: entry, in: sources)
+                revisions.merge(CardGenerationInput.revisions(run: run, entry: entry, rules: rules)) { newer, _ in newer }
+            }
+        }
+        return revisions
+    }
+
     private func drain() async {
         while !Task.isCancelled, !pending.isEmpty {
             // A collection callback may arrive before the next queued task has
@@ -106,8 +121,12 @@ final class CardGenerationService: ObservableObject {
         var handle: TaskExecution?
         var elapsed: TimeInterval = 0
         do {
+            // Only new or changed items go to the model: one it judged before would get a fresh chance at a card
+            // each time it is read again. With nothing left to judge there is no model call at all.
+            let earlier = morning.workspace.judgments == nil ? sortedBefore() : nil
+            let judged = earlier ?? (morning.workspace.judgments ?? [:]).mapValues(\.revision)
             var proposals: [CardProposal] = []
-            let batches = input.candidateBatches
+            let batches = input.candidateBatches(judged: judged)
             for (index, observations) in batches.enumerated() {
                 try Task.checkCancellation()
                 let label = batches.count > 1 ? " · batch \(index + 1) of \(batches.count)" : ""
@@ -141,8 +160,12 @@ final class CardGenerationService: ObservableObject {
             // observations remain readable but cannot recreate active cards.
             let observations = input.observations.filter { activeSourceIDs.contains($0.sourceID) }
             let keys = Set(observations.map(\.id))
-            let summary = try morning.applyCardGeneration(observations: observations,
-                proposals: proposals.filter { keys.contains($0.observationKey) }, runIDs: input.runIDs, at: Date())
+            // Everything this step read counts as judged now, fresh or known; a first step also keeps what was sorted before.
+            let revisions = (earlier ?? [:]).merging(input.revisions.filter { keys.contains($0.key) }) { _, current in current }
+            var summary = try morning.applyCardGeneration(observations: observations,
+                proposals: proposals.filter { keys.contains($0.observationKey) }, runIDs: input.runIDs, judged: revisions, at: Date())
+            summary.sent = Set(batches.joined().map(\.id)).count
+            summary.alreadySorted = Set(observations.filter { input.isJudged($0, in: judged) }.map(\.id)).count
             onSorted?(observations, input.runIDs)
             status = summary.message
             error = nil
@@ -172,13 +195,24 @@ struct CardGenerationInput {
     var runIDs: [UUID]
     var observations: [CardObservation]
     var rules: [SourceRules] = []
+    /// Each observation's judgment revision, by id (see `revisions(run:entry:rules:)`). Kept beside the observations,
+    /// which the model reads as facts.
+    var revisions: [String: String] = [:]
     static let candidateLimit = 80
-    var candidateBatches: [[CardObservation]] {
-        let candidates = observations.filter { $0.state != .resolved }
-        if candidates.isEmpty { return [[]] }
+
+    /// The unresolved observations not already judged at their revision, in batches the model reads at once; none
+    /// when there is nothing to judge.
+    func candidateBatches(judged: [String: String] = [:]) -> [[CardObservation]] {
+        let candidates = observations.filter { $0.state != .resolved && !isJudged($0, in: judged) }
         return stride(from: 0, to: candidates.count, by: Self.candidateLimit).map { start in
             Array(candidates[start..<min(start + Self.candidateLimit, candidates.count)])
         }
+    }
+
+    /// Judged before, at this revision and under these rules. An observation without a revision never is.
+    func isJudged(_ observation: CardObservation, in judged: [String: String]) -> Bool {
+        guard let revision = revisions[observation.id] else { return false }
+        return judged[observation.id] == revision
     }
 
     @MainActor static func saved(in sources: CalendarStore, runID: UUID?, excluding: Set<UUID>) -> Self {
@@ -196,13 +230,38 @@ struct CardGenerationInput {
             $0.2 == $1.2 ? $0.1.sourceID.uuidString < $1.1.sourceID.uuidString : $0.2 > $1.2
         }
         let ids = Array(Set(selected.map { $0.0.id })).sorted { $0.uuidString < $1.uuidString }
-        let rules = selected.compactMap { _, entry, _ -> SourceRules? in
-            // Today's rules, if the job was changed since this run; otherwise the ones it ran with.
-            guard let source = sources.readingSources.first(where: { $0.id == entry.sourceID }) ?? entry.readingSnapshot?.source,
-                  calendarHasText(source.scope) else { return nil }
-            return SourceRules(sourceID: source.id, sourceName: entry.sourceName, meaning: source.meaning, readingRules: source.scope)
+        var rules: [SourceRules] = [], revisions: [String: String] = [:]
+        for (run, entry, _) in selected {
+            let current = Self.rules(for: entry, in: sources)
+            if let current { rules.append(current) }
+            revisions.merge(Self.revisions(run: run, entry: entry, rules: current)) { first, _ in first }
         }
-        return Self(runIDs: ids, observations: selected.flatMap { observations(run: $0.0, entry: $0.1) }, rules: rules)
+        return Self(runIDs: ids, observations: selected.flatMap { observations(run: $0.0, entry: $0.1) }, rules: rules, revisions: revisions)
+    }
+
+    /// Today's rules, if the job was changed since this run; otherwise the ones it ran with.
+    @MainActor static func rules(for entry: SourceRunEntry, in sources: CalendarStore) -> SourceRules? {
+        guard let source = sources.readingSources.first(where: { $0.id == entry.sourceID }) ?? entry.readingSnapshot?.source,
+              calendarHasText(source.scope) else { return nil }
+        return SourceRules(sourceID: source.id, sourceName: entry.sourceName, meaning: source.meaning, readingRules: source.scope)
+    }
+
+    /// Each observation's judgment revision, by id: what judging it rests on, plus its source's rules. For script mail
+    /// that is its subject, sender and time only, so reading, starring or labelling it in Gmail doesn't make it new
+    /// again; anything else is new again when any observed fact changes.
+    static func revisions(run: SourceRunRecord, entry: SourceRunEntry, rules: SourceRules?) -> [String: String] {
+        var mail: [String: MailFacts] = [:]
+        for item in entry.readingSnapshot?.items ?? [] {
+            guard let facts = item.mail else { continue }
+            let key = CardObservation.key(sourceID: entry.sourceID, itemKey: identity(item.identityKey, fallback: item.id))
+            if mail[key] == nil { mail[key] = facts }
+        }
+        var revisions: [String: String] = [:]
+        for observation in observations(run: run, entry: entry) where revisions[observation.id] == nil {
+            let facts = mail[observation.id].map { [observation.title, $0.from, $0.received ?? ""] } ?? [observation.fingerprint]
+            revisions[observation.id] = CardJudgment.revision(facts + [rules?.meaning ?? "", rules?.readingRules ?? ""])
+        }
+        return revisions
     }
 
     static func observations(run: SourceRunRecord, entry: SourceRunEntry) -> [CardObservation] {

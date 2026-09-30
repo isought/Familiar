@@ -228,13 +228,16 @@ final class MorningStore: ObservableObject {
         try transact { next in MorningSamples.append(to: &next) }
     }
 
+    /// `judged` is each read item's judgment revision, saved with the cards and receipt; nil leaves judgments as they are.
     @discardableResult
-    func applyCardGeneration(observations: [CardObservation], proposals: [CardProposal], runIDs: [UUID], at: Date = Date()) throws -> CardGenerationSummary {
+    func applyCardGeneration(observations: [CardObservation], proposals: [CardProposal], runIDs: [UUID],
+                             judged: [String: String]? = nil, at: Date = Date()) throws -> CardGenerationSummary {
         let previous = Set((workspace.cardGenerations ?? []).flatMap(\.runIDs))
         guard runIDs.contains(where: { !previous.contains($0) }) else { return CardGenerationSummary() }
         var result = CardGenerationSummary()
         try transact { next in
             result = try MorningCardReconciliation.apply(observations: observations, proposals: proposals, runIDs: runIDs, at: at, to: &next)
+            if let judged { MorningCardReconciliation.recordJudgments(judged, at: at, in: &next) }
         }
         return result
     }

@@ -52,7 +52,7 @@ struct CardGenerationServiceTests {
             #expect(system.contains("never"))
             let text = Self.messageText(messages)
             if calls == 2 { #expect(text.contains("Ask Maya before drafting")) }
-            let proposals: [[String: Any]] = calls == 3 ? [] : [Self.proposal(try Self.key(in: messages), title: calls == 1 ? "Review contract" : "Contract deadline changed")]
+            let proposals = [Self.proposal(try Self.key(in: messages), title: calls == 1 ? "Review contract" : "Contract deadline changed")]
             let result = await executor(CardGenerationSubmission.toolName, ["proposals": proposals], nil)
             #expect(!result.isError)
             return "Ready"
@@ -76,7 +76,7 @@ struct CardGenerationServiceTests {
         #expect(resolved.isResolved)
         #expect(resolved.tracking?.resolutionEvidence.contains("Contract signed") == true)
         #expect(fixture.morning.cards.count == 1)
-        #expect(calls == 3)
+        #expect(calls == 2)   // a resolved item has nothing to judge, so the last step asks the model nothing
     }
 
     @Test func generationWaitsForExistingWorkAndRetainsTheRequestedRun() async throws {

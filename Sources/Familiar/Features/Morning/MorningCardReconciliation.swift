@@ -82,6 +82,14 @@ enum MorningCardReconciliation {
         return summary
     }
 
+    /// Marks every item a step read as judged at its revision, so the next step sends only new or changed ones, and
+    /// drops judgments not seen for `CardJudgment.lifetime`.
+    static func recordJudgments(_ revisions: [String: String], at: Date, in workspace: inout MorningWorkspace) {
+        var judgments = (workspace.judgments ?? [:]).filter { at.timeIntervalSince($0.value.seenAt) <= CardJudgment.lifetime }
+        for (key, revision) in revisions { judgments[key] = CardJudgment(revision: revision, seenAt: at) }
+        workspace.judgments = judgments
+    }
+
     static func setResolution(cardID: UUID, resolved: Bool, at: Date, in workspace: inout MorningWorkspace) throws {
         guard let index = workspace.cards.firstIndex(where: { $0.id == cardID }) else {
             throw MorningStoreError.invalid("This file could not be found.")

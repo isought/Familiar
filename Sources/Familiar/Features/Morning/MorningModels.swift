@@ -115,4 +115,6 @@ struct MorningWorkspace: Codable, Equatable {
     var workItems: [MorningWorkItem] = []
     var samplesLoaded = false
     var cardGenerations: [CardGenerationRecord]? = nil
+    /// What the card step has judged, by observation id. Nil in workspaces saved before it was kept.
+    var judgments: [String: CardJudgment]? = nil
 }

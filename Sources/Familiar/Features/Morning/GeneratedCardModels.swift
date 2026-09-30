@@ -81,11 +81,34 @@ struct CardGenerationRecord: Codable, Equatable, Identifiable {
     var resolved: Int
 }
 
+/// What the card step last judged of one item, so an unchanged item isn't put to the model again (and so can't come
+/// back as a card for something it passed over before).
+struct CardJudgment: Codable, Equatable {
+    var revision: String
+    var seenAt: Date
+
+    /// Judgments this long unseen are dropped; an item that old is read again as new.
+    static let lifetime: TimeInterval = 30 * 24 * 3_600
+
+    /// A hash of what a judgment rests on, like `CardObservation.fingerprint`.
+    static func revision(_ parts: [String]) -> String {
+        let data = (try? JSONEncoder().encode(parts)) ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 struct CardGenerationSummary: Equatable {
     var created = 0
     var updated = 0
     var resolved = 0
-    var message: String { "\(created) new · \(updated) updated · \(resolved) resolved" }
+    /// Items the model read this step, and items left out because it had judged them before.
+    var sent = 0
+    var alreadySorted = 0
+    var message: String {
+        if sent == 0, alreadySorted > 0, created + updated + resolved == 0 { return "Nothing new to sort: \(alreadySorted) already sorted." }
+        let counts = "\(created) new · \(updated) updated · \(resolved) resolved"
+        return alreadySorted > 0 ? counts + " · \(alreadySorted) already sorted" : counts
+    }
 }
 
 extension MorningCard {
