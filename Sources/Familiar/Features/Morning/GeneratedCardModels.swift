@@ -87,8 +87,12 @@ struct CardJudgment: Codable, Equatable {
     var revision: String
     var seenAt: Date
 
-    /// Judgments this long unseen are dropped; an item that old is read again as new.
+    /// Judgments this long unseen no longer count, and the next step that records drops them; an item that old is
+    /// read again as new.
     static let lifetime: TimeInterval = 30 * 24 * 3_600
+
+    /// Still counts at `date`, whether or not a step has dropped it yet.
+    func isCurrent(at date: Date) -> Bool { date.timeIntervalSince(seenAt) <= Self.lifetime }
 
     /// A hash of what a judgment rests on, like `CardObservation.fingerprint`.
     static func revision(_ parts: [String]) -> String {

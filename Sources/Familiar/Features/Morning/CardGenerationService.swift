@@ -124,7 +124,8 @@ final class CardGenerationService: ObservableObject {
             // Only new or changed items go to the model: one it judged before would get a fresh chance at a card
             // each time it is read again. With nothing left to judge there is no model call at all.
             let earlier = morning.workspace.judgments == nil ? sortedBefore() : nil
-            let judged = earlier ?? (morning.workspace.judgments ?? [:]).mapValues(\.revision)
+            let now = Date()
+            let judged = earlier ?? (morning.workspace.judgments ?? [:]).filter { $0.value.isCurrent(at: now) }.mapValues(\.revision)
             var proposals: [CardProposal] = []
             let batches = input.candidateBatches(judged: judged)
             for (index, observations) in batches.enumerated() {

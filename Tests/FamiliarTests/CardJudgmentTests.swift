@@ -169,6 +169,28 @@ struct CardJudgmentTests {
         #expect(judgments["new"] == CardJudgment(revision: "c", seenAt: start.addingTimeInterval(31 * day)))
     }
 
+    @Test func aJudgmentUnseenForThirtyDaysNoLongerCounts() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        // All three judged 31 days ago and two of them again 29 days ago; no step has run since to drop the old one.
+        let first = try fixture.read(0..<3)
+        let revisions = CardGenerationInput.saved(in: fixture.sources, runID: first, excluding: []).revisions
+        let day: TimeInterval = 24 * 3_600
+        try fixture.morning.applyCardGeneration(observations: [], proposals: [], runIDs: [first],
+            judged: revisions, at: Date().addingTimeInterval(-31 * day))
+        try fixture.morning.applyCardGeneration(observations: [], proposals: [], runIDs: [UUID()],
+            judged: revisions.filter { $0.key != fixture.key(0) }, at: Date().addingTimeInterval(-29 * day))
+        #expect(fixture.morning.workspace.judgments?.count == 3)
+
+        try fixture.read(0..<3)
+        let service = fixture.service()
+        await service.generate()?.value
+        #expect(fixture.sent == [[fixture.key(0)]])
+        #expect(service.status == "0 new · 0 updated · 0 resolved · 2 already sorted")
+        let judged = try #require(fixture.morning.workspace.judgments)
+        #expect(Set(judged.keys) == Set((0..<3).map(fixture.key)) && judged.values.allSatisfy { Date().timeIntervalSince($0.seenAt) < 60 })
+    }
+
     @Test func cardsAndTheLedgerStillSeeTheWholeRead() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

@@ -85,7 +85,7 @@ enum MorningCardReconciliation {
     /// Marks every item a step read as judged at its revision, so the next step sends only new or changed ones, and
     /// drops judgments not seen for `CardJudgment.lifetime`.
     static func recordJudgments(_ revisions: [String: String], at: Date, in workspace: inout MorningWorkspace) {
-        var judgments = (workspace.judgments ?? [:]).filter { at.timeIntervalSince($0.value.seenAt) <= CardJudgment.lifetime }
+        var judgments = (workspace.judgments ?? [:]).filter { $0.value.isCurrent(at: at) }
         for (key, revision) in revisions { judgments[key] = CardJudgment(revision: revision, seenAt: at) }
         workspace.judgments = judgments
     }
