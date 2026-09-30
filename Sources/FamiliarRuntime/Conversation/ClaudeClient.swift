@@ -18,6 +18,10 @@ package final class ClaudeClient: ConversationClient {
     /// Seconds to wait before each retry of a dropped connection or a busy server. Resending is safe: the Messages
     /// call has no side effects, and tools only run here after a reply arrives.
     package var retryDelays: [Double] = [0.5, 2]
+    /// A reply cut off inside a tool call can't be used, so it is asked again with double the room, up to this.
+    package var maxTokensCeiling = 32_000
+    /// Ends a reply that ran out of room, so the person knows it's incomplete.
+    package static let cutOffNote = "_(answer was cut off)_"
 
     private static let retryableErrors: Set<URLError.Code> = [.networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed]
     private static let retryableStatuses: Set<Int> = [408, 429, 500, 502, 503, 504, 529]
@@ -40,7 +44,9 @@ package final class ClaudeClient: ConversationClient {
             self.session = session
         } else {
             let configuration = URLSessionConfiguration.default
-            configuration.timeoutIntervalForRequest = 240
+            // A non-streamed reply arrives all at once; a long one (a full inbox's findings) can take minutes, and
+            // Anthropic's SDKs wait ten.
+            configuration.timeoutIntervalForRequest = 600
             self.session = URLSession(configuration: configuration)
         }
     }
@@ -50,8 +56,9 @@ package final class ClaudeClient: ConversationClient {
                   executor: @escaping ToolExecutor, onStatus: @escaping (String) -> Void) async throws -> ClaudeReply {
         var totalIn = 0, totalOut = 0, cacheRead = 0, toolCalls = 0
         var rounds = 0
+        var budget = maxTokens
         while true {
-            let json = try await post(system: system, tools: tools, messages: messages)
+            let json = try await post(system: system, tools: tools, messages: messages, maxTokens: budget)
             let usage = json["usage"] as? [String: Any] ?? [:]
             let read = usage["cache_read_input_tokens"] as? Int ?? 0
             let created = usage["cache_creation_input_tokens"] as? Int ?? 0
@@ -64,7 +71,21 @@ package final class ClaudeClient: ConversationClient {
                 let cat = (json["stop_details"] as? [String: Any])?["category"] as? String ?? "unspecified"
                 throw ClaudeError(message: "Claude declined this request (category: \(cat)).")
             }
-            let content = json["content"] as? [[String: Any]] ?? []
+            var content = json["content"] as? [[String: Any]] ?? []
+            if stop == "max_tokens", content.last?["type"] as? String == "tool_use" {
+                // Anthropic's advice for a reply cut off inside a tool call: ask again with more room.
+                if budget < maxTokensCeiling {
+                    let larger = min(budget * 2, maxTokensCeiling)
+                    logger("reply cut off inside a tool call at \(budget) tokens; asking again with \(larger)")
+                    budget = larger
+                    continue
+                }
+                // Still out of room: an unfinished call can't be answered, so it's left out to keep the history valid.
+                content.removeLast()
+                if !content.contains(where: { $0["type"] as? String == "text" }) {
+                    content.append(["type": "text", "text": "I ran out of room before finishing."])
+                }
+            }
             // Echo the assistant turn back unchanged (including thinking blocks) so tool loops stay valid.
             messages.append(["role": "assistant", "content": content])
 
@@ -113,7 +134,7 @@ package final class ClaudeClient: ConversationClient {
             }
 
             var text = content.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
-            if stop == "max_tokens" { text += "\n\n_(answer was cut off)_" }
+            if stop == "max_tokens" { text += "\n\n" + Self.cutOffNote }
             return ClaudeReply(text: text, inputTokens: totalIn, outputTokens: totalOut, cacheRead: cacheRead, toolCalls: toolCalls)
         }
     }
@@ -131,7 +152,7 @@ package final class ClaudeClient: ConversationClient {
         return String(s.prefix(200))
     }
 
-    private func post(system: String, tools: [[String: Any]], messages: [[String: Any]]) async throws -> [String: Any] {
+    private func post(system: String, tools: [[String: Any]], messages: [[String: Any]], maxTokens: Int) async throws -> [String: Any] {
         var body: [String: Any] = [
             "model": model,
             "max_tokens": maxTokens,

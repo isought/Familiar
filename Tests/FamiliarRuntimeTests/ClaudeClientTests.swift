@@ -318,6 +318,48 @@ struct ClaudeClientTests {
         #expect(lines.all.contains("tool error: lookup: Lookup service is down."))
     }
 
+    @Test
+    func aReplyCutOffInsideAToolCallIsAskedAgainWithMoreRoom() async throws {
+        let cut = try HTTPFixture.Response(json: ["stop_reason": "max_tokens", "usage": ["input_tokens": 10, "output_tokens": 1024],
+            "content": [["type": "text", "text": "Submitting."], ["type": "tool_use", "id": "cut-call", "name": "submit_reading_collection", "input": [:]]]])
+        let whole = try HTTPFixture.Response(json: ["stop_reason": "tool_use", "usage": ["input_tokens": 10, "output_tokens": 1500],
+            "content": [["type": "tool_use", "id": "whole-call", "name": "submit_reading_collection", "input": ["items": 25]]]])
+        let done = try HTTPFixture.Response(json: ["stop_reason": "end_turn", "usage": ["input_tokens": 20, "output_tokens": 3],
+            "content": [["type": "text", "text": "Saved."]]])
+        let fixture = HTTPFixture(responses: [cut, whole, done])
+        defer { fixture.close() }
+        let lines = LogLines(), calls = LogLines()
+        let client = ClaudeClient(options: options(baseURL: fixture.baseURL), session: fixture.session, logger: { lines.append($0) })
+        var messages: [[String: Any]] = [["role": "user", "content": "Read the inbox."]]
+        let reply = try await client.converse(system: "Fixture prompt", tools: [["name": "submit_reading_collection"]], messages: &messages,
+                                              executor: { name, _, _ in calls.append(name); return .text("Saved locally.") }, onStatus: { _ in })
+
+        #expect(reply.text == "Saved.")
+        #expect(calls.all == ["submit_reading_collection"])                // the cut-off call never ran
+        #expect(fixture.requests.map { $0.body["max_tokens"] as? Int } == [1024, 2048, 2048])
+        #expect(!String(describing: messages).contains("cut-call"))
+        #expect(reply.outputTokens == 1024 + 1500 + 3)                     // the cut-off attempt is still counted
+        #expect(lines.all.contains("reply cut off inside a tool call at 1024 tokens; asking again with 2048"))
+    }
+
+    @Test
+    func aReplyStillCutOffAtTheCeilingComesBackWithoutItsUnfinishedCall() async throws {
+        let cut = try HTTPFixture.Response(json: ["stop_reason": "max_tokens",
+            "content": [["type": "tool_use", "id": "cut-call", "name": "submit_reading_collection", "input": [:]]]])
+        let fixture = HTTPFixture(responses: [cut, cut])
+        defer { fixture.close() }
+        let client = ClaudeClient(options: options(baseURL: fixture.baseURL), session: fixture.session)
+        client.maxTokens = 16_000
+        var messages: [[String: Any]] = [["role": "user", "content": "Read the inbox."]]
+        let reply = try await client.converse(system: "Fixture prompt", tools: [["name": "submit_reading_collection"]], messages: &messages,
+                                              executor: { _, _, _ in Issue.record("An unfinished call must not run"); return .text("unexpected") },
+                                              onStatus: { _ in })
+
+        #expect(fixture.requests.map { $0.body["max_tokens"] as? Int } == [16_000, 32_000])
+        #expect(reply.text.hasSuffix(ClaudeClient.cutOffNote))
+        #expect(!String(describing: messages).contains("cut-call"))       // the history stays valid for the next turn
+    }
+
     private func ask(_ fixture: HTTPFixture) async throws -> ClaudeReply {
         let client = ClaudeClient(options: options(baseURL: fixture.baseURL), session: fixture.session)
         client.retryDelays = [0, 0]
