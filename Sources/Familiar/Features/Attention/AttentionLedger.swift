@@ -126,6 +126,18 @@ final class AttentionLedger: ObservableObject {
         append([event(.miss(.init(key: key, retract: retract, item: item)), at: clock())])
     }
 
+    // MARK: - Opening the pack
+
+    /// The pack is on screen after an open from `trigger`, on `route` with `desk` cards to review. An open that
+    /// brought it into view is recorded whatever the trigger; when it `wasOpen` already, only the day's first open
+    /// that counts is. Only the launcher, the menu and the task panel count as a day the pack was opened.
+    func recordOpened(_ trigger: AttentionOpenTrigger, route: MorningNavigation.Route, desk: Int, wasOpen: Bool) {
+        let now = clock()
+        let countedToday = index.firstOpened[AttentionTime.day(of: now, in: timeZone)] != nil
+        guard AttentionOpen.records(trigger, wasOpen: wasOpen, countedToday: countedToday) else { return }
+        append([event(.opened(.init(trigger: trigger, route: AttentionOpen.route(route), desk: desk)), at: now)])
+    }
+
     /// The item as a card step first read it. For a card the ledger has no copy of, such as one from before the ledger,
     /// it is the item as the card knows it, without mail facts. Only a source the test reads keeps the card's words; a
     /// calendar or screen read is recorded by which item it was, never by what it said.
@@ -231,5 +243,52 @@ final class AttentionLedger: ObservableObject {
             ageHours: received.map { observation.observedAt.timeIntervalSince($0) / 3_600 },
             preview: String(preview.trimmingCharacters(in: .whitespacesAndNewlines).prefix(AttentionItem.previewLimit)),
             url: item.url.isEmpty ? nil : item.url, shown: shown)
+    }
+}
+
+/// Which opens of the pack say the person chose to look at it. Nothing opens it on its own or sends a notification,
+/// so every open that counts is unforced.
+enum AttentionOpen {
+    /// An open that brings the pack into view is recorded; moving to another screen of an open pack is the same
+    /// visit. The pack can stay on screen overnight, so the first open that counts on a day is recorded even when the
+    /// pack was already open.
+    static func records(_ trigger: AttentionOpenTrigger, wasOpen: Bool, countedToday: Bool) -> Bool {
+        !wasOpen || trigger.counts && !countedToday
+    }
+
+    /// An open asked for while a desktop grant hides the pack, recorded once the pack shows again.
+    struct Held: Equatable {
+        var trigger: AttentionOpenTrigger
+        var wasOpen: Bool
+    }
+
+    /// The open to hold after another request during the same grant. A later open wins unless only the held one
+    /// counts; whether the pack was open is from before the first request.
+    static func hold(_ trigger: AttentionOpenTrigger, wasOpen: Bool, over held: Held?) -> Held {
+        guard let held else { return Held(trigger: trigger, wasOpen: wasOpen) }
+        return held.trigger.counts && !trigger.counts ? held : Held(trigger: trigger, wasOpen: held.wasOpen)
+    }
+
+    /// The screen the pack opened on, by a short name.
+    static func route(_ route: MorningNavigation.Route) -> String {
+        switch route {
+        case .folders: return "folders"
+        case .card: return "card"
+        case .people: return "people"
+        case .sources: return "sources"
+        case .sourceRun: return "sourceRun"
+        default: return "other"
+        }
+    }
+}
+
+extension AttentionOpenTrigger {
+    /// The launcher, the menu and the task panel are the person opening the pack. Chat, Who's Who and a run open it
+    /// on the way to something else, so those opens are recorded but never count as a day opened.
+    var counts: Bool {
+        switch self {
+        case .launcher, .menu, .taskPanel: return true
+        case .chat, .people, .run: return false
+        }
     }
 }

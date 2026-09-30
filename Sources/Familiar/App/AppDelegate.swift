@@ -203,7 +203,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         assistant.onOpenSources = { [weak self] in self?.morningPanel.showSources() }
         assistant.onRunSource = { [weak self] id in self?.runSavedSource(id) }
         morningPanel = MorningPanelController(store: morning, hideFromScreenShare: config.hideFromScreenShare,
-                                             calendarSources: calendarSources, calendarRunner: calendarReader, cardGeneration: cardGeneration)
+                                             calendarSources: calendarSources, calendarRunner: calendarReader, cardGeneration: cardGeneration,
+                                             attention: attention)
         morningPanel.onDiscussCard = { [weak self] card in
             guard let self, self.assistant.discussCard(card) else { return }
             self.openChat()

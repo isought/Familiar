@@ -19,6 +19,8 @@ import QuartzCore
     private var filesTopLeft: NSPoint?
     private var adjustingFrame = false
     private weak var draggedWindow: NSWindow?
+    private let attention: AttentionLedger?
+    private var heldOpen: AttentionOpen.Held?
     var onHandoff: ((MorningWorkItem) -> Void)?
     var onTeachCalendar: (() -> Void)?
     var onDiscussCard: ((MorningCard) -> Void)?
@@ -26,8 +28,10 @@ import QuartzCore
 
     /// Only the little folder is shown at launch. Opening a file is always an explicit action.
     init(store: MorningStore, hideFromScreenShare: Bool, calendarSources: CalendarStore? = nil,
-         calendarRunner: CalendarCollectionRunner? = nil, cardGeneration: CardGenerationService? = nil) {
+         calendarRunner: CalendarCollectionRunner? = nil, cardGeneration: CardGenerationService? = nil,
+         attention: AttentionLedger? = nil) {
         self.store = store
+        self.attention = attention
         launcher = MorningPanel(title: "Morning folder", hideFromScreenShare: hideFromScreenShare)
         panel = MorningPanel(title: "Morning files", hideFromScreenShare: hideFromScreenShare)
         super.init()
@@ -36,7 +40,7 @@ import QuartzCore
         launcher.hasShadow = false
         launcher.contentView = NSHostingView(rootView: MorningLauncherView(store: store, open: { [weak self] in
             guard let self else { return }
-            self.panel.isVisible ? self.hideContents() : self.show()
+            self.panel.isVisible ? self.hideContents() : self.show(trigger: .launcher)
         }, people: { [weak self] in self?.showPeople() }))
         panel.contentView = NSHostingView(rootView: MorningFilesView(
             store: store, navigation: navigation,
@@ -59,29 +63,29 @@ import QuartzCore
         ) { [weak self] _ in MainActor.assumeIsolated { self?.position() } }
     }
 
-    func show() {
+    func show(trigger: AttentionOpenTrigger = .menu) {
         navigation.route = .folders
-        openContents()
+        openContents(trigger)
     }
 
-    func showCard(id: UUID) {
+    func showCard(id: UUID, trigger: AttentionOpenTrigger = .taskPanel) {
         navigation.route = .card(id)
-        openContents()
+        openContents(trigger)
     }
 
-    func showPeople() {
+    func showPeople(trigger: AttentionOpenTrigger = .people) {
         navigation.route = .people
-        openContents()
+        openContents(trigger)
     }
 
-    func showSources() {
+    func showSources(trigger: AttentionOpenTrigger = .chat) {
         navigation.route = .sources
-        openContents()
+        openContents(trigger)
     }
 
-    func showRun(id: UUID, sourceID: UUID? = nil) {
+    func showRun(id: UUID, sourceID: UUID? = nil, trigger: AttentionOpenTrigger = .run) {
         navigation.route = .sourceRun(runID: id, sourceID: sourceID)
-        openContents()
+        openContents(trigger)
     }
 
     func setHiddenForForegroundGrant(_ hidden: Bool) {
@@ -95,6 +99,8 @@ import QuartzCore
             launcher.orderFrontRegardless()
             // Returning from a desktop grant must never take keyboard focus.
             if contentsRequested { panel.orderFrontRegardless() }
+            if contentsRequested, let heldOpen { recordOpen(heldOpen.trigger, wasOpen: heldOpen.wasOpen) }
+            heldOpen = nil
         }
     }
 
@@ -114,11 +120,19 @@ import QuartzCore
         flight = nil
     }
 
-    private func openContents() {
+    private func openContents(_ trigger: AttentionOpenTrigger) {
+        // Open already, or it would be but for a desktop grant.
+        let wasOpen = contentsRequested
         contentsRequested = true
         position()
-        guard !hiddenForForegroundGrant else { return }
+        guard !hiddenForForegroundGrant else { heldOpen = AttentionOpen.hold(trigger, wasOpen: wasOpen, over: heldOpen); return }
         panel.makeKeyAndOrderFront(nil)
+        recordOpen(trigger, wasOpen: wasOpen)
+    }
+
+    private func recordOpen(_ trigger: AttentionOpenTrigger, wasOpen: Bool) {
+        attention?.recordOpened(trigger, route: navigation.route, desk: store.cards.filter { $0.displayDisposition == .unreviewed }.count,
+                                wasOpen: wasOpen)
     }
 
     private func hideContents() { contentsRequested = false; panel.orderOut(nil) }

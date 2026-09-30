@@ -2,7 +2,8 @@ import Foundation
 
 /// What the attention ledger holds, folded from its events: when the test started, which runs a card step has
 /// sorted, the day each item was first read, whether it was ever shown, each script read's own counts, each item's
-/// label and the items marked missed. Pure, so the numbers can be worked out and tested without a file.
+/// label, the items marked missed and when the pack was first opened each day. Pure, so the numbers can be worked out
+/// and tested without a file.
 struct AttentionIndex {
     /// Items first read within this many days keep their full copy for the rest screen; older ones keep only their day.
     static let itemDays = 14
@@ -33,6 +34,8 @@ struct AttentionIndex {
     private(set) var labels: [String: AttentionLabels.Effective] = [:]
     /// Items the person said should have been shown, and has not taken back.
     private(set) var missedKeys: Set<String> = []
+    /// The earliest open that counts on each local day: by the launcher, the menu or the task panel.
+    private(set) var firstOpened: [String: Date] = [:]
     /// Keys first read before this day keep only their `firstDay`.
     let keepsItemsFrom: String
 
@@ -73,7 +76,9 @@ struct AttentionIndex {
             labels[implicit.key, default: .init()].add(implicit.signal, retracts: implicit.retracts)
         case .miss(let miss):
             if miss.retract { missedKeys.remove(miss.key) } else { missedKeys.insert(miss.key) }
-        case .opened, .restViewed, .engaged:
+        case .opened(let opened):
+            if opened.trigger.counts, firstOpened[event.day].map({ event.at < $0 }) ?? true { firstOpened[event.day] = event.at }
+        case .restViewed, .engaged:
             break
         }
     }
