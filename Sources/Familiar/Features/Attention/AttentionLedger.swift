@@ -137,6 +137,13 @@ final class AttentionLedger: ObservableObject {
         append([event(.miss(.init(key: key, retract: retract, item: item)), at: clock())])
     }
 
+    /// The rest of `day`, holding `count` messages, was on screen for `seconds`. Only reaching its end makes the day's
+    /// "0 missed" count, and a rest already looked through to its end is not recorded again until a new message joins it.
+    func restViewed(day: String, count: Int, reachedEnd: Bool, seconds: TimeInterval) {
+        if reachedEnd, index.restCheckedDays.contains(day) { return }
+        append([event(.restViewed(.init(restDay: day, count: count, reachedEnd: reachedEnd, seconds: seconds)), at: clock())])
+    }
+
     // MARK: - Opening the pack
 
     /// The pack is on screen after an open from `trigger`, on `route` with `desk` cards to review. An open that

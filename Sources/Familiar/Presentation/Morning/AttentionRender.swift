@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The attention test on the card face, rendered from a fictional week of an example inbox. The render fails when the
-/// thumbs move anything below a card's header line or grow past one small line.
+/// The attention test on the card face and on its own screens, rendered from a fictional week of an example inbox. The
+/// render fails when the thumbs move anything below a card's header line or grow past one small line.
 extension MorningRender {
     @MainActor static func renderAttention(fixtures: URL, directory: URL) throws {
         let week = try AttentionWeek(directory: fixtures.appendingPathComponent("attention-week"))
@@ -27,6 +27,35 @@ extension MorningRender {
         week.ledger.cancelExplaining()
         // A second copy of the week, so the labels the size check gives leave the rendered week as it was.
         try checkThumbSizes(week: try AttentionWeek(directory: fixtures.appendingPathComponent("attention-sizes")), title: lease)
+        try renderAttentionScreens(week: week, directory: directory)
+    }
+
+    /// The daily line on the folders screen, today's rest, the week against the pass bar, and the rest again after a
+    /// miss. The pack was opened every morning read, and every rest was looked through but Monday's, so the miss bar
+    /// waits on Monday; the week is drawn before the miss, so it stays clean.
+    @MainActor private static func renderAttentionScreens(week: AttentionWeek, directory: URL) throws {
+        let ledger = week.ledger, today = "2026-09-30"
+        week.visit(leaving: ["2026-09-28", today])
+        ledger.clock = { AttentionWeek.time("2026-09-30T09:30:00") }
+        let navigation = MorningNavigation()
+        func save(_ name: String, _ route: MorningNavigation.Route, height: CGFloat? = nil) throws {
+            navigation.route = route
+            try image(MorningFilesView(store: week.store, navigation: navigation, close: {}, filed: {}, handoff: { _ in },
+                                       calendarSources: week.sources, discussCard: { _ in }, attention: ledger),
+                      size: NSSize(width: 650, height: height ?? MorningPanelController.preferredHeight(for: route)),
+                      to: directory.appendingPathComponent(name))
+        }
+        try save("attention-daily-line.png", .folders)
+        // The whole of today's rest, as far as scrolling reaches, down to the line that checks it.
+        try save("attention-rest.png", .attention(.rest(day: today)), height: 2_300)
+        ledger.restViewed(day: today, count: ledger.numbers.day(today).restCount, reachedEnd: true, seconds: 48)
+        try save("attention-week.png", .attention(.week))
+        guard let statement = ledger.numbers.restItems(on: today).items.first(where: { $0.subject == "Your October statement is ready" }) else {
+            throw AttentionRenderFailure("Today’s rest has no statement to miss.")
+        }
+        ledger.miss(key: statement.key)
+        try save("attention-rest-missed.png", .attention(.rest(day: today)))
+        if let error = ledger.error { throw AttentionRenderFailure(error) }
     }
 
     /// Everything the thumbs add must fit a small box on the trailing side of the card's header line, so the title,
@@ -120,6 +149,19 @@ private struct AttentionRenderFailure: Error, CustomStringConvertible {
         ledger.watch(store)
         for (day, morning) in Self.mornings.enumerated() { try read(morning, day: day) }
         if let error = ledger.error { throw AttentionRenderFailure(error) }
+    }
+
+    /// The person opened the pack as each morning's read came in, and later looked through each day's rest to its
+    /// end, except on `unchecked` days.
+    func visit(leaving unchecked: Set<String>) {
+        for morning in Self.mornings {
+            let at = Self.time(morning.at), day = String(morning.at.prefix(10))
+            ledger.clock = { at }
+            ledger.recordOpened(.launcher, route: .folders, desk: store.cards.filter { $0.displayDisposition == .unreviewed }.count, wasOpen: false)
+            guard !unchecked.contains(day) else { continue }
+            ledger.clock = { at.addingTimeInterval(40 * 60) }
+            ledger.restViewed(day: day, count: ledger.numbers.day(day).restCount, reachedEnd: true, seconds: 52)
+        }
     }
 
     func card(_ title: String) throws -> MorningCard {

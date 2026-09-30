@@ -297,9 +297,10 @@ struct AttentionNumbers {
     /// "Sat 26 08:10".
     private func stamp(_ date: Date) -> String { format(date, "EEE d HH:mm") }
 
-    private func format(_ day: String, _ pattern: String) -> String { noon(day).map { format($0, pattern) } ?? day }
+    /// A day, "yyyy-MM-dd", or a time as the screens name it, in the numbers' zone: "Tue 29" is `format(day, "EEE d")`.
+    func format(_ day: String, _ pattern: String) -> String { noon(day).map { format($0, pattern) } ?? day }
 
-    private func format(_ date: Date, _ pattern: String) -> String {
+    func format(_ date: Date, _ pattern: String) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = timeZone

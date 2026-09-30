@@ -4,6 +4,7 @@ import SwiftUI
     enum Route: Equatable {
         case folders, folder(UUID), card(UUID), people, person(UUID), editPerson(UUID?), editCard(UUID?), editFolder(UUID?), sources
         case sourceRuns, sourceRun(runID: UUID, sourceID: UUID?)
+        case attention(AttentionScreen)
     }
     @Published var route: Route = .folders
     @Published var disposition: MorningCardDisposition = .unreviewed
@@ -157,6 +158,7 @@ struct MorningFilesView: View {
         case .sources: return "Manage sources"
         case .sourceRuns: return "Run history"
         case .sourceRun: return "Collected results"
+        case .attention(let screen): return screen.heading
         case .folder(let id): return store.folders.first { $0.id == id }?.name ?? "Folder"
         case .card: return "On your desk"
         case .people, .person: return "Who’s Who"
@@ -188,6 +190,8 @@ struct MorningFilesView: View {
                         navigation.route = .sources
                     })
             } else { empty("Run results are unavailable.") }
+        case .attention(let screen):
+            if let attention { AttentionScreenView(ledger: attention, store: store, navigation: navigation, screen: screen) } else { empty("The numbers are unavailable.") }
         case .folders: folders
         case .folder(let id): folder(id)
         case .card(let id):
@@ -233,6 +237,7 @@ struct MorningFilesView: View {
                         }.padding(14).background(Pad.paperTop.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
                     }.buttonStyle(.plain)
                 }
+                if let attention { AttentionDailyLine(ledger: attention) { navigation.route = .attention(.rest(day: $0)) } }
                 if store.cards.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Your morning starts small.").font(HandFont.font(size: 24))
@@ -550,7 +555,7 @@ struct MorningFilesView: View {
     private func openRun(_ runID: UUID, _ sourceID: UUID?) {
         navigation.route = .sourceRun(runID: runID, sourceID: sourceID)
     }
-    private func back() {
+    func back() {
         switch navigation.route {
         case .sourceRun: navigation.route = .sourceRuns
         case .card(let id):

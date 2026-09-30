@@ -135,7 +135,19 @@ import QuartzCore
                                 wasOpen: wasOpen)
     }
 
-    private func hideContents() { contentsRequested = false; panel.orderOut(nil) }
+    private func hideContents() {
+        contentsRequested = false
+        let route = Self.route(afterHiding: navigation.route)
+        if route != navigation.route { navigation.route = route }
+        panel.orderOut(nil)
+    }
+
+    /// Closing the pack leaves an attention screen, so a look at the rest ends when the person closes it, not when a
+    /// later open, perhaps by chat the next day, moves the hidden pack on. Every other screen waits for the next open.
+    static func route(afterHiding route: MorningNavigation.Route) -> MorningNavigation.Route {
+        if case .attention = route { return .folders }
+        return route
+    }
 
     private func position() {
         guard draggedWindow == nil else { return }
@@ -197,6 +209,7 @@ import QuartzCore
         case .editFolder: return 260
         case .card: return 470   // three parts: what it is, what it means for you, what you can do
         case .editCard, .editPerson, .sources, .sourceRuns, .sourceRun: return 680
+        case .attention: return 680   // the rest and the week
         }
     }
 
