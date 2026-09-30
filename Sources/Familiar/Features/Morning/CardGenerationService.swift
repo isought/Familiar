@@ -20,6 +20,8 @@ final class CardGenerationService: ObservableObject {
     private var activeRunIDs = Set<UUID>()
     private var worker: Task<Void, Never>?
     private var execution: TaskExecution?
+    /// Called once a step's receipt is saved, with what it read and the runs the receipt covers.
+    var onSorted: (([CardObservation], [UUID]) -> Void)?
 
     init(morning: MorningStore, sources: CalendarStore, desktop: DesktopExecutionService,
          config: @escaping () -> Config,
@@ -141,6 +143,7 @@ final class CardGenerationService: ObservableObject {
             let keys = Set(observations.map(\.id))
             let summary = try morning.applyCardGeneration(observations: observations,
                 proposals: proposals.filter { keys.contains($0.observationKey) }, runIDs: input.runIDs, at: Date())
+            onSorted?(observations, input.runIDs)
             status = summary.message
             error = nil
             handle?.finish(outcome: .completed, text: summary.message, elapsed: elapsed, caption: "Cards updated")
@@ -202,7 +205,7 @@ struct CardGenerationInput {
         return Self(runIDs: ids, observations: selected.flatMap { observations(run: $0.0, entry: $0.1) }, rules: rules)
     }
 
-    private static func observations(run: SourceRunRecord, entry: SourceRunEntry) -> [CardObservation] {
+    static func observations(run: SourceRunRecord, entry: SourceRunEntry) -> [CardObservation] {
         if let snapshot = entry.readingSnapshot {
             return snapshot.items.map { item in
                 CardObservation(runID: run.id, sourceID: entry.sourceID,
@@ -233,7 +236,7 @@ struct CardGenerationInput {
         return []
     }
 
-    private static func identity(_ key: String?, fallback: String) -> String {
+    static func identity(_ key: String?, fallback: String) -> String {
         let value = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return value.isEmpty ? fallback : value
     }

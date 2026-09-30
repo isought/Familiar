@@ -1,0 +1,145 @@
+import Combine
+import Foundation
+
+/// The attention test's record on this Mac: what each card step read from script sources and which of those items
+/// it showed. It is kept apart from cards, runs and chat, is never given to a model and never goes into
+/// noteling.log. The file is read once at launch; an event joins the index only once it is on disk.
+@MainActor
+final class AttentionLedger: ObservableObject {
+    /// Bumped after every write, so views that read the index redraw.
+    @Published private(set) var revision = 0
+    /// The last write failure, for the person to see. A failed write never fails the card action behind it.
+    @Published private(set) var error: String?
+    /// The key whose explanation is being typed.
+    @Published private(set) var explaining: String?
+    private(set) var index: AttentionIndex
+    /// Render and tests set this to write events at other times.
+    var clock: () -> Date
+    /// By default it follows the Mac's zone while Noteling keeps running; each event keeps the zone it was written in.
+    let timeZone: TimeZone
+    private let file: AttentionLogFile
+
+    init(directory: URL = Config.dir.appendingPathComponent("attention"), clock: @escaping () -> Date = Date.init,
+         timeZone: TimeZone = .autoupdatingCurrent) {
+        file = AttentionLogFile(url: directory.appendingPathComponent("signals.jsonl"))
+        self.clock = clock
+        self.timeZone = timeZone
+        index = AttentionIndex(AttentionLogFile.read(file.url).events, now: clock(), timeZone: timeZone)
+        append([])   // a new file begins with `started`
+    }
+
+    /// Records what one card step read from script sources and which of those items it showed as cards: one line
+    /// per receipt, written once. Calendar and screen reads are not part of the test, so a step without a script
+    /// read writes nothing.
+    func recordSorted(_ observations: [CardObservation], runIDs: [UUID], runs: SourceRunStore, cards: [MorningCard],
+                      backfilled: Bool = false, at: Date? = nil) {
+        guard let event = sorted(observations, runIDs: runIDs, runs: runs, cards: cards, backfilled: backfilled, at: at ?? clock()) else { return }
+        append([event])
+    }
+
+    /// Records the receipts saved since the ledger started that have no line yet, such as one saved just before
+    /// Noteling quit. Receipts from before the start are never pulled in, so the test starts clean. As in the card
+    /// step, a job removed while its step ran was never sorted, so only jobs that are still active count.
+    func backfill(receipts: [CardGenerationRecord], sources: CalendarStore, cards: [MorningCard]) {
+        guard let startedAt = index.startedAt else { return }
+        let active = Set(sources.sources.map(\.id) + sources.readingSources.map(\.id))
+        let missing = receipts.filter { $0.completedAt >= startedAt && !$0.runIDs.allSatisfy(index.sortedRunIDs.contains) }
+        let events = missing.compactMap { receipt in
+            let observations = Self.scriptReads(runIDs: receipt.runIDs, runs: sources.runStore).flatMap {
+                CardGenerationInput.observations(run: $0.run, entry: $0.entry)
+            }.filter { active.contains($0.sourceID) }
+            return sorted(observations, runIDs: receipt.runIDs, runs: sources.runStore, cards: cards, backfilled: true, at: receipt.completedAt)
+        }
+        append(events)
+    }
+
+    // MARK: - Writing
+
+    /// Writes the events in one append, starting the file first if it has no start yet, then folds them in.
+    private func append(_ events: [AttentionEvent]) {
+        let events = index.startedAt == nil ? [event(.started, at: clock())] + events : events
+        guard !events.isEmpty else { return }
+        do {
+            try file.append(events)
+        } catch {
+            let code = (error as NSError).code
+            Log.info("attention log write failed (errno \(code))")
+            self.error = "Couldn’t save the attention log (error \(code))."
+            return
+        }
+        for event in events { index.add(event) }
+        error = nil
+        revision += 1
+    }
+
+    private func event(_ payload: AttentionEvent.Payload, at: Date) -> AttentionEvent {
+        AttentionEvent(payload, at: at, timeZone: timeZone)
+    }
+
+    // MARK: - What a card step read
+
+    /// The `sorted` event for one receipt, or nil when its runs are already recorded or it read no script source.
+    private func sorted(_ observations: [CardObservation], runIDs: [UUID], runs: SourceRunStore, cards: [MorningCard],
+                        backfilled: Bool, at: Date) -> AttentionEvent? {
+        guard !runIDs.allSatisfy(index.sortedRunIDs.contains) else { return nil }
+        let shown = Set(cards.compactMap { $0.tracking?.key })
+        var sources: [AttentionEvent.Sorted.Source] = [], items: [AttentionItem] = [], seen: Set<String> = []
+        for read in Self.scriptReads(runIDs: runIDs, runs: runs) {
+            let observed = observations.filter { $0.runID == read.run.id && $0.sourceID == read.entry.sourceID }
+            // Items the step never saw, from a source removed while it ran, were not sorted.
+            guard !observed.isEmpty || read.snapshot.items.isEmpty else { continue }
+            let byKey = Dictionary(read.snapshot.items.map {
+                (CardObservation.key(sourceID: read.entry.sourceID, itemKey: CardGenerationInput.identity($0.identityKey, fallback: $0.id)), $0)
+            }, uniquingKeysWith: { first, _ in first })
+            for observation in observed {
+                guard let item = byKey[observation.id], seen.insert(observation.id).inserted else { continue }
+                items.append(attentionItem(item, observation: observation, script: read.snapshot.source.script, shown: shown.contains(observation.id)))
+            }
+            let counts = read.snapshot.scriptRead
+            sources.append(.init(sourceID: read.entry.sourceID, sourceName: read.entry.sourceName, script: read.snapshot.source.script ?? "",
+                runID: read.run.id, collectedAt: read.snapshot.collectedAt, since: counts?.since,
+                arrived: counts?.arrived ?? read.snapshot.items.count, returned: counts?.returned ?? read.snapshot.items.count,
+                truncated: counts?.truncated ?? false))
+        }
+        guard !sources.isEmpty else { return nil }
+        return event(.sorted(.init(runIDs: runIDs, backfilled: backfilled, sources: sources, items: items)), at: at)
+    }
+
+    /// Each script source's read in a card step: its latest complete or partial one among the step's runs, which is
+    /// the one the step took.
+    private static func scriptReads(runIDs: [UUID], runs: SourceRunStore)
+        -> [(run: SourceRunRecord, entry: SourceRunEntry, snapshot: ReadingSnapshot)] {
+        var latest: [UUID: (run: SourceRunRecord, entry: SourceRunEntry, snapshot: ReadingSnapshot)] = [:]
+        for run in runIDs.compactMap(runs.run(id:)) {
+            for entry in run.entries where [.complete, .partial].contains(entry.state) {
+                guard let snapshot = entry.readingSnapshot, snapshot.source.readsThroughScript else { continue }
+                if let previous = latest[entry.sourceID], previous.snapshot.collectedAt >= snapshot.collectedAt { continue }
+                latest[entry.sourceID] = (run, entry, snapshot)
+            }
+        }
+        return latest.values.sorted {
+            $0.snapshot.collectedAt == $1.snapshot.collectedAt
+                ? $0.entry.sourceID.uuidString < $1.entry.sourceID.uuidString : $0.snapshot.collectedAt > $1.snapshot.collectedAt
+        }
+    }
+
+    /// The item with its mail facts as data. Hours and weekdays are local to the ledger's zone.
+    private func attentionItem(_ item: ReadingItem, observation: CardObservation, script: String?, shown: Bool) -> AttentionItem {
+        let mail = item.mail
+        let received = mail?.received.flatMap(AttentionTime.date)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        // With mail facts, the text is one line of them, then the preview; a row that brought its own text keeps all of it.
+        let preview = mail == nil ? Substring(item.text) : item.text.firstIndex(of: "\n").map { item.text[item.text.index(after: $0)...] } ?? ""
+        return AttentionItem(key: observation.id, sourceID: observation.sourceID, sourceName: observation.sourceName,
+            kind: observation.kind, script: script, runID: observation.runID, itemID: item.id, readAt: observation.observedAt,
+            subject: item.title, from: mail.flatMap { $0.from.isEmpty ? nil : $0.from }, fromName: mail?.name,
+            address: mail?.address, domain: mail?.domain, tab: mail?.tab, bulk: mail?.bulk, important: mail?.important,
+            starred: mail?.starred, unread: mail?.unread, received: received,
+            receivedHour: received.map { calendar.component(.hour, from: $0) },
+            receivedWeekday: received.map { calendar.component(.weekday, from: $0) },
+            ageHours: received.map { observation.observedAt.timeIntervalSince($0) / 3_600 },
+            preview: String(preview.trimmingCharacters(in: .whitespacesAndNewlines).prefix(AttentionItem.previewLimit)),
+            url: item.url.isEmpty ? nil : item.url, shown: shown)
+    }
+}

@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var taskPanel: BackgroundTaskPanelController!
     private let morning = MorningStore()
     private let calendarSources = CalendarStore()
+    private let attention = AttentionLedger()
     private var calendarReader: CalendarCollectionRunner!
     private var morningPanel: MorningPanelController!
     private var morningTasks: MorningTaskRunner!
@@ -176,6 +177,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onOpenCard: { [weak self] id in self?.morningPanel.showCard(id: id) })
         cardGeneration = CardGenerationService(morning: morning, sources: calendarSources, desktop: desktop,
                                                config: { [weak self] in self?.config ?? Config() })
+        cardGeneration.onSorted = { [weak self] observations, runIDs in
+            guard let self else { return }
+            self.attention.recordSorted(observations, runIDs: runIDs, runs: self.calendarSources.runStore, cards: self.morning.cards)
+        }
+        attention.backfill(receipts: morning.workspace.cardGenerations ?? [], sources: calendarSources, cards: morning.cards)
         calendarReader.trackedItems = { [weak self] sourceID in self?.morning.trackedItems(sourceID: sourceID) ?? [] }
         calendarReader.openSource = { await SourcePageOpener().prepare($0) }
         calendarReader.onRunFinished = { [weak self] runID in _ = self?.cardGeneration.generate(runID: runID) }
