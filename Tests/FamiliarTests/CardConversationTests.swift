@@ -32,6 +32,47 @@ struct CardConversationTests {
         #expect(conversation.context.contains("We now have the date"))
     }
 
+    @Test func theChatCanRunANamedOption() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MorningStore(directory: directory)
+        var card = MorningCard(folderID: store.folders[0].id, title: "Reply to Alex",
+            action: MorningAction(title: "Prepare reply", instruction: "Draft a response"))
+        card.alternatives = [MorningAction(title: "Ask for the date", instruction: "Draft a question asking for the date")]
+        try store.saveCard(card)
+        let conversation = CardConversation(store: store)
+        conversation.select(card.id)
+        let router = try ToolRouter(routes: conversation.routes())
+
+        let unknown = await router.execute("queue_card_action", ["option": "Book a meeting"], toolset: nil)
+        #expect(unknown.isError && (unknown.content as? String)?.contains("“Prepare reply”, “Ask for the date”") == true)
+        #expect(store.workItems.isEmpty)
+
+        let accepted = await router.execute("queue_card_action", ["option": "ask FOR the date"], toolset: nil)
+        #expect(!accepted.isError)
+        #expect(store.workItems.first?.action.instruction == "Draft a question asking for the date")
+    }
+
+    @Test func theChatEditsTheOptionThePersonMeans() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MorningStore(directory: directory)
+        var card = MorningCard(folderID: store.folders[0].id, title: "Reply to Alex",
+            action: MorningAction(title: "Prepare reply", instruction: "Draft a response"))
+        card.alternatives = [MorningAction(title: "Ask for the date", instruction: "Draft a question asking for the date")]
+        try store.saveCard(card)
+        let conversation = CardConversation(store: store)
+        conversation.select(card.id)
+        let router = try ToolRouter(routes: conversation.routes())
+
+        let saved = await router.execute("update_card_context", ["context": "Mention the venue",
+            "actionInstruction": "Ask for the date and mention the venue", "option": "Ask for the date"], toolset: nil)
+
+        #expect(!saved.isError)
+        #expect(store.cards[0].action.instruction == "Draft a response")
+        #expect(store.cards[0].alternatives?.first?.instruction == "Ask for the date and mention the venue")
+    }
+
     @Test func leavingTheDiscussionRevokesItsCardTools() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

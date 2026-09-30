@@ -346,6 +346,67 @@ struct MorningStoreTests {
         #expect(throws: MorningStoreError.self) { try store.saveCard(newSample) }
     }
 
+    @Test func choosingAnotherOptionMakesItTheCardsActionBeforeItRuns() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let store = MorningStore(directory: fixture.directory)
+        var card = fixture.card(folderID: store.folders[0].id)
+        let ask = MorningAction(title: "Ask for the date", instruction: "Draft a question asking for the date.")
+        let hold = MorningAction(title: "Draft a holding note", instruction: "Draft a short holding note.")
+        card.alternatives = [ask, hold]
+        try store.saveCard(card)
+        let primary = card.action
+
+        let item = try store.enqueue(cardID: card.id, optionID: hold.id)
+
+        #expect(item.action == hold && item.card.action == hold)
+        #expect(store.cards[0].action == hold)
+        #expect(store.cards[0].alternatives == [ask, primary])
+        #expect(store.cards[0].disposition == .delegated)
+        #expect(MorningStore(directory: fixture.directory).workItems == store.workItems)   // the snapshot still validates
+        try store.updateWork(id: item.id, status: .completed, result: "Drafted.")
+        #expect(throws: MorningStoreError.self) { try store.enqueue(cardID: card.id, optionID: UUID()) }
+        #expect(throws: MorningStoreError.self) { try store.enqueue(cardID: card.id, kind: .context, optionID: ask.id) }
+    }
+
+    @Test func anOptionCountsAsRunOnlyOnceWorkOnItStarted() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let store = MorningStore(directory: fixture.directory)
+        var card = fixture.card(folderID: store.folders[0].id)
+        let ask = MorningAction(title: "Ask for the date", instruction: "Draft a question asking for the date.")
+        card.alternatives = [ask]
+        try store.saveCard(card)
+
+        let removed = try store.enqueue(cardID: card.id, optionID: ask.id)
+        try store.cancelQueued(id: removed.id)   // taken off the queue before it started
+        #expect(!MorningFilesView.hasRun(ask, in: store.workItems))
+
+        let item = try store.enqueue(cardID: card.id, optionID: ask.id)
+        try store.updateWork(id: item.id, status: .running)
+        try store.updateWork(id: item.id, status: .completed, result: "Drafted.")
+        #expect(MorningFilesView.hasRun(ask, in: store.workItems))
+        #expect(!MorningFilesView.hasRun(card.action, in: store.workItems))
+    }
+
+    @Test func extraOptionsAreCheckedLikeTheAction() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let store = MorningStore(directory: fixture.directory)
+        var card = fixture.card(folderID: store.folders[0].id)
+        let fine = MorningAction(title: "Ask", instruction: "Draft a question.")
+        card.alternatives = [MorningAction(title: "Empty", instruction: " ")]
+        #expect(throws: MorningStoreError.self) { try store.saveCard(card) }
+        card.alternatives = [fine, fine, MorningAction(title: "Third", instruction: "Draft.")]
+        #expect(throws: MorningStoreError.self) { try store.saveCard(card) }   // at most three options in all
+        var duplicate = card.action; duplicate.title = "Same id"
+        card.alternatives = [duplicate]
+        #expect(throws: MorningStoreError.self) { try store.saveCard(card) }
+        card.alternatives = [fine]
+        try store.saveCard(card)
+        #expect(store.cards[0].options.count == 2)
+    }
+
     private struct Fixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("familiar-morning-tests-\(UUID().uuidString)")
         var file: URL { directory.appendingPathComponent("workspace.json") }

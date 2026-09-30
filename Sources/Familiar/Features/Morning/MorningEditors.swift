@@ -114,10 +114,9 @@ struct MorningCardEditor: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                MorningField("Title", text: $title, placeholder: "A short, useful heading")
+                MorningField("What it is", text: $title, placeholder: "A short, useful heading")
+                MorningTextField("What it means for you", text: $rationale, hint: "One sentence: why this matters to you.", minHeight: 50)
                 Picker("Folder", selection: $folderID) { ForEach(folders) { Text($0.name).tag($0.id) } }.font(.system(size: 13))
-                MorningTextField("A little context", text: $summary, hint: "What happened? What should you remember when you come back to this?", minHeight: 65)
-                MorningTextField("Original message or source note", text: $sourceExcerpt, hint: "Paste the relevant evidence so you can make an informed decision later.", minHeight: 110)
                 if !people.isEmpty {
                     VStack(alignment: .leading, spacing: 7) {
                         Text("People involved").font(.system(size: 12, weight: .semibold)).foregroundStyle(Pad.inkSoft)
@@ -128,13 +127,14 @@ struct MorningCardEditor: View {
                         }
                     }
                 }
-                DisclosureGroup("Source details, reasoning & timing", isExpanded: $moreDetails) {
+                DisclosureGroup("More details", isExpanded: $moreDetails) {
                     VStack(alignment: .leading, spacing: 15) {
+                        MorningTextField("A little context", text: $summary, hint: "What happened? What should you remember when you come back to this?", minHeight: 65)
+                        MorningTextField("Original message or source note", text: $sourceExcerpt, hint: "Paste the relevant evidence so you can make an informed decision later.", minHeight: 110)
                         MorningField("Source title", text: $sourceTitle, placeholder: "Subject or document name")
                         MorningField("Source type", text: $sourceKind, placeholder: "Email, Jira, personal note…")
                         MorningField("Original link (optional)", text: $sourceURL, placeholder: "https://…")
                         DatePicker("Recorded", selection: $sourceDate).font(.system(size: 12))
-                        MorningTextField("Why this matters", text: $rationale, hint: "A commitment, relationship, dependency, or other reason to pay attention.", minHeight: 65)
                         MorningTextField("Still unclear", text: $unknowns, hint: "What is missing before you can decide?", minHeight: 65)
                         MorningField("Timing", text: $timing, placeholder: "For example, review before Friday")
                     }.padding(.top, 13)

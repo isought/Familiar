@@ -405,7 +405,7 @@ struct BackgroundTaskPanelView: View {
 
     private func openCardButton(_ item: MorningWorkItem) -> some View {
         Button { onOpenCard?(item.cardID) } label: {
-            Label("Open original file", systemImage: "doc.text")
+            Label("Open card", systemImage: "doc.text")
                 .font(.system(size: 11, weight: .medium))
         }.buttonStyle(.plain).foregroundStyle(Pad.penInk)
     }

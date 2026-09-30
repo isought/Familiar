@@ -90,6 +90,8 @@ final class MorningStore: ObservableObject {
                 // Decisions and sample provenance are not editable form fields.
                 card.disposition = previous.disposition
                 card.isSample = previous.isSample
+                // The editor edits the first option only; the others stay.
+                if card.alternatives == nil { card.alternatives = previous.alternatives }
                 if var tracking = previous.tracking {
                     tracking.userEdited = true
                     tracking.changes.append(CardChange(at: Date(), message: "You adjusted this card."))
@@ -121,8 +123,10 @@ final class MorningStore: ObservableObject {
         }
     }
 
+    /// Hands a card to Noteling. `optionID` picks one of its other options: it becomes the card's first option before the
+    /// work is snapshotted, so the work always runs the card's `action`.
     @discardableResult
-    func enqueue(cardID: UUID, kind: MorningWorkKind = .action) throws -> MorningWorkItem {
+    func enqueue(cardID: UUID, kind: MorningWorkKind = .action, optionID: UUID? = nil) throws -> MorningWorkItem {
         var accepted: MorningWorkItem?
         try transact { next in
             guard let index = next.cards.firstIndex(where: { $0.id == cardID }) else {
@@ -131,8 +135,19 @@ final class MorningStore: ObservableObject {
             guard !next.workItems.contains(where: { $0.cardID == cardID && $0.status.isPending }) else {
                 throw MorningStoreError.invalid("This file already has work waiting or in progress.")
             }
+            guard !next.cards[index].isResolved else { throw MorningStoreError.invalid("This matter is resolved. Reopen it before handing over more work.") }
+            if let optionID, optionID != next.cards[index].action.id {
+                guard kind == .action else { throw MorningStoreError.invalid("Only the file's options can be chosen.") }
+                guard var alternatives = next.cards[index].alternatives,
+                      let chosen = alternatives.firstIndex(where: { $0.id == optionID }) else {
+                    throw MorningStoreError.invalid("That option is no longer on this file.")
+                }
+                let primary = next.cards[index].action
+                next.cards[index].action = alternatives[chosen]
+                alternatives[chosen] = primary
+                next.cards[index].alternatives = alternatives
+            }
             let card = next.cards[index]
-            guard !card.isResolved else { throw MorningStoreError.invalid("This matter is resolved. Reopen it before handing over more work.") }
             let action: MorningAction
             switch kind {
             case .action: action = card.action
@@ -230,7 +245,8 @@ final class MorningStore: ObservableObject {
         }
     }
 
-    func updateCardContext(cardID: UUID, context: String, actionInstruction: String? = nil) throws {
+    /// Saves chat context and optionally rewrites one option's instruction: the first one, or `optionID`'s.
+    func updateCardContext(cardID: UUID, context: String, actionInstruction: String? = nil, optionID: UUID? = nil) throws {
         try transact { next in
             guard let index = next.cards.firstIndex(where: { $0.id == cardID }) else {
                 throw MorningStoreError.invalid("This file could not be found.")
@@ -238,7 +254,14 @@ final class MorningStore: ObservableObject {
             if let actionInstruction {
                 let instruction = actionInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !instruction.isEmpty else { throw MorningStoreError.invalid("Describe what Noteling should do.") }
-                next.cards[index].action.instruction = instruction
+                if let optionID, optionID != next.cards[index].action.id {
+                    guard let option = next.cards[index].alternatives?.firstIndex(where: { $0.id == optionID }) else {
+                        throw MorningStoreError.invalid("That option is no longer on this file.")
+                    }
+                    next.cards[index].alternatives?[option].instruction = instruction
+                } else {
+                    next.cards[index].action.instruction = instruction
+                }
             }
             next.cards[index].personalContext = context.trimmingCharacters(in: .whitespacesAndNewlines)
             next.cards[index].tracking?.userEdited = true
@@ -253,7 +276,7 @@ final class MorningStore: ObservableObject {
                   !card.isResolved, card.disposition != .ignored else { return nil }
             let source = card.sources.first
             return TrackedSourceItem(key: tracking.itemKey, title: source?.title ?? card.title,
-                details: source?.excerpt ?? card.summary, url: source?.url ?? "", identityEvidence: tracking.identityEvidence)
+                details: source?.excerpt ?? card.meaning, url: source?.url ?? "", identityEvidence: tracking.identityEvidence)
         }
     }
 
@@ -308,6 +331,10 @@ final class MorningStore: ObservableObject {
             try require(unique(card.sources.map(\.id)), "This file contains duplicate source identifiers.")
             try validateAction(card.action, sample: card.isSample)
             if let contextAction = card.contextAction { try validateAction(contextAction, sample: card.isSample) }
+            let alternatives = card.alternatives ?? []
+            try require(alternatives.count < CardGenerationSubmission.optionLimit, "A file can offer at most \(CardGenerationSubmission.optionLimit) options.")
+            try require(unique(card.options.map(\.id)), "This file lists the same option twice.")
+            for option in alternatives { try validateAction(option, sample: card.isSample) }
         }
         let tracked = value.cards.compactMap(\.tracking)
         try require(Set(tracked.map(\.key)).count == tracked.count, "Two generated cards refer to the same tracked source item.")

@@ -114,7 +114,7 @@ final class CardGenerationService: ObservableObject {
                 handle = task
                 execution = task
                 status = "Preparing cards from saved observations" + label + "…"
-                let submission = CardGenerationSubmission(observations: observations)
+                let submission = CardGenerationSubmission(observations: observations, rules: input.rules)
                 let plan = try submission.plan(morning: morning)
                 let result = try await task.run(plan, client: client, onStatus: { [weak self] in self?.status = $0 })
                 elapsed = result.elapsed
@@ -157,9 +157,18 @@ final class CardGenerationService: ObservableObject {
 
 /// Deterministic source identity and observed facts are prepared before asking a
 /// model for editorial judgment. Absence from a later read never means resolved.
+/// A job's own rules for what matters, so the card step applies them (a script job reads everything that arrived).
+struct SourceRules: Encodable, Equatable {
+    var sourceID: UUID
+    var sourceName: String
+    var meaning: String
+    var readingRules: String
+}
+
 struct CardGenerationInput {
     var runIDs: [UUID]
     var observations: [CardObservation]
+    var rules: [SourceRules] = []
     static let candidateLimit = 80
     var candidateBatches: [[CardObservation]] {
         let candidates = observations.filter { $0.state != .resolved }
@@ -184,7 +193,13 @@ struct CardGenerationInput {
             $0.2 == $1.2 ? $0.1.sourceID.uuidString < $1.1.sourceID.uuidString : $0.2 > $1.2
         }
         let ids = Array(Set(selected.map { $0.0.id })).sorted { $0.uuidString < $1.uuidString }
-        return Self(runIDs: ids, observations: selected.flatMap { observations(run: $0.0, entry: $0.1) })
+        let rules = selected.compactMap { _, entry, _ -> SourceRules? in
+            // Today's rules, if the job was changed since this run; otherwise the ones it ran with.
+            guard let source = sources.readingSources.first(where: { $0.id == entry.sourceID }) ?? entry.readingSnapshot?.source,
+                  calendarHasText(source.scope) else { return nil }
+            return SourceRules(sourceID: source.id, sourceName: entry.sourceName, meaning: source.meaning, readingRules: source.scope)
+        }
+        return Self(runIDs: ids, observations: selected.flatMap { observations(run: $0.0, entry: $0.1) }, rules: rules)
     }
 
     private static func observations(run: SourceRunRecord, entry: SourceRunEntry) -> [CardObservation] {
@@ -201,7 +216,10 @@ struct CardGenerationInput {
         }
         if let snapshot = entry.calendarSnapshot {
             return snapshot.events.map { event in
-                let details = "Starts: \(SourceRunJSON.timestamp(event.start)); ends: \(SourceRunJSON.timestamp(event.end)). "
+                let zone = TimeZone(identifier: snapshot.timeZoneID) ?? .current
+                let local = Date.FormatStyle(date: .abbreviated, time: .shortened, timeZone: zone)
+                let details = "When: \(event.start.formatted(local)) to \(event.end.formatted(local)) (\(zone.identifier)). "
+                    + "Starts: \(SourceRunJSON.timestamp(event.start)); ends: \(SourceRunJSON.timestamp(event.end)). "
                     + "Response: \(event.response.rawValue). Availability: \(event.availability.rawValue).\nVisible evidence: \(event.evidence)"
                 return CardObservation(runID: run.id, sourceID: entry.sourceID,
                     itemKey: identity(event.identityKey, fallback: event.id), sourceName: entry.sourceName,

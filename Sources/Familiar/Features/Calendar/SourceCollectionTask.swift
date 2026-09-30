@@ -12,6 +12,9 @@ final class CalendarCollectionEvidence {
     private(set) var readingSnapshot: ReadingSnapshot?
     /// Why the last submission was turned down, so a read that saves nothing can say so.
     private(set) var lastRejection: String?
+
+    /// A script job's findings, already built and validated (no reader submits them).
+    func stage(_ snapshot: ReadingSnapshot) { readingSnapshot = snapshot }
     private var trackedItems: [TrackedSourceItem] = []
 
     fileprivate func track(_ items: [TrackedSourceItem]) { trackedItems = Array(items.prefix(ReadingSubmission.trackedItemLimit)) }
@@ -66,6 +69,12 @@ enum SourceCollectionTask {
     var policy: ExecutionTools.Policy { switch self { case .calendar: return .calendarRead; case .reading: return .sourceRead } }
     var system: String { switch self { case .calendar: return Self.system; case .reading: return Self.readingSystem } }
     var prompt: String { switch self { case .calendar(let value): return Self.prompt(for: value); case .reading(let value): return Self.prompt(for: value) } }
+    /// Reads through a tools-folder script: no window, no model, no computer control.
+    var readsThroughScript: Bool {
+        if case .reading(let value) = self { return value.source.readsThroughScript }
+        return false
+    }
+
     var collectionLabel: String { switch self { case .calendar: return "Calendar collection"; case .reading: return "Source collection" } }
     var submissionName: String { switch self { case .calendar: return "submit_calendar_collection"; case .reading: return "submit_reading_collection" } }
     var submissionSchema: [String: Any] { switch self { case .calendar: return CalendarSubmission.schema; case .reading: return ReadingSubmission.schema } }

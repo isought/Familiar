@@ -137,6 +137,65 @@ struct GeneratedCardStoreTests {
         #expect(MorningStore(directory: fixture.directory).workspace == before)
     }
 
+    @Test func regenerationRewritesALongCardAndKeepsOptionIDsStable() throws {
+        let repository = MemoryRepository()
+        let first = observation()
+        _ = try MorningStore(repository: repository).applyCardGeneration(observations: [first], proposals: [proposal(first)], runIDs: [first.runID])
+        // A card written before the three-part shape: long summary, timing and unknowns.
+        var legacy = try #require(repository.workspace)
+        legacy.cards[0].summary = String(repeating: "Avery restated at length. ", count: 80)
+        legacy.cards[0].timing = "Before Friday"; legacy.cards[0].unknowns = "The confirmed date"
+        repository.workspace = legacy
+        let store = MorningStore(repository: repository)
+
+        let changed = next(first, excerpt: "Avery asks again for the date.")
+        let options = threeOptions(changed)
+        #expect(try store.applyCardGeneration(observations: [changed], proposals: [options], runIDs: [changed.runID]).updated == 1)
+        let card = store.cards[0]
+        #expect(card.rationale == options.meaning && card.meaning == options.meaning)
+        #expect(card.summary.isEmpty && card.timing.isEmpty && card.unknowns.isEmpty)
+        #expect(card.options.map(\.title) == ["Prepare reply", "Ask for a range", "Propose Friday"])
+        let ids = card.options.map(\.id), history = card.tracking?.changes.count
+
+        var again = changed; again.runID = UUID(); again.observedAt = changed.observedAt.addingTimeInterval(60)   // same facts
+        #expect(try store.applyCardGeneration(observations: [again], proposals: [threeOptions(again)], runIDs: [again.runID]).updated == 0)
+        #expect(store.cards[0].options.map(\.id) == ids)
+        #expect(store.cards[0].tracking?.changes.count == history)
+    }
+
+    @Test func aCardYouEditedKeepsItsMeaningAndOptions() throws {
+        let store = MorningStore(repository: MemoryRepository())
+        let first = observation()
+        _ = try store.applyCardGeneration(observations: [first], proposals: [threeOptions(first)], runIDs: [first.runID])
+        var edited = store.cards[0]
+        edited.rationale = "My own words."
+        edited.alternatives = nil   // the editor builds a fresh card without the other options
+        try store.saveCard(edited)
+        #expect(store.cards[0].alternatives?.count == 2)
+
+        let changed = next(first, excerpt: "New facts arrived.")
+        _ = try store.applyCardGeneration(observations: [changed], proposals: [proposal(changed)], runIDs: [changed.runID])
+        #expect(store.cards[0].rationale == "My own words.")
+        #expect(store.cards[0].options.map(\.title) == ["Prepare reply", "Ask for a range", "Propose Friday"])
+    }
+
+    @Test func cardsSavedBeforeOptionsStillLoad() throws {
+        let store = MorningStore(repository: MemoryRepository())
+        let first = observation()
+        _ = try store.applyCardGeneration(observations: [first], proposals: [proposal(first)], runIDs: [first.runID])
+        let data = try JSONEncoder().encode(store.cards[0])
+        #expect(!String(decoding: data, as: UTF8.self).contains("alternatives"))   // no options: encoded exactly as before
+        let decoded = try JSONDecoder().decode(MorningCard.self, from: data)
+        #expect(decoded.alternatives == nil && decoded.options.count == 1 && decoded == store.cards[0])
+    }
+
+    private func threeOptions(_ observation: CardObservation) -> CardProposal {
+        CardProposal(observationKey: observation.id, title: "Avery needs a delivery date", meaning: "Avery can't plan until you confirm a date.",
+            action: MorningAction(title: "Prepare reply", instruction: "Draft a reply using the supplied facts"),
+            alternatives: [MorningAction(title: "Ask for a range", instruction: "Draft a reply asking which dates work"),
+                           MorningAction(title: "Propose Friday", instruction: "Draft a reply proposing Friday")])
+    }
+
     private func observation() -> CardObservation {
         CardObservation(runID: UUID(), sourceID: UUID(), itemKey: "Mail-123", sourceName: "Inbox", kind: "Mail", title: "Please confirm the date",
             excerpt: "Avery asks for a delivery date.", url: "https://mail.example.test/thread/123", identityEvidence: "Thread URL and sender Avery",
@@ -149,8 +208,7 @@ struct GeneratedCardStoreTests {
         return value
     }
     private func proposal(_ observation: CardObservation, title: String = "Respond to Avery") -> CardProposal {
-        CardProposal(observationKey: observation.id, title: title, summary: observation.excerpt,
-            rationale: "A response was requested", timing: "Today", unknowns: "Confirmed date",
+        CardProposal(observationKey: observation.id, title: title, meaning: "Avery is waiting on a delivery date from you.",
             action: MorningAction(title: "Prepare reply", instruction: "Draft a reply using the supplied facts"))
     }
     private struct Fixture {

@@ -34,6 +34,8 @@ final class CalendarCollectionRunner: ObservableObject {
     /// Opens the taught page or app before a read and says what it opened (SourcePageOpener, wired by the app).
     /// Off by default, so tests never open anything.
     var openSource: @MainActor (LearnedReadingSource) async -> String? = { _ in nil }
+    /// Runs a script job's script and returns its result; nil uses the tools folder. Replaced in tests.
+    var readScript: (@MainActor (LearnedReadingSource) async throws -> Any)?
     private var pendingFinishedRunID: UUID?
 
     typealias PrepareExecution = SourceCollectionTask.PrepareExecution
@@ -96,7 +98,7 @@ final class CalendarCollectionRunner: ObservableObject {
             return nil
         }
         guard beginArchive([request.archiveEntry()], origin: .single) else { return nil }
-        guard let client = readyClient() else {
+        guard let client = readyClient(needsControl: !request.readsThroughScript) else {
             let message = error ?? "Collection could not start."
             markWaitingNotRun(message)
             finishArchive(stopped: false)
@@ -137,7 +139,7 @@ final class CalendarCollectionRunner: ObservableObject {
             error = archiveFailure ?? "Review the saved source details before collecting."
             return nil
         }
-        guard let client = readyClient() else {
+        guard let client = readyClient(needsControl: ready.contains { !$0.readsThroughScript }) else {
             let message = error ?? "Collection could not start."
             markWaitingNotRun(message)
             finishArchive(stopped: false)
@@ -152,14 +154,15 @@ final class CalendarCollectionRunner: ObservableObject {
         !desktop.isBusy && desktop.tasks.activeTask == nil && activities.current == nil
     }
 
-    private func readyClient() -> (any ConversationClient)? {
+    /// Script jobs read without the computer, so only window jobs need computer control turned on.
+    private func readyClient(needsControl: Bool = true) -> (any ConversationClient)? {
         guard !shuttingDown else { error = "Noteling is closing."; return nil }
         guard desktopAvailable else {
             error = "Finish the current desktop task or Watch Me session before collecting this source."
             return nil
         }
         let settings = config()
-        guard settings.allowControl else {
+        guard settings.allowControl || !needsControl else {
             error = "Turn on computer control in Settings to collect your sources."
             return nil
         }
@@ -253,6 +256,47 @@ final class CalendarCollectionRunner: ObservableObject {
         }
         worker = task
         return task
+    }
+
+    /// A script job: the script fetches everything that arrived and its result is saved as the run's findings, with no
+    /// window, no model and no computer control. The card step then decides what matters.
+    private func readThroughScript(_ request: SourceCollectionTask, _ value: ReadingReadRequest, execution: TaskExecution) async -> SourceRunEntry.State {
+        let started = Date()
+        var state: SourceRunEntry.State
+        var message: String
+        do {
+            let result = try await scriptResult(value.source)
+            // Stop ends the script; whatever it returned after that is not saved.
+            if Task.isCancelled || shuttingDown { throw CancellationError() }
+            let evidence = CalendarCollectionEvidence()
+            let snapshot = try ScriptReading.snapshot(from: result, request: value)
+            evidence.stage(snapshot)
+            state = snapshot.coverage == .partial ? .partial : .complete
+            message = request.savedMessage(evidence, coverage: snapshot.coverage)
+            try persistEntry(request, state: state, message: message, evidence: evidence)
+        } catch {
+            let stopped = Task.isCancelled || shuttingDown || error is CancellationError
+            state = stopped ? .stopped : .failed
+            message = archiveFailure ?? (stopped ? "\(request.collectionLabel) stopped. The previous saved collection was kept."
+                : "Noteling couldn't read this source: \(error.localizedDescription)")
+            if archiveFailure == nil { try? persistEntry(request, state: state, message: message) }
+        }
+        let outcome: BackgroundTaskOutcome = state == .failed ? .failed : state == .stopped ? .stopped : .completed
+        self.execution = nil
+        activeID = nil
+        activeSourceID = nil
+        error = outcome == .failed ? message : nil
+        status = outcome == .completed ? "Collected \(request.dateLabel) from \(request.sourceName)." : message
+        execution.finish(outcome: outcome, text: message, elapsed: Date().timeIntervalSince(started), caption: status)
+        return state
+    }
+
+    private func scriptResult(_ source: LearnedReadingSource) async throws -> Any {
+        if let readScript { return try await readScript(source) }
+        guard let id = source.script, let tool = registry.script(named: id) else {
+            throw CalendarDataError.invalid("Its script, \(source.script ?? "unnamed"), isn't in the tools folder.")
+        }
+        return try await registry.runner.result(tool, secrets: registry.pack(holdingScript: id)?.requires ?? [])
     }
 
     private func begin(_ request: SourceCollectionTask) throws -> TaskExecution {
@@ -394,6 +438,9 @@ final class CalendarCollectionRunner: ObservableObject {
     }
 
     private func run(_ request: SourceCollectionTask, client: any ConversationClient, execution: TaskExecution) async -> SourceRunEntry.State {
+        if case .reading(let value) = request, value.source.readsThroughScript {
+            return await readThroughScript(request, value, execution: execution)
+        }
         let evidence = CalendarCollectionEvidence()
         var sourceRemoved = false
         var prepared = false

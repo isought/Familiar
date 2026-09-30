@@ -49,6 +49,7 @@ enum MorningCardReconciliation {
                 let reopenedNow = tracking.resolution != .resolved && before.tracking?.resolution == .resolved
                 let changedProposal = card.title != before.title || card.summary != before.summary || card.rationale != before.rationale
                     || card.timing != before.timing || card.unknowns != before.unknowns || card.action != before.action
+                    || card.alternatives != before.alternatives
                 if resolvedNow || reopenedNow || changedFacts || changedProposal {
                     let message = resolvedNow ? "Observed that this matter is resolved."
                         : reopenedNow ? "New source evidence shows this matter is open again."
@@ -62,9 +63,9 @@ enum MorningCardReconciliation {
                 if resolvedNow { cancelQueued(cardID: card.id, at: at, in: &workspace) }
             } else if observation.state != .resolved, let proposal {
                 let folder = folderID(in: &workspace)
-                var card = MorningCard(folderID: folder, title: proposal.title, summary: proposal.summary,
-                    sources: [source(for: observation)], rationale: proposal.rationale, action: proposal.action,
-                    unknowns: proposal.unknowns, timing: proposal.timing, updatedAt: at)
+                var card = MorningCard(folderID: folder, title: proposal.title, sources: [source(for: observation)],
+                    rationale: proposal.meaning, action: proposal.action, updatedAt: at)
+                card.alternatives = proposal.alternatives.isEmpty ? nil : proposal.alternatives
                 card.tracking = CardTracking(sourceID: observation.sourceID,
                     itemKey: observation.itemKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
                     sourceName: observation.sourceName, identityEvidence: observation.identityEvidence,
@@ -111,12 +112,21 @@ enum MorningCardReconciliation {
         }
     }
 
+    /// The three-part card replaces the older long fields (summary, timing, unknowns), which are no longer shown.
     private static func apply(_ proposal: CardProposal, to card: inout MorningCard) {
-        card.title = proposal.title; card.summary = proposal.summary; card.rationale = proposal.rationale
-        card.timing = proposal.timing; card.unknowns = proposal.unknowns
+        card.title = proposal.title; card.rationale = proposal.meaning
+        card.summary = ""; card.timing = ""; card.unknowns = ""
         var action = proposal.action
         action.id = card.action.id
         card.action = action
+        // Each option keeps its id by position, so an unchanged proposal isn't logged as a change.
+        let previous = card.alternatives ?? []
+        let alternatives = proposal.alternatives.enumerated().map { index, option -> MorningAction in
+            var option = option
+            if index < previous.count { option.id = previous[index].id }
+            return option
+        }
+        card.alternatives = alternatives.isEmpty ? nil : alternatives
     }
 
     private static func source(for observation: CardObservation, id: UUID = UUID()) -> MorningSource {

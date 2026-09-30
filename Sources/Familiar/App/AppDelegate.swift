@@ -184,6 +184,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         assistant.cardConversation = cardConversation
         let sourceConversation = SourceConversation(store: calendarSources)
         sourceConversation.isRunning = { [weak self] in self?.calendarReader.isRunning ?? false }
+        sourceConversation.sourceScripts = { [weak self] in
+            guard let registry = self?.registry else { return [] }
+            return registry.sourceScripts().map { pack, script in
+                SourceScript(id: script.id, pack: pack.name, description: script.description,
+                             missingSecrets: registry.missingRequirements(for: [pack]).first?.keys ?? [])
+            }
+        }
+        assistant.onOpenSettings = { [weak self] in self?.openSettings() }
         assistant.sourceConversation = sourceConversation
         assistant.onOpenSources = { [weak self] in self?.morningPanel.showSources() }
         assistant.onRunSource = { [weak self] id in self?.runSavedSource(id) }
@@ -399,6 +407,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !fm.fileExists(atPath: dir.path), let bundled = Bundle.main.resourceURL?.appendingPathComponent("tools"), fm.fileExists(atPath: bundled.path) {
             try? fm.copyItem(at: bundled, to: dir)
             Log.info("seeded example tool packs into \(dir.path)")
+        }
+        // A pack added in an update (such as Mail) reaches existing installs; edited or removed packs are left alone.
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("tools"), fm.fileExists(atPath: bundled.path) {
+            for name in ToolRegistry.addMissingPacks(from: bundled, to: dir) { Log.info("added tool pack \(name) to \(dir.path)") }
         }
         let legacy = Config.dir.appendingPathComponent("knowledge")
         let seededNames: Set<String> = ["expense-reports.md", "hr-portal.md", "vpn-and-access.md"]

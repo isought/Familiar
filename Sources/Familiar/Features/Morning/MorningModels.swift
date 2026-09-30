@@ -67,6 +67,8 @@ struct MorningCard: Codable, Identifiable, Equatable {
     var updatedAt: Date = Date()
     var tracking: CardTracking? = nil
     var personalContext: String? = nil
+    /// Options after the first (the first is `action`), best first. Optional so cards saved before it still load.
+    var alternatives: [MorningAction]? = nil
 }
 
 enum MorningWorkKind: String, Codable { case action, context }

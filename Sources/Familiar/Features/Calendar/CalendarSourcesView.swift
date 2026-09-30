@@ -418,7 +418,8 @@ struct CalendarSourcesView: View {
                     .buttonStyle(.plain).foregroundStyle(Pad.penInk).disabled(isRunning)
             }.font(.system(size: 12))
             Text(source.meaning).font(.system(size: 14)).textSelection(.enabled)
-            Text([source.application, source.account].filter { !$0.isEmpty }.joined(separator: " · "))
+            Text([source.application, source.account, source.script.map { "reads through \($0)" } ?? ""]
+                    .filter { !$0.isEmpty }.joined(separator: " · "))
                 .font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
             if !source.url.isEmpty { sourceLink(source.url, title: "Open source") }
             if source.requiresReview {
@@ -443,7 +444,10 @@ struct CalendarSourcesView: View {
             Text(source.scope).font(.system(size: 13)).textSelection(.enabled)
             Text("Use Edit source to describe what to collect and where to stop. Noteling uses these instructions during each read.")
                 .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
-            if source.account.isEmpty {
+            if source.readsThroughScript {
+                Text("Reads everything that arrived through a script in your tools folder, with no window. Your reading rules decide what becomes a card.")
+                    .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
+            } else if source.account.isEmpty {
                 Text(source.url.isEmpty ? "Uses the account the app shows. Noteling records it during each read."
                      : "Uses the account currently shown at this address. Noteling verifies the visible account during each read.")
                     .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
@@ -553,19 +557,26 @@ struct ReadingSourceEditor: View {
             field("Meaning", text: $draft.meaning)
             Text("Why this source matters to you. Keep this context separate from the reading rules below.")
                 .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
-            field("Application", text: $draft.application)
-            DisclosureGroup("Application details") {
-                field("Native app identifier", text: $draft.bundleID)
-            }.font(.system(size: 12))
-            field("Exact source address (if used)", text: $draft.url)
-            field("Account shown in the app (optional)", text: $draft.account)
-            Text("If you leave the account blank, Noteling reads the account the app or page shows and records it each time.")
-                .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
+            if draft.readsThroughScript {
+                Text("Reads through \(draft.script ?? "a script") (\(draft.application)) with the account connected in Settings. To read another account, change it there.")
+                    .font(.system(size: 12)).foregroundStyle(Pad.inkSoft).fixedSize(horizontal: false, vertical: true)
+            } else {
+                field("Application", text: $draft.application)
+                DisclosureGroup("Application details") {
+                    field("Native app identifier", text: $draft.bundleID)
+                }.font(.system(size: 12))
+                field("Exact source address (if used)", text: $draft.url)
+                field("Account shown in the app (optional)", text: $draft.account)
+                Text("If you leave the account blank, Noteling reads the account the app or page shows and records it each time.")
+                    .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
+            }
             notes("Reading rules", text: $draft.scope)
             Text("Describe what to collect and where to stop, using the views and information this source makes available. These instructions guide future reads.")
                 .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
-            notes("How to recognize and read this source", text: $draft.navigationHints)
-            notes("How to know the reading is complete", text: $draft.completionChecks)
+            if !draft.readsThroughScript {
+                notes("How to recognize and read this source", text: $draft.navigationHints)
+                notes("How to know the reading is complete", text: $draft.completionChecks)
+            }
             notes("Remaining uncertainties", text: Binding(get: { draft.uncertainties.joined(separator: "\n") }, set: {
                 draft.uncertainties = $0.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             }))

@@ -19,10 +19,15 @@ struct LearnedReadingSource: Codable, Equatable, Identifiable {
     var learnedAt = Date()
     var requiresReview = false
     var workflowPath = ""
+    /// A tools-folder script this job reads through (`pack__script`), instead of a window it was taught.
+    var script: String? = nil
+
+    var readsThroughScript: Bool { calendarHasText(script ?? "") }
 
     func validate() throws {
         try calendarRequire(calendarHasText(name) && calendarHasText(meaning), "Give the reading source a name and meaning.")
-        try calendarRequire(!url.isEmpty || !bundleID.isEmpty, "Identify the source with its page address or native app identifier.")
+        try calendarRequire(!url.isEmpty || !bundleID.isEmpty || readsThroughScript,
+                            "Identify the source with its page address, native app identifier or a script that reads it.")
         try calendarRequire(url.isEmpty || readingHTTPURL(url), "Use a full http or https source address.")
         try calendarRequire(learnedAt.timeIntervalSince1970.isFinite, "The source learning time is invalid.")
     }
@@ -44,7 +49,7 @@ struct LearnedReadingSource: Codable, Equatable, Identifiable {
 
     func matchesIdentity(of other: Self) -> Bool {
         id == other.id && kind == other.kind && application == other.application && bundleID == other.bundleID
-            && url == other.url && account == other.account && scope == other.scope
+            && url == other.url && account == other.account && scope == other.scope && script == other.script
     }
 }
 
@@ -86,6 +91,8 @@ struct ReadingSnapshot: Codable, Identifiable, Equatable {
     var scopeEvidence: String
     /// The reader's one line for the person: what it read and what it assumed or couldn't check.
     var summary: String? = nil
+    /// A script job keeps everything that arrived; the card step picks what matters.
+    static let scriptItemLimit = 500
 
     /// What this read assumed, so the person can say what's wrong: the reader's summary, else the account it saw
     /// and, for a partial read, what it couldn't check (a complete read's notes say what it verified).
@@ -99,7 +106,8 @@ struct ReadingSnapshot: Codable, Identifiable, Equatable {
         try source.validateForRead()
         try calendarRequire(source.id == sourceID, "The reading collection has a different source identity.")
         try calendarRequire(collectedAt.timeIntervalSince1970.isFinite, "The collection time is invalid.")
-        try calendarRequire(items.count <= ReadingSubmission.maximumItemLimit, "A collection can contain at most \(ReadingSubmission.maximumItemLimit) observations including tracked follow-ups. Report remaining coverage as partial.")
+        let limit = source.readsThroughScript ? Self.scriptItemLimit : ReadingSubmission.maximumItemLimit
+        try calendarRequire(items.count <= limit, "A collection can contain at most \(limit) observations including tracked follow-ups. Report remaining coverage as partial.")
         try calendarRequire(Set(items.map(\.id)).count == items.count, "Reading observations contain duplicate identifiers.")
         for item in items {
             try calendarRequire([item.id, item.title, item.text, item.evidence].allSatisfy(calendarHasText), "Each reading observation needs its title, text and visible evidence.")

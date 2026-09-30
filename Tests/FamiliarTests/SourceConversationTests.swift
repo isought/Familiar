@@ -33,6 +33,76 @@ struct SourceConversationTests {
         #expect(fixture.conversation.context.isEmpty)
     }
 
+    @Test func aJobCanBeStartedFromChatThroughAScript() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        fixture.conversation.sourceScripts = { [SourceScript(id: "mail__today", pack: "Mail", description: "Lists what arrived in the inbox", missingSecrets: [])] }
+        #expect(fixture.conversation.context.contains("Ways to read a new job without teaching (create_source): mail__today (Mail: Lists what arrived in the inbox)"))
+
+        let result = try await fixture.call("create_source", ["name": "Morning mail", "meaning": "My personal inbox",
+                                                               "reading_rules": "Skip promotions; show anything that needs a reply", "script": "mail__today"])
+
+        #expect(!result.isError)
+        let job = try #require(fixture.store.readingSources.first)
+        #expect(job.script == "mail__today" && job.application == "Mail" && job.scope.hasPrefix("Skip promotions"))
+        #expect(fixture.receipts == ["Created “Morning mail”: it reads through Mail. It can run now."])
+        #expect(fixture.connectOffers.isEmpty)
+        #expect(fixture.conversation.context.contains("reads through mail__today"))
+    }
+
+    @Test func aNewJobThatNeedsConnectingPointsToSettings() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        fixture.conversation.sourceScripts = { [SourceScript(id: "mail__today", pack: "Mail", description: "Inbox", missingSecrets: ["MAIL_ADDRESS", "MAIL_APP_PASSWORD"])] }
+        #expect(fixture.conversation.context.contains("not connected yet, needs MAIL_ADDRESS, MAIL_APP_PASSWORD in Settings"))
+
+        _ = try await fixture.call("create_source", ["name": "Morning mail", "meaning": "My inbox", "reading_rules": "Skip promotions", "script": "mail__today"])
+
+        #expect(fixture.receipts.last == "Created “Morning mail”: it reads through Mail. Connect it first: add MAIL_ADDRESS and MAIL_APP_PASSWORD in Settings.")
+        #expect(fixture.connectOffers == ["Mail"])
+    }
+
+    @Test func aScriptJobsAccountLivesInSettingsNotInTheJob() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let job = LearnedReadingSource(kind: .mail, name: "Morning mail", meaning: "My inbox", application: "Mail over IMAP",
+                                       scope: "Skip promotions", script: "imap-mail__today")
+        try fixture.store.saveReadingSource(job)
+
+        let result = try await fixture.call("update_source", ["id": job.id.uuidString, "account": "me@work.test"])
+
+        #expect(result.isError)
+        #expect((result.content as? String)?.contains("change it in Settings") == true)
+        #expect(fixture.connectOffers == ["Mail over IMAP"])   // the Open Settings button it names is offered
+        #expect(fixture.store.readingSources.first?.account == "")
+        let details = try await fixture.call("get_source", ["id": job.id.uuidString])
+        #expect((details.content as? String)?.contains("account: the one connected in Settings for Mail over IMAP") == true)
+    }
+
+    @Test func aNewJobKeepsLongRulesWhole() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        fixture.conversation.sourceScripts = { [SourceScript(id: "imap-mail__today", pack: "Mail over IMAP", description: "Inbox", missingSecrets: [])] }
+        let rules = (1...40).map { "Rule \($0): skip messages from sender number \($0)." }.joined(separator: "\n")
+
+        _ = try await fixture.call("create_source", ["name": "Morning mail", "meaning": "My inbox", "reading_rules": rules, "script": "imap-mail__today"])
+
+        #expect(fixture.store.readingSources.first?.scope == rules)
+        #expect(fixture.conversation.context.contains("[shortened here: read them in full with get_source before changing them"))
+    }
+
+    @Test func anUnknownWayToReadIsRefused() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        fixture.conversation.sourceScripts = { [SourceScript(id: "mail__today", pack: "Mail", description: "Inbox", missingSecrets: [])] }
+
+        let result = try await fixture.call("create_source", ["name": "Slack", "meaning": "Team chat", "reading_rules": "Mentions", "script": "slack__today"])
+
+        #expect(result.isError)
+        #expect((result.content as? String)?.contains("Use one of: mail__today. For anything else, offer Watch Me.") == true)
+        #expect(fixture.store.readingSources.isEmpty)
+    }
+
     @Test func aJobThatCannotRunSaysWhatIsMissingUntilItIsFixed() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
@@ -179,12 +249,14 @@ struct SourceConversationTests {
         let conversation: SourceConversation
         var receipts: [String] = []
         var offers: [(UUID, String)] = []
+        var connectOffers: [String] = []
 
         init() {
             store = CalendarStore(directory: root.appendingPathComponent("sources"))
             conversation = SourceConversation(store: store)
             conversation.onChange = { [unowned self] in self.receipts.append($0) }
             conversation.onOfferRun = { [unowned self] id, name in self.offers.append((id, name)) }
+            conversation.onOfferConnect = { [unowned self] pack in self.connectOffers.append(pack) }
         }
 
         func remove() { try? FileManager.default.removeItem(at: root) }

@@ -38,14 +38,14 @@ struct CardObservation: Codable, Equatable, Identifiable {
 }
 
 /// Generator output refers to input observations; it cannot mint unrelated item identities.
+/// A card is three things: what it is (title), what it means for the person (meaning), and what they can do
+/// (the best option as `action`, then up to two alternatives).
 struct CardProposal: Codable, Equatable {
     var observationKey: String
     var title: String
-    var summary: String
-    var rationale: String
-    var timing: String
-    var unknowns: String
+    var meaning: String
     var action: MorningAction
+    var alternatives: [MorningAction] = []
 }
 
 struct CardChange: Codable, Equatable, Identifiable {
@@ -89,6 +89,10 @@ struct CardGenerationSummary: Equatable {
 }
 
 extension MorningCard {
+    /// What the person can do, best first.
+    var options: [MorningAction] { [action] + (alternatives ?? []) }
+    /// What it means for the person. Hand-written notes and older cards may only have a summary.
+    var meaning: String { rationale.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? summary : rationale }
     var displayDisposition: MorningCardDisposition { tracking?.resolution == .resolved ? .resolved : disposition }
     var isResolved: Bool { tracking?.resolution == .resolved || disposition == .resolved }
 }

@@ -61,6 +61,21 @@ final class ScriptRunner {
     var extraEnv: [String: String] = [:]   // non-secret config env
 
     func run(_ tool: ScriptTool, args: [String: Any], context: ScreenContext?, secrets: [String] = []) async throws -> String {
+        let json = try await execute(tool, args: args, context: context, secrets: secrets)
+        var out: [String: Any] = ["result": json["result"] ?? NSNull()]
+        if let so = json["stdout"] { out["stdout"] = so }
+        let data = try JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys])
+        let s = String(decoding: data, as: UTF8.self)
+        return s.count > 20_000 ? String(s.prefix(20_000)) + "\n…(truncated)" : s
+    }
+
+    /// The script's own result, for code that uses it directly (a saved job reading its source), with no size cap.
+    func result(_ tool: ScriptTool, args: [String: Any] = [:], secrets: [String] = []) async throws -> Any {
+        try await execute(tool, args: args, context: nil, secrets: secrets, stopsWithCaller: true)["result"] ?? NSNull()
+    }
+
+    private func execute(_ tool: ScriptTool, args: [String: Any], context: ScreenContext?, secrets: [String],
+                         stopsWithCaller: Bool = false) async throws -> [String: Any] {
         guard let (exe, cmdArgs) = command(helper: "run_tool.py", script: tool.path, deps: tool.dependencies) else {
             throw ScriptRunnerError(message: "no Python runtime")
         }
@@ -75,7 +90,8 @@ final class ScriptRunner {
             env["FAMILIAR_CONTEXT"] = s   // earlier name, kept for existing packs
         }
         let started = Date()
-        let r = try await Subprocess.run(exe, cmdArgs, stdin: stdin, cwd: tool.path.deletingLastPathComponent(), env: env, timeout: 90)
+        let r = try await Subprocess.run(exe, cmdArgs, stdin: stdin, cwd: tool.path.deletingLastPathComponent(), env: env, timeout: 90,
+                                         stopsWithCaller: stopsWithCaller)
         Log.info("script \(tool.id) exited \(r.code) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s\(r.timedOut ? " (timed out)" : "")")
         if r.timedOut { throw ScriptRunnerError(message: "\(tool.fileName) timed out after 90s") }
         guard let json = Self.lastJSONLine(r.stdout) else {
@@ -85,11 +101,7 @@ final class ScriptRunner {
             let tb = json["traceback"] as? String ?? ""
             throw ScriptRunnerError(message: "\(tool.fileName) failed: \(err)\n\(tb.suffix(800))")
         }
-        var out: [String: Any] = ["result": json["result"] ?? NSNull()]
-        if let so = json["stdout"] { out["stdout"] = so }
-        let data = try JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys])
-        let s = String(decoding: data, as: UTF8.self)
-        return s.count > 20_000 ? String(s.prefix(20_000)) + "\n…(truncated)" : s
+        return json
     }
 
     static func lastJSONLine(_ s: String) -> [String: Any]? {

@@ -109,6 +109,7 @@ struct CardGenerationServiceTests {
             let rejected = await executor(CardGenerationSubmission.toolName,
                 ["proposals": [Self.proposal("invented-item")]], nil)
             #expect(rejected.isError)
+            #expect((rejected.content as? String)?.contains("unresolved observation") == true)   // turned down for its identity, not its shape
             return "I made a card about a completely unrelated thing."
         }
         await service.generate(runID: runID)?.value
@@ -164,9 +165,8 @@ struct CardGenerationServiceTests {
     }
 
     private static func proposal(_ key: String, title: String = "Review contract") -> [String: Any] {
-        ["observationKey": key, "title": title, "summary": "A contract review is waiting.",
-         "rationale": "A reply is needed to move the review forward.", "timing": "Check the observed deadline", "unknowns": "Full terms were not read.",
-         "action": ["title": "Prepare review questions", "instruction": "Draft questions using the saved contract observation.", "mode": "prepare"]]
+        ["observationKey": key, "title": title, "meaning": "A contract review is waiting on you.",
+         "options": [["title": "Prepare review questions", "instruction": "Draft questions using the saved contract observation.", "mode": "prepare"]]]
     }
 
     private static func messageText(_ messages: [[String: Any]]) -> String {

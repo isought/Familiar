@@ -213,6 +213,72 @@ struct ReadingCollectionRunnerTests {
         #expect(partial.assumptions == "Account seen: Account menu displays employee@example.test. Couldn't check: Only the visible inbox list was readable; more messages remain")
     }
 
+    @Test func aScriptJobReadsWithoutTheModelOrComputerControl() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let job = LearnedReadingSource(kind: .mail, name: "Morning mail", meaning: "My inbox", application: "Mail",
+                                       scope: "Skip promotions", script: "mail__today")
+        try fixture.store.saveReadingSource(job)
+        var modelCalls = 0
+        var lines: [String] = []
+        let runner = fixture.runner(allowControl: false) { _, _, _, _ in modelCalls += 1; return "unexpected" }
+        runner.log = { lines.append($0) }
+        runner.readScript = { source in
+            #expect(source.id == job.id)
+            return ["account": "me@example.test", "mailbox": "INBOX", "arrived": 2, "items": [
+                ["key": "a@example.test", "title": "Invoice due Friday", "from": "Billing"],
+                ["key": "b@example.test", "title": "Team lunch", "from": "Sam"]]]
+        }
+
+        await (try #require(runner.collect(source: job, requestedAt: fixture.day))).value
+
+        #expect(modelCalls == 0)
+        let entry = try #require(fixture.store.runStore.runs.first?.entries.first)
+        #expect(entry.state == .complete)
+        #expect(entry.readingSnapshot?.items.count == 2)
+        #expect(entry.message.hasPrefix("Saved 2 items. Read all 2 messages that arrived in INBOX since "))
+        #expect(lines.contains { $0.hasPrefix("run: “Morning mail” complete") })
+    }
+
+    @Test func stoppingAScriptJobKeepsTheEarlierResults() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let job = LearnedReadingSource(kind: .mail, name: "Morning mail", meaning: "My inbox", application: "Mail",
+                                       scope: "Skip promotions", script: "imap-mail__today")
+        try fixture.store.saveReadingSource(job)
+        let runner = fixture.runner(allowControl: false) { _, _, _, _ in "unexpected" }
+        runner.readScript = { _ in
+            _ = runner.stopActive()   // the person presses Stop while the script is still reading
+            return ["mailbox": "INBOX", "arrived": 1, "items": [["key": "a@example.test", "title": "Late result"]]]
+        }
+
+        await (try #require(runner.collect(source: job, requestedAt: fixture.day))).value
+
+        let entry = try #require(fixture.store.runStore.runs.first?.entries.first)
+        #expect(entry.state == .stopped)
+        #expect(entry.readingSnapshot == nil)
+        #expect(entry.message.hasSuffix("stopped. The previous saved collection was kept."))
+    }
+
+    @Test func aScriptJobThatCannotConnectSaysWhy() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let job = LearnedReadingSource(kind: .mail, name: "Morning mail", meaning: "My inbox", application: "Mail",
+                                       scope: "Skip promotions", script: "mail__today")
+        try fixture.store.saveReadingSource(job)
+        var lines: [String] = []
+        let runner = fixture.runner(allowControl: false) { _, _, _, _ in "unexpected" }
+        runner.log = { lines.append($0) }
+        runner.readScript = { _ in ["error": "Mail isn't connected yet: add MAIL_ADDRESS and MAIL_APP_PASSWORD in Noteling Settings."] }
+
+        await (try #require(runner.collect(source: job, requestedAt: fixture.day))).value
+
+        let entry = try #require(fixture.store.runStore.runs.first?.entries.first)
+        #expect(entry.state == .failed)
+        #expect(entry.message == "Noteling couldn't read this source: Mail isn't connected yet: add MAIL_ADDRESS and MAIL_APP_PASSWORD in Noteling Settings.")
+        #expect(lines.contains { $0.hasPrefix("run: “Morning mail” failed") && $0.contains("isn't connected yet") })
+    }
+
     @Test func aSourceRunHasRoomForItsFindingsWhateverTheReplyLengthSetting() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
@@ -447,8 +513,8 @@ struct ReadingCollectionRunnerTests {
                          "allDay": false, "response": "accepted", "availability": "busy", "isCancelled": false, "evidence": "Work review 9–10 accepted busy"]]]
         }
 
-        func runner(_ body: @escaping FakeClient.Body) -> CalendarCollectionRunner {
-            var settings = Config(); settings.allowControl = true
+        func runner(allowControl: Bool = true, _ body: @escaping FakeClient.Body) -> CalendarCollectionRunner {
+            var settings = Config(); settings.allowControl = allowControl
             return CalendarCollectionRunner(store: store, desktop: desktop, registry: registry, activities: activities,
                 config: { settings }, makeClient: { _ in let client = FakeClient(body); self.lastClient = client; return client }, prepareExecution: { _, additional, evidence in
                     let read = ToolRoute(match: .tool(name: "read_screen"), definition: ["name": "read_screen"]) { _, _, _ in

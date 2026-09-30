@@ -53,6 +53,7 @@ final class ToolPack {
     var match = MatchRules()
     var requires: [String] = []     // env var names the scripts need (secrets from the Keychain)
     var irreversible: [String] = [] // control labels the background lane must confirm before pressing (SKILL.md `irreversible:`)
+    var sources: [String] = []      // scripts a saved job can read through (SKILL.md `sources:`, script names without .py)
     var body = ""
     var docs: [DocFile] = []
     var scripts: [ScriptTool] = []
@@ -97,6 +98,7 @@ final class ToolRegistry {
                 pack.body = body.trimmingCharacters(in: .whitespacesAndNewlines)
                 pack.requires = Self.list(fm["requires"])
                 pack.irreversible = Self.list(fm["irreversible"])
+                pack.sources = Self.list(fm["sources"])
                 if let m = fm["match"] as? [String: Any] {
                     pack.match.urls = Self.list(m["urls"])
                     pack.match.bundles = Self.list(m["bundles"])
@@ -208,6 +210,50 @@ final class ToolRegistry {
             let missing = p.requires.filter { !Secrets.has($0) && ProcessInfo.processInfo.environment[$0] == nil }
             return missing.isEmpty ? nil : (p, missing)
         }
+    }
+
+    /// Scripts a saved job can read through, with the pack that holds each.
+    func sourceScripts() -> [(pack: ToolPack, script: ScriptTool)] {
+        packs.flatMap { pack in
+            pack.scripts.filter { pack.sources.contains(($0.fileName as NSString).deletingPathExtension) }.map { (pack, $0) }
+        }
+    }
+
+    /// The pack that holds a script, for its required secrets.
+    func pack(holdingScript id: String) -> ToolPack? {
+        packs.first { $0.scripts.contains { $0.id == id } }
+    }
+
+    /// Packs that shipped before `.bundled-packs` existed: an install without one of them removed it on purpose.
+    nonisolated static let earlierBundledPacks: Set<String> = ["expenses", "hr-portal", "it-access", "shared", "waxwing"]
+
+    /// Copies bundled packs this tools folder has never been offered, so a pack added in an update reaches existing
+    /// installs. Packs people edited or removed are left alone: `.bundled-packs` records what was offered before.
+    @discardableResult
+    nonisolated static func addMissingPacks(from bundled: URL, to root: URL) -> [String] {
+        let fm = FileManager.default
+        let record = root.appendingPathComponent(".bundled-packs")
+        let names = ((try? fm.contentsOfDirectory(atPath: bundled.path)) ?? []).filter { name in
+            var isDir: ObjCBool = false
+            return !name.hasPrefix(".") && fm.fileExists(atPath: bundled.appendingPathComponent(name).path, isDirectory: &isDir) && isDir.boolValue
+        }.sorted()
+        var offered: Set<String>
+        if let text = try? String(contentsOf: record, encoding: .utf8) {
+            offered = Set(text.split(whereSeparator: \.isNewline).map(String.init))
+        } else {
+            offered = earlierBundledPacks.union((try? fm.contentsOfDirectory(atPath: root.path)) ?? [])
+        }
+        var added: [String] = []
+        for name in names where !offered.contains(name) {
+            let target = root.appendingPathComponent(name)
+            if !fm.fileExists(atPath: target.path) {
+                guard (try? fm.copyItem(at: bundled.appendingPathComponent(name), to: target)) != nil else { continue }
+                added.append(name)
+            }
+            offered.insert(name)
+        }
+        try? (offered.sorted().joined(separator: "\n") + "\n").write(to: record, atomically: true, encoding: .utf8)
+        return added
     }
 
     func script(named id: String) -> ScriptTool? {

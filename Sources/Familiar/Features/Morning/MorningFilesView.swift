@@ -76,6 +76,7 @@ struct MorningFilesView: View {
     var cardGeneration: CardGenerationService? = nil
     var discussCard: ((MorningCard) -> Void)? = nil
     @State private var localError: String?
+    @State private var showingOriginal: UUID?   // the card whose original text is expanded
     @State private var undo: MorningCard?
     @State private var notice: String?
 
@@ -319,18 +320,17 @@ struct MorningFilesView: View {
                     Spacer()
                     Image(systemName: "paperclip").foregroundStyle(Pad.inkSoft)
                 }
-                Text(card.title).font(HandFont.font(size: 20)).lineLimit(3).multilineTextAlignment(.leading)
-                Text(card.summary.isEmpty ? card.sources.first?.excerpt ?? "Open to review the details." : card.summary)
-                    .font(.system(size: 12)).lineSpacing(3).lineLimit(3).fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading).foregroundStyle(Pad.inkSoft)
+                Text(card.title).font(HandFont.font(size: 20)).lineLimit(2).fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
+                if !card.meaning.isEmpty {
+                    Text(card.meaning).font(.system(size: 12)).lineSpacing(3).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading).foregroundStyle(Pad.inkSoft)
+                }
                 if let tracking = card.tracking {
                     Text(card.isResolved ? "Resolved" : Calendar.current.isDateInToday(tracking.firstSeenAt) ? "New today" : "Carried forward")
                         .font(.system(size: 10, weight: .medium)).foregroundStyle(Pad.penInk)
                 }
                 Spacer(minLength: 0)
-                if !card.timing.isEmpty { Label(card.timing, systemImage: "clock").font(.system(size: 11)).lineLimit(1).foregroundStyle(Pad.penInk) }
-                let names = store.people.filter { card.personIDs.contains($0.id) }.map(\.name)
-                if !names.isEmpty { Text(names.joined(separator: " · ")).font(.system(size: 11, weight: .medium)).lineLimit(1) }
-            }.padding(18).frame(maxWidth: .infinity, minHeight: 225, maxHeight: 225, alignment: .topLeading)
+            }.padding(18).frame(maxWidth: .infinity, minHeight: 200, maxHeight: 200, alignment: .topLeading)
                 .background(Pad.fieldPaper, in: RoundedRectangle(cornerRadius: 5))
                 .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Pad.tabEdge.opacity(0.55)))
                 .shadow(color: Pad.ink.opacity(0.07), radius: 4, x: 1, y: 3)
@@ -338,65 +338,42 @@ struct MorningFilesView: View {
             .contextMenu { Button("Edit note") { navigation.route = .editCard(card.id) } }
     }
 
+    /// A card is three things: what it is, what it means for you, and what you can do. The original stays one tap away.
     private func cardDetail(_ card: MorningCard) -> some View {
         let pending = store.workItems.first { $0.cardID == card.id && $0.status.isPending }
         let history = store.workItems.filter { $0.cardID == card.id && !$0.status.isPending }.sorted { $0.createdAt > $1.createdAt }
-        let hasRunAction = history.contains { $0.kind == .action }
         return ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 9) {
                     HStack {
                         Text(card.isSample ? "FICTIONAL SAMPLE" : card.displayDisposition.label.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(Pad.inkSoft)
                         Spacer()
-                        Button("Edit") { navigation.route = .editCard(card.id) }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk)
+                        Menu {
+                            Button("Edit") { navigation.route = .editCard(card.id) }
+                            if let discussCard { Button("Discuss or adjust") { discussCard(card) }.disabled(pending != nil) }
+                            if card.disposition != .unreviewed {
+                                Button("Return to review folder") {
+                                    perform { try store.returnToFolder(cardID: card.id); navigation.disposition = .unreviewed }
+                                }.disabled(pending != nil)
+                            }
+                        } label: { Image(systemName: "ellipsis.circle").foregroundStyle(Pad.penInk) }
+                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("More for this file")
                     }
                     Text(card.title).font(HandFont.font(size: 27)).fixedSize(horizontal: false, vertical: true)
-                    if !card.summary.isEmpty { Text(card.summary).font(.system(size: 14)).lineSpacing(4).textSelection(.enabled) }
-                    if !card.timing.isEmpty { Label(card.timing, systemImage: "clock").font(.system(size: 12)).foregroundStyle(Pad.penInk) }
-                    if !card.personIDs.isEmpty { peopleLinks(card) }
-                    if let tracking = card.tracking {
-                        Text("First seen \(tracking.firstSeenAt.formatted(date: .abbreviated, time: .omitted)) · Last observed \(tracking.lastSeenAt.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
-                        if !tracking.resolutionEvidence.isEmpty {
-                            Label(tracking.resolutionEvidence, systemImage: card.isResolved ? "checkmark.circle" : "info.circle")
-                                .font(.system(size: 12)).foregroundStyle(Pad.inkSoft).fixedSize(horizontal: false, vertical: true)
-                        }
+                    if !card.meaning.isEmpty {
+                        Text(card.meaning).font(.system(size: 15)).lineSpacing(4).lineLimit(4).textSelection(.enabled)
+                    }
+                    if let context = card.personalContext, !context.isEmpty {
+                        Label(context, systemImage: "person.bubble").font(.system(size: 12)).lineLimit(2)
+                            .foregroundStyle(Pad.inkSoft).help(context).accessibilityLabel("Your note: \(context)")
+                    }
+                    if card.isResolved, let evidence = card.tracking?.resolutionEvidence, !evidence.isEmpty {
+                        Label(evidence, systemImage: "checkmark.circle").font(.system(size: 12)).lineLimit(2).foregroundStyle(Pad.inkSoft)
                     }
                 }
-                if let discussCard {
-                    Button { discussCard(card) } label: { Label("Discuss or adjust", systemImage: "bubble.left.and.bubble.right") }
-                        .buttonStyle(MorningActionButton()).disabled(pending != nil)
-                }
-                if let context = card.personalContext, !context.isEmpty { detailSection("Your context", icon: "person.bubble", text: context) }
-                if !card.sources.isEmpty {
-                    if card.tracking != nil {
-                        DisclosureGroup("Source evidence") { sourceEvidence(card).padding(.top, 8) }
-                            .font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
-                    } else {
-                        sourceEvidence(card)
-                    }
-                } else {
-                    Text("No source excerpt is attached. Review the context before handing off work.").font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
-                }
-                if !card.rationale.isEmpty { detailSection("Why this matters", icon: "lightbulb", text: card.rationale) }
-                if !card.unknowns.isEmpty { detailSection("Still unclear", icon: "questionmark.circle", text: card.unknowns) }
-                workResults(card)
-                VStack(alignment: .leading, spacing: 10) {
-                    sectionLabel("What Noteling can do", icon: "sparkles")
-                    Text(card.action.title).font(.system(size: 14, weight: .semibold))
-                    if card.tracking != nil {
-                        DisclosureGroup("Task instructions") {
-                            Text(card.action.instruction).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled).padding(.top, 6)
-                        }.font(.system(size: 12))
-                    } else {
-                        Text(card.action.instruction).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
-                    }
-                    Text(card.action.mode == .prepare ? "Prepares a result from this file’s context. Doesn’t operate other apps." : "Works in your apps through the background task system. Existing input and action approvals still apply.")
-                        .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
-                }.padding(15).frame(maxWidth: .infinity, alignment: .leading).background(Pad.paperTop.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
                 if let pending {
                     VStack(alignment: .leading, spacing: 7) {
-                        Label(pending.status.label, systemImage: "tray.and.arrow.down").font(.system(size: 13, weight: .medium))
+                        Label("\(pending.status.label): \(pending.action.title)", systemImage: "tray.and.arrow.down").font(.system(size: 13, weight: .medium))
                         if !pending.progress.isEmpty { Text(pending.progress).font(.system(size: 12)).foregroundStyle(Pad.inkSoft) }
                         if let message = store.queueMessage { Text(message).font(.system(size: 12)).foregroundStyle(Pad.redInk).textSelection(.enabled) }
                         if pending.status == .queued { Button("Remove from queue") { perform { try store.cancelQueued(id: pending.id) } }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk) }
@@ -408,35 +385,60 @@ struct MorningFilesView: View {
                     if let previous = history.first, let warning = retryWarning(previous) {
                         Label(warning, systemImage: "exclamationmark.circle").font(.system(size: 12)).foregroundStyle(Pad.redInk).fixedSize(horizontal: false, vertical: true)
                     }
-                    HStack(spacing: 9) {
-                        Button("Ignore") { decide(card, .ignored) }.buttonStyle(MorningActionButton())
-                        Button(hasRunAction ? "Run again" : card.action.title) { enqueue(card, kind: .action) }.buttonStyle(MorningActionButton(primary: true))
-                        Button("I’ll do it") { decide(card, .mine) }.buttonStyle(MorningActionButton())
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 9) { optionButtons(card, history: history) }
+                        VStack(alignment: .leading, spacing: 8) { optionButtons(card, history: history) }
                     }
-                    if card.contextAction != nil {
-                        Button { enqueue(card, kind: .context) } label: { Label("Help me understand first", systemImage: "questionmark.bubble") }
-                            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk)
-                    }
-                    Button("I’ve handled this") { perform { try store.setCardResolution(cardID: card.id, resolved: true) } }
-                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk)
-                    if card.disposition != .unreviewed {
-                        Button("Return to review folder") { perform { try store.returnToFolder(cardID: card.id) }; navigation.disposition = .unreviewed }
-                            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
-                    }
+                    HStack(spacing: 16) {
+                        Button("I’ll do it") { decide(card, .mine) }
+                        Button("Ignore") { decide(card, .ignored) }
+                        Button("I’ve handled this") { perform { try store.setCardResolution(cardID: card.id, resolved: true) } }
+                    }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk)
                 }
-                if let tracking = card.tracking, !tracking.changes.isEmpty {
-                    DisclosureGroup("Card history") {
-                        VStack(alignment: .leading, spacing: 9) {
-                            ForEach(tracking.changes.reversed()) { change in
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(change.message).font(.system(size: 12))
-                                    Text(change.at, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
-                                }
-                            }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
-                    }.font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
-                }
+                originalLink(card)
+                workResults(card)
             }.padding(23)
+        }
+    }
+
+    /// The card's options, best first; the first is the primary button. An option that works in your apps is marked, and
+    /// every option shows what it will do on hover.
+    @ViewBuilder private func optionButtons(_ card: MorningCard, history: [MorningWorkItem]) -> some View {
+        ForEach(Array(card.options.enumerated()), id: \.element.id) { index, option in
+            let ran = Self.hasRun(option, in: history)
+            let title = ran ? "\(option.title) again" : option.title
+            Button { enqueue(card, kind: .action, optionID: option.id) } label: {
+                if option.mode == .desktop { Label(title, systemImage: "macwindow") } else { Text(title) }
+            }
+            .buttonStyle(MorningActionButton(primary: index == 0))
+            .help(option.mode == .desktop ? "Works in your apps: \(option.instruction)" : option.instruction)
+            .accessibilityHint(option.mode == .desktop ? "Works in your apps" : "Prepares a result here")
+        }
+        if let context = card.contextAction {
+            Button(context.title) { enqueue(card, kind: .context) }.buttonStyle(MorningActionButton())
+        }
+    }
+
+    /// An option counts as run once work on it actually started, not when it was removed from the queue first.
+    static func hasRun(_ option: MorningAction, in history: [MorningWorkItem]) -> Bool {
+        history.contains { $0.kind == .action && $0.action.id == option.id && $0.startedAt != nil }
+    }
+
+    /// The original item, one tap away: its page when it has one, otherwise the text Noteling read.
+    @ViewBuilder private func originalLink(_ card: MorningCard) -> some View {
+        let page = card.sources.lazy.compactMap { URL(string: $0.url) }.first { ["https", "http"].contains($0.scheme?.lowercased() ?? "") }
+        let hasText = card.sources.contains { !$0.excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let shown = showingOriginal == card.id
+        if page != nil || hasText {
+            HStack(spacing: 16) {
+                if hasText {
+                    Button { showingOriginal = shown ? nil : card.id } label: {
+                        Label(shown ? "Hide original" : "Show original", systemImage: "doc.text")
+                    }.buttonStyle(.plain)
+                }
+                if let page { Link(destination: page) { Label("Open original", systemImage: "arrow.up.right.square") } }
+            }.font(.system(size: 12)).foregroundStyle(Pad.penInk)
+            if shown { sourceEvidence(card) }
         }
     }
 
@@ -449,9 +451,12 @@ struct MorningFilesView: View {
                         Spacer()
                         Text(source.capturedAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
                     }
-                    Text(source.excerpt).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    if let url = URL(string: source.url), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
-                        Link("Open original", destination: url).font(.system(size: 11)).foregroundStyle(Pad.penInk)
+                    // What was read, then what Noteling saw it by, quieter.
+                    let parts = source.excerpt.components(separatedBy: "\nVisible evidence: ")
+                    Text(parts[0]).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    if parts.count > 1 {
+                        Text(parts.dropFirst().joined(separator: "\n")).font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
+                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     }
                 }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Color.white.opacity(0.65), in: RoundedRectangle(cornerRadius: 7))
                     .overlay(alignment: .leading) { Rectangle().fill(Pad.tabEdge).frame(width: 2).padding(.vertical, 10) }
@@ -461,27 +466,13 @@ struct MorningFilesView: View {
 
     private func retryWarning(_ work: MorningWorkItem) -> String? {
         switch work.status {
-        case .interrupted: return "This work was interrupted. Check what happened and the result above before running it again."
+        case .interrupted: return "This work was interrupted. Check what happened and its result below before running it again."
         case .cancelled: return work.startedAt == nil ? "The previous handoff was removed before it started." : "This work was stopped. Review any changes already made before running it again."
         case .failed: return "The previous attempt couldn’t finish. Review its result before trying again."
         default: return nil
         }
     }
 
-    private func peopleLinks(_ card: MorningCard) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(store.people.filter { card.personIDs.contains($0.id) }) { person in
-                Button { navigation.route = .person(person.id) } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "person.crop.circle")
-                        Text(person.name).fontWeight(.medium)
-                        if !person.relationship.isEmpty { Text("· \(person.relationship)").foregroundStyle(Pad.inkSoft) }
-                        Image(systemName: "chevron.right").font(.system(size: 9))
-                    }.font(.system(size: 12))
-                }.buttonStyle(.plain).foregroundStyle(Pad.penInk)
-            }
-        }
-    }
 
     @ViewBuilder private func workResults(_ card: MorningCard) -> some View {
         let results = store.workItems.filter { $0.cardID == card.id && !$0.status.isPending }.sorted { $0.createdAt > $1.createdAt }
@@ -588,9 +579,9 @@ struct MorningFilesView: View {
     private func restore(_ card: MorningCard) {
         perform { try store.setDisposition(cardID: card.id, to: card.disposition); navigation.disposition = card.disposition; navigation.route = .card(card.id); notice = nil; undo = nil }
     }
-    private func enqueue(_ card: MorningCard, kind: MorningWorkKind) {
+    private func enqueue(_ card: MorningCard, kind: MorningWorkKind, optionID: UUID? = nil) {
         perform {
-            let item = try store.enqueue(cardID: card.id, kind: kind)
+            let item = try store.enqueue(cardID: card.id, kind: kind, optionID: optionID)
             undo = nil
             notice = kind == .context ? "Noteling will help clarify this file. Your decision stays open." : "Handed to Noteling. Progress and results stay with this file."
             if kind == .action { navigation.route = .folder(card.folderID) }

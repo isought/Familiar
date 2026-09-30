@@ -41,9 +41,11 @@ final class Assistant: ObservableObject {
         didSet {
             sourceConversation?.onChange = { [weak self] receipt in self?.sourceChanged(receipt) }
             sourceConversation?.onOfferRun = { [weak self] id, name in self?.offerSourceRun(id: id, name: name) }
+            sourceConversation?.onOfferConnect = { [weak self] _ in self?.offerConnect() }
         }
     }
     var onOpenSources: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
     var onRunSource: ((UUID) -> Void)?
     private var pendingSourceTabs: [String] = []   // added to the reply's tabs when the turn ends
     private var offeredRuns: [String: UUID] = [:]  // Run now tab title → job
@@ -91,6 +93,7 @@ final class Assistant: ObservableObject {
     static let discardTab = "Discard"
     static let retryTab = "Try again"
     static let openSourcesTab = "Open Manage sources"
+    static let openSettingsTab = "Open Settings"
     static let reservedTabs = [continueTab, skipContextTab, keepTab, fullDraftTab, discardTab, retryTab]
 
     init(config: Config, watcher: ContextWatcher, registry: ToolRegistry, shell: ShellState, learning: WatchLearnSession,
@@ -162,6 +165,7 @@ final class Assistant: ObservableObject {
 
     func askSuggestion(_ s: String) {
         if s == Self.openSourcesTab, let onOpenSources { onOpenSources(); return }
+        if s == Self.openSettingsTab, let onOpenSettings { onOpenSettings(); return }
         if let id = offeredRuns.removeValue(forKey: s) {
             suggestions.removeAll { $0 == s }
             onRunSource?(id)
@@ -820,6 +824,11 @@ final class Assistant: ObservableObject {
         let tab = "Run “\(Self.reviewExcerpt(name, limit: 40))” now"
         offeredRuns[tab] = id
         if !pendingSourceTabs.contains(tab) { pendingSourceTabs.append(tab) }
+    }
+
+    /// A new job needs connecting: secrets go in Settings, never through the chat.
+    private func offerConnect() {
+        if !pendingSourceTabs.contains(Self.openSettingsTab) { pendingSourceTabs.append(Self.openSettingsTab) }
     }
 
     /// The tabs saved-job tools asked for during this turn, handed out once.

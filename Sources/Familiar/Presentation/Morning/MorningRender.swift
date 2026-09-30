@@ -232,14 +232,13 @@ enum MorningRender {
             excerpt: "Fictional example: Morgan is waiting for confirmation of Thursday's rehearsal time.",
             url: "https://mail.example.test/thread/rehearsal-slot", identityEvidence: "Fictional thread permalink: rehearsal-slot",
             observedAt: firstSeen, state: .open, stateEvidence: "The rehearsal time has not yet been confirmed.")
-        let agendaProposal = CardProposal(observationKey: agenda.id, title: "Review the demo's opening section",
-            summary: "Taylor is waiting for your review of the opening section. The agenda is ready for a short pass before rehearsal.",
-            rationale: "Your feedback will help Taylor finish the agenda before the team rehearses.",
-            timing: "Before Thursday's rehearsal", unknowns: "The full agenda has not been opened in this fictional example.",
-            action: MorningAction(title: "Prepare review questions", instruction: "Draft a short checklist for reviewing the demo's opening section using the saved example thread.", mode: .prepare))
-        let rehearsalProposal = CardProposal(observationKey: rehearsal.id, title: "Confirm the rehearsal time",
-            summary: "Morgan needs a confirmed time to finish the rehearsal invitation.", rationale: "The team needs one agreed slot.",
-            timing: "Before the invitation is sent", unknowns: "Other attendees' availability has not been checked.",
+        let agendaProposal = CardProposal(observationKey: agenda.id, title: "Taylor's demo opening needs your review",
+            meaning: "Taylor can't finish the agenda before Thursday's rehearsal without your feedback.",
+            action: MorningAction(title: "Prepare review questions", instruction: "Draft a short checklist for reviewing the demo's opening section using the saved example thread.", mode: .prepare),
+            alternatives: [MorningAction(title: "Ask Taylor about the story", instruction: "Draft a short question to Taylor about the demo's opening story, using the saved example thread. Do not send it.", mode: .prepare),
+                           MorningAction(title: "Draft brief feedback", instruction: "Draft two or three lines of feedback on the opening section from the saved example thread. Do not send it.", mode: .prepare)])
+        let rehearsalProposal = CardProposal(observationKey: rehearsal.id, title: "Morgan needs the rehearsal time",
+            meaning: "The invitation waits on your confirmation of Thursday's slot.",
             action: MorningAction(title: "Prepare a reply", instruction: "Draft a short reply asking Morgan to confirm the proposed rehearsal slot. Do not send it.", mode: .prepare))
         try store.applyCardGeneration(observations: [agenda, rehearsal], proposals: [agendaProposal, rehearsalProposal],
             runIDs: [firstRun], at: firstSeen)
