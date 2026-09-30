@@ -75,6 +75,7 @@ struct ReadingItem: Codable, Identifiable, Equatable {
     var identityEvidence: String? = nil
     var observedState: ObservedItemState? = nil
     var stateEvidence: String? = nil
+    var mail: MailFacts? = nil
 }
 
 struct ReadingSnapshot: Codable, Identifiable, Equatable {
@@ -91,6 +92,7 @@ struct ReadingSnapshot: Codable, Identifiable, Equatable {
     var scopeEvidence: String
     /// The reader's one line for the person: what it read and what it assumed or couldn't check.
     var summary: String? = nil
+    var scriptRead: ScriptReadCounts? = nil
     /// A script job keeps everything that arrived; the card step picks what matters.
     static let scriptItemLimit = 500
 

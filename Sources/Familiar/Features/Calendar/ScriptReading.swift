@@ -34,7 +34,7 @@ enum ScriptReading {
             items.append(ReadingItem(id: id, title: title, text: body(row),
                 evidence: "Read through \(request.source.script ?? "a script") from \(place)" + (received.isEmpty ? "" : ", received \(received)"),
                 url: readingHTTPURL(text(row["url"])) ? text(row["url"]) : "",
-                identityKey: identity, identityEvidence: identity.map { "Message-ID \($0)" }))
+                identityKey: identity, identityEvidence: identity.map { "Message-ID \($0)" }, mail: MailFacts(row: row)))
         }
         let summary = arrived == 0 ? "Nothing arrived in \(mailbox) since \(since)."
             : truncated ? "Read the newest \(items.count) of \(arrived) messages that arrived in \(mailbox) since \(since)."
@@ -44,7 +44,8 @@ enum ScriptReading {
             coverageNotes: truncated ? ["\(arrived) messages arrived; the newest \(items.count) are here."] : [],
             accountEvidence: account.isEmpty ? "The account the script is connected to" : "Signed in as \(account)",
             sourceEvidence: place, scopeEvidence: "Everything that arrived since \(since): \(arrived) message\(arrived == 1 ? "" : "s")",
-            summary: summary)
+            summary: summary, scriptRead: ScriptReadCounts(arrived: arrived, returned: result["returned"] as? Int ?? items.count,
+                truncated: truncated, since: (result["since"] as? String).flatMap(date)))
         try snapshot.validate()
         return snapshot
     }
