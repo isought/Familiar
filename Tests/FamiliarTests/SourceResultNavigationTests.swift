@@ -80,6 +80,26 @@ struct SourceResultNavigationTests {
         #expect(!reading.isProblem)
     }
 
+    @Test func aRunNamesTheSourcesThatDidNotFinishAboveItsFindings() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        func run(_ entries: [SourceRunEntry]) -> SourceRunRecord {
+            SourceRunRecord(origin: .all, startedAt: Date(), finishedAt: Date(), timeZoneID: "UTC", status: .completed, entries: entries)
+        }
+        #expect(UnfinishedSourcesNote(run: run([fixture.entry(.complete), fixture.entry(.complete, named: "Bank")])) == nil)
+        let one = run([fixture.entry(.complete), fixture.entry(.complete, named: "Bank"), fixture.entry(.failed, named: "School portal")])
+        #expect(UnfinishedSourcesNote(run: one)?.text == "1 source didn’t finish: School portal")
+        let several = run([fixture.entry(.partial, named: "Bank"), fixture.entry(.complete), fixture.entry(.stopped, named: "School portal")])
+        #expect(UnfinishedSourcesNote(run: several)?.text == "2 sources didn’t finish: Bank, School portal")
+
+        let all = try #require(find(UnfinishedSourcesLine.self, in: SourceRunResultsView(run: one).body),
+                               "A run with every source names the failure at the top, not below each source’s findings.")
+        #expect(all.note.text == "1 source didn’t finish: School portal")
+        let failedSource = try #require(one.entries.last?.sourceID)
+        #expect(find(UnfinishedSourcesLine.self, in: SourceRunResultsView(run: one, sourceID: failedSource).body) == nil,
+                "One source’s page already shows its own state.")
+    }
+
     @Test func cardControlsLiveWithTheRunsAndTheMainScreenShowsOnlyWorkOrFailure() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
@@ -169,9 +189,10 @@ struct SourceResultNavigationTests {
         }
 
         /// One source's entry in a run; a complete one carries the finding it read. Each entry is its own source.
-        func entry(_ state: SourceRunEntry.State) -> SourceRunEntry {
+        func entry(_ state: SourceRunEntry.State, named name: String? = nil) -> SourceRunEntry {
             var read = source
-            if state != .complete { read.id = UUID() }
+            if state != .complete || name != nil { read.id = UUID() }
+            if let name { read.name = name }
             let request = ReadingReadRequest(source: read)
             var entry = SourceRunEntry(reading: request, state: state)
             if state == .complete {
@@ -185,7 +206,7 @@ struct SourceResultNavigationTests {
 
         @discardableResult
         func run(_ states: [SourceRunEntry.State], at: Date) throws -> SourceRunRecord {
-            let run = try sources.runStore.begin(entries: states.map(entry), origin: .all, startedAt: at)
+            let run = try sources.runStore.begin(entries: states.map { entry($0) }, origin: .all, startedAt: at)
             return try sources.runStore.finish(runID: run.id, status: .completed, finishedAt: at.addingTimeInterval(60))
         }
 

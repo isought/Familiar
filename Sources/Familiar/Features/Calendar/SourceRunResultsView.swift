@@ -86,13 +86,32 @@ struct LatestRunNote: Equatable {
             isProblem = false
             return
         }
-        let unfinished = run.entries.filter { Self.unfinished.contains($0.state) }.count
+        let unfinished = run.entries.filter(\.state.didNotFinish).count
         guard unfinished > 0 else { return nil }
         text = "\(unfinished) \(unfinished == 1 ? "source" : "sources") didn’t finish"
         isProblem = true
     }
+}
 
-    private static let unfinished: Set<SourceRunEntry.State> = [.partial, .failed, .stopped, .notRun, .interrupted]
+/// Names the sources in a run that didn't finish. It sits above the findings, so the failure the Latest run link
+/// promised is on screen when the run opens, not below every other source's findings.
+struct UnfinishedSourcesNote: Equatable {
+    let text: String
+
+    init?(run: SourceRunRecord) {
+        let names = run.entries.filter(\.state.didNotFinish).map(\.sourceName)
+        guard !names.isEmpty else { return nil }
+        text = "\(names.count) \(names.count == 1 ? "source" : "sources") didn’t finish: \(names.joined(separator: ", "))"
+    }
+}
+
+struct UnfinishedSourcesLine: View {
+    let note: UnfinishedSourcesNote
+
+    var body: some View {
+        Label(note.text, systemImage: "exclamationmark.triangle")
+            .font(.system(size: 12, weight: .medium)).foregroundStyle(Pad.redInk).textSelection(.enabled)
+    }
 }
 
 struct SourceRunResultsView: View {
@@ -120,6 +139,9 @@ struct SourceRunResultsView: View {
                         if run.origin == .migration {
                             Text("Recovered saved collection · original run details unavailable")
                                 .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
+                        }
+                        if sourceID == nil, let unfinished = UnfinishedSourcesNote(run: run) {
+                            UnfinishedSourcesLine(note: unfinished).padding(.top, 4)
                         }
                         if sourceID != nil && run.entries.count > 1 {
                             Button("All sources in this run") { openRun(run.id, nil) }
@@ -179,7 +201,7 @@ struct SourceRunHistoryView: View {
                                     .font(.system(size: 12)).lineLimit(2)
                                 Text("\(run.entries.count) \(run.entries.count == 1 ? "source" : "sources") · \(run.status.rawValue.capitalized)")
                                     .font(.system(size: 11)).foregroundStyle(Pad.inkSoft)
-                                let gaps = run.entries.filter { [.partial, .failed, .stopped, .notRun, .interrupted].contains($0.state) }.count
+                                let gaps = run.entries.filter(\.state.didNotFinish).count
                                 if gaps > 0 {
                                     Text("\(gaps) \(gaps == 1 ? "source has" : "sources have") incomplete results")
                                         .font(.system(size: 11)).foregroundStyle(Pad.redInk)
@@ -199,6 +221,8 @@ struct SourceRunHistoryView: View {
 }
 
 extension SourceRunEntry.State {
+    /// The source stopped short of a full read in this run, so its findings are missing or incomplete.
+    var didNotFinish: Bool { [.partial, .failed, .stopped, .notRun, .interrupted].contains(self) }
     var resultSymbol: String {
         switch self {
         case .complete: return "checkmark.circle"
