@@ -108,10 +108,15 @@ struct CardGenerationSummary: Equatable {
     /// Items the model read this step, and items left out because it had judged them before.
     var sent = 0
     var alreadySorted = 0
+    /// Once some items were already sorted, it counts items sorted and cards changed apart, so "0 new" beside a count
+    /// of messages isn't read as "no new mail".
     var message: String {
-        if sent == 0, alreadySorted > 0, created + updated + resolved == 0 { return "Nothing new to sort: \(alreadySorted) already sorted." }
-        let counts = "\(created) new · \(updated) updated · \(resolved) resolved"
-        return alreadySorted > 0 ? counts + " · \(alreadySorted) already sorted" : counts
+        guard alreadySorted > 0 else { return "\(created) new · \(updated) updated · \(resolved) resolved" }
+        let changes = [created > 0 ? "\(created) new card\(created == 1 ? "" : "s")" : nil,
+                       updated > 0 ? "\(updated) updated" : nil, resolved > 0 ? "\(resolved) resolved" : nil].compactMap { $0 }
+        if sent == 0, changes.isEmpty { return "Nothing new to sort: \(alreadySorted) already sorted." }
+        let lead = sent == 0 ? "Nothing new to sort" : "Sorted \(sent) new item\(sent == 1 ? "" : "s")"
+        return lead + ": " + (changes.isEmpty ? "no new cards" : changes.joined(separator: " · ")) + " · \(alreadySorted) already sorted."
     }
 }
 

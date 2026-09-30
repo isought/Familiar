@@ -58,7 +58,7 @@ struct CardJudgmentTests {
         await service.generate()?.value
         #expect(fixture.sent.last == [fixture.key(48)])
         #expect(fixture.morning.cards.map { $0.tracking?.key } == [fixture.key(48)])
-        #expect(service.status == "1 new · 0 updated · 0 resolved · 47 already sorted")
+        #expect(service.status == "Sorted 1 new item: 1 new card · 47 already sorted.")
     }
 
     @Test func readingOrStarringMailIsNotNewButAChangedScreenReadIs() async throws {
@@ -186,7 +186,7 @@ struct CardJudgmentTests {
         let service = fixture.service()
         await service.generate()?.value
         #expect(fixture.sent == [[fixture.key(0)]])
-        #expect(service.status == "0 new · 0 updated · 0 resolved · 2 already sorted")
+        #expect(service.status == "Sorted 1 new item: no new cards · 2 already sorted.")
         let judged = try #require(fixture.morning.workspace.judgments)
         #expect(Set(judged.keys) == Set((0..<3).map(fixture.key)) && judged.values.allSatisfy { Date().timeIntervalSince($0.seenAt) < 60 })
     }
@@ -214,7 +214,7 @@ struct CardJudgmentTests {
         #expect(followed.tracking?.lastRunID == second && followed.tracking!.lastSeenAt > card.tracking!.lastSeenAt)
         #expect(followed.tracking?.changes.last?.message == "Source information changed.")
         #expect(followed.sources.first?.excerpt.contains("starred") == true)
-        #expect(service.status == "0 new · 1 updated · 0 resolved · 3 already sorted")
+        #expect(service.status == "Nothing new to sort: 1 updated · 3 already sorted.")
 
         // A resolved item needs no judging, and its card is still resolved.
         try fixture.readTaught("Budget signed off; nothing left to review", state: .resolved)
