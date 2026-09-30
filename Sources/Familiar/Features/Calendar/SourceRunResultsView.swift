@@ -40,6 +40,61 @@ struct SourceRunResultsHost: View {
     }
 }
 
+/// The newest run in full, on its own screen. It follows a run that starts while it is open.
+struct LatestRunHost: View {
+    @ObservedObject var store: CalendarStore
+    @ObservedObject var runner: CalendarCollectionRunner
+    @ObservedObject private var runs: SourceRunStore
+    let openRun: (UUID, UUID?) -> Void
+    let manageSource: (UUID) -> Void
+
+    init(store: CalendarStore, runner: CalendarCollectionRunner,
+         openRun: @escaping (UUID, UUID?) -> Void, manageSource: @escaping (UUID) -> Void) {
+        self.store = store
+        self.runner = runner
+        self.runs = store.runStore
+        self.openRun = openRun
+        self.manageSource = manageSource
+    }
+
+    var body: some View {
+        if let latest = runs.runs.first {
+            SourceRunResultsHost(store: store, runner: runner, runID: latest.id, sourceID: nil,
+                                 openRun: openRun, manageSource: manageSource).id(latest.id)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                if let error = runs.error {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 12)).foregroundStyle(Pad.redInk).textSelection(.enabled)
+                }
+                Text("No runs yet. Read your sources, and the newest run will show here.")
+                    .font(.system(size: 13)).foregroundStyle(Pad.inkSoft)
+            }.padding(23)
+        }
+    }
+}
+
+/// What the Latest run link says after its name: that the run is still reading, or how many sources didn't finish,
+/// so moving the run off the main screen never hides a failure.
+struct LatestRunNote: Equatable {
+    let text: String
+    let isProblem: Bool
+
+    init?(run: SourceRunRecord) {
+        if run.status == .running {
+            text = "reading now"
+            isProblem = false
+            return
+        }
+        let unfinished = run.entries.filter { Self.unfinished.contains($0.state) }.count
+        guard unfinished > 0 else { return nil }
+        text = "\(unfinished) \(unfinished == 1 ? "source" : "sources") didn’t finish"
+        isProblem = true
+    }
+
+    private static let unfinished: Set<SourceRunEntry.State> = [.partial, .failed, .stopped, .notRun, .interrupted]
+}
+
 struct SourceRunResultsView: View {
     let run: SourceRunRecord
     var sourceID: UUID? = nil
@@ -139,40 +194,6 @@ struct SourceRunHistoryView: View {
                     }.buttonStyle(.plain)
                 }
             }.padding(23)
-        }
-    }
-}
-
-struct SourceRunSummary: View {
-    let run: SourceRunRecord
-    let openRun: (UUID, UUID?) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            HStack {
-                Text(run.origin == .migration ? "Recovered collection" : run.status == .running ? "Current run" : "Latest run")
-                    .font(.system(size: 12, weight: .semibold))
-                Spacer()
-                Text(run.startedAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
-            }
-            ForEach(run.entries) { entry in
-                let presentation = SourceResultPresentation(entry: entry)
-                Button { openRun(run.id, entry.sourceID) } label: {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: presentation.state.resultSymbol).foregroundStyle(presentation.state.resultTint)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(entry.sourceName).font(.system(size: 13, weight: .medium))
-                            Text(entry.dateLabel).font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
-                            if let notice = presentation.notice, !notice.isEmpty {
-                                Text(notice).font(.system(size: 11)).foregroundStyle(Pad.inkSoft).lineLimit(2)
-                            }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                        Text(presentation.stateLabel).font(.system(size: 11, weight: .medium)).foregroundStyle(presentation.state.resultTint)
-                        Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Pad.inkSoft)
-                    }.contentShape(Rectangle())
-                }.buttonStyle(.plain).help("Open the findings from this exact run")
-            }
         }
     }
 }

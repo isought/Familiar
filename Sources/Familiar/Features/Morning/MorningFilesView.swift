@@ -3,7 +3,7 @@ import SwiftUI
 @MainActor final class MorningNavigation: ObservableObject {
     enum Route: Equatable {
         case folders, folder(UUID), card(UUID), people, person(UUID), editPerson(UUID?), editCard(UUID?), editFolder(UUID?), sources
-        case sourceRuns, sourceRun(runID: UUID, sourceID: UUID?)
+        case sourceRuns, sourceRun(runID: UUID, sourceID: UUID?), latestRun
         case attention(AttentionScreen)
     }
     @Published var route: Route = .folders
@@ -86,11 +86,15 @@ struct MorningFilesView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().overlay(Pad.tabEdge.opacity(0.35))
-            if let cardGeneration, showsGeneration {
-                CardGenerationControls(service: cardGeneration, showCards: {
-                    navigation.disposition = .unreviewed
-                    navigation.route = .folders
-                })
+            if let cardGeneration {
+                if showsGeneration {
+                    CardGenerationControls(service: cardGeneration, showCards: {
+                        navigation.disposition = .unreviewed
+                        navigation.route = .folders
+                    })
+                } else if navigation.route == .folders {
+                    CardGenerationStatusLine(service: cardGeneration, openDetails: { navigation.route = .latestRun })
+                }
             }
             if let error = localError ?? store.error {
                 HStack(alignment: .top) {
@@ -158,6 +162,7 @@ struct MorningFilesView: View {
         case .sources: return "Manage sources"
         case .sourceRuns: return "Run history"
         case .sourceRun: return "Collected results"
+        case .latestRun: return "Latest run"
         case .attention(let screen): return screen.heading
         case .folder(let id): return store.folders.first { $0.id == id }?.name ?? "Folder"
         case .card: return "On your desk"
@@ -168,8 +173,9 @@ struct MorningFilesView: View {
         }
     }
 
+    /// The full card controls live with the runs; the main screen shows card work only while it runs or fails.
     private var showsGeneration: Bool {
-        switch navigation.route { case .folders, .sourceRuns, .sourceRun: return true; default: return false }
+        switch navigation.route { case .latestRun, .sourceRuns, .sourceRun: return true; default: return false }
     }
 
     @ViewBuilder private var content: some View {
@@ -185,10 +191,11 @@ struct MorningFilesView: View {
         case .sourceRun(let runID, let sourceID):
             if let calendarSources, let calendarRunner {
                 SourceRunResultsHost(store: calendarSources, runner: calendarRunner, runID: runID, sourceID: sourceID,
-                    openRun: openRun, manageSource: { id in
-                        navigation.calendarSourceID = id
-                        navigation.route = .sources
-                    })
+                    openRun: openRun, manageSource: manageSource)
+            } else { empty("Run results are unavailable.") }
+        case .latestRun:
+            if let calendarSources, let calendarRunner {
+                LatestRunHost(store: calendarSources, runner: calendarRunner, openRun: openRun, manageSource: manageSource)
             } else { empty("Run results are unavailable.") }
         case .attention(let screen):
             if let attention {
@@ -224,7 +231,7 @@ struct MorningFilesView: View {
             VStack(alignment: .leading, spacing: 24) {
                 if let calendarSources, let calendarRunner {
                     CalendarBatchHost(store: calendarSources, runner: calendarRunner,
-                                      openSources: { navigation.route = .sources }, openRun: openRun,
+                                      openSources: { navigation.route = .sources }, openLatest: { navigation.route = .latestRun },
                                       openHistory: { navigation.route = .sourceRuns })
                 } else if calendarSources != nil {
                     Button { navigation.route = .sources } label: {
@@ -560,6 +567,10 @@ struct MorningFilesView: View {
     private func empty(_ title: String) -> some View { Text(title).font(.system(size: 14)).foregroundStyle(Pad.inkSoft).padding(24) }
     private func openRun(_ runID: UUID, _ sourceID: UUID?) {
         navigation.route = .sourceRun(runID: runID, sourceID: sourceID)
+    }
+    private func manageSource(_ id: UUID) {
+        navigation.calendarSourceID = id
+        navigation.route = .sources
     }
     func back() {
         switch navigation.route {

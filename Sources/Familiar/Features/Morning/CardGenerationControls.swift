@@ -27,3 +27,29 @@ struct CardGenerationControls: View {
         }.padding(.horizontal, 18).padding(.vertical, 10).background(Pad.paperTop.opacity(0.45))
     }
 }
+
+/// The main screen shows card work in one line, only while cards are being prepared or when preparing them failed.
+/// The full controls are on the run screens.
+struct CardGenerationStatusLine: View {
+    @ObservedObject var service: CardGenerationService
+    let openDetails: () -> Void
+
+    var body: some View {
+        if service.isRunning || service.error != nil {
+            HStack(spacing: 8) {
+                if service.isRunning {
+                    ProgressView().controlSize(.small)
+                    Text("Updating your cards…").font(.system(size: 12, weight: .medium)).layoutPriority(1)
+                    if !service.status.isEmpty { Text(service.status).foregroundStyle(Pad.inkSoft).lineLimit(1) }
+                    Spacer(minLength: 8)
+                    Button("Stop") { service.stop() }.buttonStyle(.plain)
+                } else if let error = service.error {
+                    Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Pad.redInk).lineLimit(1).help(error)
+                    Spacer(minLength: 8)
+                    Button("Details", action: openDetails).buttonStyle(.plain).foregroundStyle(Pad.penInk)
+                        .help("Open the latest run to read the whole message and try again")
+                }
+            }.font(.system(size: 12)).padding(.horizontal, 18).padding(.vertical, 10).background(Pad.paperTop.opacity(0.45))
+        }
+    }
+}

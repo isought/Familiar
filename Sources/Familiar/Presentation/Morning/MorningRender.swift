@@ -93,9 +93,6 @@ enum MorningRender {
             message: "The demonstrated account could not be found. No new result was saved.")
         let calendarRun = SourceRunRecord(origin: .all, startedAt: sampleDay, finishedAt: sampleDay,
             timeZoneID: "America/New_York", status: .completed, entries: [calendarEntry, sharedEntry, missingEntry])
-        try image(SourceRunSummary(run: calendarRun, openRun: { _, _ in })
-            .padding(23).foregroundStyle(Pad.ink).background(Pad.fieldPaper), size: NSSize(width: 650, height: 440),
-            to: directory.appendingPathComponent("calendar-batch-summary.png"))
         try image(SourceRunResultsView(run: calendarRun, sourceID: source.id)
             .foregroundStyle(Pad.ink).background(Pad.fieldPaper), size: NSSize(width: 650, height: 680),
             to: directory.appendingPathComponent("source-run-calendar.png"))
@@ -161,8 +158,6 @@ enum MorningRender {
         try image(SourceRunResultsView(run: failedRun, sourceID: resultSource.id, activeSourceIDs: [resultSource.id])
             .foregroundStyle(Pad.ink).background(Pad.fieldPaper), size: NSSize(width: 650, height: 680),
             to: directory.appendingPathComponent("source-run-failed.png"))
-        let mixedRun = SourceRunRecord(origin: .all, startedAt: sampleDay, finishedAt: sampleDay,
-            timeZoneID: "America/New_York", status: .completed, entries: [calendarEntry, completeEntry])
         try saveCalendars("sources-mixed-management.png", selectedID: mailSource.id)
         try image(SourceManagementList(calendars: calendars.sources, readings: calendars.readingSources,
                                        selectedID: mailSource.id, select: { _ in }, edit: { _ in }, remove: { _ in })
@@ -171,9 +166,6 @@ enum MorningRender {
         try image(ReadingSourceEditor(source: mailSource, save: { _ in }, cancel: {})
             .padding(23).foregroundStyle(Pad.ink).background(Pad.fieldPaper), size: NSSize(width: 650, height: 1200),
             to: directory.appendingPathComponent("source-reading-editor.png"))
-        try image(SourceRunSummary(run: mixedRun, openRun: { _, _ in })
-            .padding(23).foregroundStyle(Pad.ink).background(Pad.fieldPaper), size: NSSize(width: 650, height: 360),
-            to: directory.appendingPathComponent("sources-mixed-summary.png"))
         try image(SourceRunHistoryView(runs: calendars.runStore, openRun: { _, _ in })
             .foregroundStyle(Pad.ink).background(Pad.fieldPaper), size: NSSize(width: 650, height: 680),
             to: directory.appendingPathComponent("source-run-history.png"))
@@ -211,6 +203,7 @@ enum MorningRender {
         try calendars.restoreSource(id: mailSource.id)
         try saveCalendars("sources-restored-result.png", selectedID: mailSource.id)
         try renderGeneratedCards(fixtures: fixtures, directory: directory)
+        try renderLatestRun(fixtures: fixtures, directory: directory)
         try renderAttention(fixtures: fixtures, directory: directory)
     }
 

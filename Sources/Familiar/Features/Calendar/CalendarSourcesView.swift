@@ -26,22 +26,23 @@ struct CalendarSourcesHost: View {
     }
 }
 
-/// The Morning Files entry observes both stores, including work started from the sources screen.
+/// The Morning Files entry observes both stores, including work started from the sources screen. The latest run has
+/// its own screen; its link here says when a source didn't finish, so the main screen stays clean without hiding it.
 struct CalendarBatchHost: View {
     @ObservedObject var store: CalendarStore
     @ObservedObject var runner: CalendarCollectionRunner
     @ObservedObject private var runs: SourceRunStore
     let openSources: () -> Void
-    let openRun: (UUID, UUID?) -> Void
+    let openLatest: () -> Void
     let openHistory: () -> Void
 
     init(store: CalendarStore, runner: CalendarCollectionRunner, openSources: @escaping () -> Void,
-         openRun: @escaping (UUID, UUID?) -> Void, openHistory: @escaping () -> Void) {
+         openLatest: @escaping () -> Void, openHistory: @escaping () -> Void) {
         self.store = store
         self.runner = runner
         self.runs = store.runStore
         self.openSources = openSources
-        self.openRun = openRun
+        self.openLatest = openLatest
         self.openHistory = openHistory
     }
 
@@ -56,12 +57,21 @@ struct CalendarBatchHost: View {
             }
             CalendarBatchControls(sourceCount: store.sources.count + store.readingSources.count, isRunning: runner.isRunning,
                                   isBatchRunning: runner.isBatchRunning, status: runner.status,
-                                  runAll: {
-                                      if runner.collectAll() != nil, let id = runner.currentRunID { openRun(id, nil) }
-                                  }, stop: { _ = runner.stopActive() })
-            if let latest = runs.runs.first { SourceRunSummary(run: latest, openRun: openRun) }
-            Button("Run history", action: openHistory).buttonStyle(.plain)
-                .font(.system(size: 12)).foregroundStyle(Pad.penInk)
+                                  runAll: { if runner.collectAll() != nil { openLatest() } },
+                                  stop: { _ = runner.stopActive() })
+            HStack(spacing: 16) {
+                if let latest = runs.runs.first {
+                    Button(action: openLatest) {
+                        HStack(spacing: 0) {
+                            Text("Latest run")
+                            if let note = LatestRunNote(run: latest) {
+                                Text(" · " + note.text).foregroundStyle(note.isProblem ? Pad.redInk : Pad.inkSoft)
+                            }
+                        }
+                    }.help("Open the newest run’s results")
+                }
+                Button("Run history", action: openHistory)
+            }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk)
             if !store.savedReadingWorkflows.isEmpty {
                 Button("Review saved demonstrations (\(store.savedReadingWorkflows.count))", action: openSources)
                     .buttonStyle(MorningActionButton()).disabled(runner.isRunning)

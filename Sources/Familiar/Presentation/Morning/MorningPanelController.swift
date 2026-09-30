@@ -208,7 +208,7 @@ import QuartzCore
         case .people, .person: return 560
         case .editFolder: return 260
         case .card: return 470   // three parts: what it is, what it means for you, what you can do
-        case .editCard, .editPerson, .sources, .sourceRuns, .sourceRun: return 680
+        case .editCard, .editPerson, .sources, .sourceRuns, .sourceRun, .latestRun: return 680
         case .attention: return 680   // the rest and the week
         }
     }
