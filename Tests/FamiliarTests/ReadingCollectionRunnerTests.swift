@@ -213,6 +213,27 @@ struct ReadingCollectionRunnerTests {
         #expect(partial.assumptions == "Account seen: Account menu displays employee@example.test. Couldn't check: Only the visible inbox list was readable; more messages remain")
     }
 
+    @Test func aSourceRunHasRoomForItsFindingsWhateverTheReplyLengthSetting() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        try fixture.store.saveReadingSource(fixture.mail)
+        let runner = fixture.runner { _, _, _, _ in "Nothing new." }
+        await (try #require(runner.collect(source: fixture.mail, requestedAt: fixture.day))).value
+        #expect(Config().maxTokens < CalendarCollectionRunner.minimumReplyTokens)
+        #expect(fixture.lastClient?.maxTokens == CalendarCollectionRunner.minimumReplyTokens)
+    }
+
+    @Test func aReadThatRanOutOfRoomSaysSo() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        try fixture.store.saveReadingSource(fixture.mail)
+        let runner = fixture.runner { _, _, _, _ in "Collecting 25 messages.\n\n" + ClaudeClient.cutOffNote }
+        await (try #require(runner.collect(source: fixture.mail, requestedAt: fixture.day))).value
+        let message = try #require(fixture.store.runStore.runs.first?.entries.first?.message)
+        #expect(message.contains("It ran out of room before it could save its findings."))
+        #expect(!message.contains(ClaudeClient.cutOffNote))
+    }
+
     @Test func aSourceTurnedDownBeforeReadingIsLoggedWithWhatToFix() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
@@ -392,6 +413,7 @@ struct ReadingCollectionRunnerTests {
         let calendar = LearnedCalendarSource(name: "Work schedule", meaning: "My work meetings", application: "Outlook",
             bundleID: "com.microsoft.Outlook", account: "employee@example.test", calendarName: "Calendar", timeZoneID: "America/New_York")
         lazy var store = CalendarStore(directory: directory.appendingPathComponent("store"))
+        var lastClient: FakeClient?
         lazy var desktop = DesktopExecutionService(control: ComputerController(), activities: activities)
         lazy var registry = ToolRegistry(root: directory.appendingPathComponent("tools"), runner: ScriptRunner(config: Config()))
 
@@ -428,7 +450,7 @@ struct ReadingCollectionRunnerTests {
         func runner(_ body: @escaping FakeClient.Body) -> CalendarCollectionRunner {
             var settings = Config(); settings.allowControl = true
             return CalendarCollectionRunner(store: store, desktop: desktop, registry: registry, activities: activities,
-                config: { settings }, makeClient: { _ in FakeClient(body) }, prepareExecution: { _, additional, evidence in
+                config: { settings }, makeClient: { _ in let client = FakeClient(body); self.lastClient = client; return client }, prepareExecution: { _, additional, evidence in
                     let read = ToolRoute(match: .tool(name: "read_screen"), definition: ["name": "read_screen"]) { _, _, _ in
                         evidence.observed(); return .text("Fresh observed source")
                     }

@@ -77,8 +77,9 @@ enum SourceCollectionTask {
     /// job's page or app for it, but signing in, switching accounts and menus stay with the person.
     func nothingSavedMessage(reply: String?, rejection: String?) -> String {
         var s = "Noteling read this source but saved nothing new, so your earlier results are kept."
+        if reply?.contains(ClaudeClient.cutOffNote) == true { s += " It ran out of room before it could save its findings." }
         if let rejection = Self.sentence(rejection, limit: 300) { s += " Its findings were turned down: \(rejection)" }
-        if let reply = Self.sentence(reply, limit: 400) { s += " It said: “\(reply)”" }
+        if let reply = Self.sentence(reply?.replacingOccurrences(of: ClaudeClient.cutOffNote, with: ""), limit: 400) { s += " It said: “\(reply)”" }
         return s + " Before running it again, " + setupChecklist
     }
 

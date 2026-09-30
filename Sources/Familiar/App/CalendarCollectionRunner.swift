@@ -51,6 +51,9 @@ final class CalendarCollectionRunner: ObservableObject {
     private var shuttingDown = false
     private var archiveFailure: String?
     private static let removedMessage = SourceCollectionTask.removedMessage
+    /// Findings go back in one tool call, and a heavy source (a full Outlook inbox) needs more room than a chat
+    /// reply, whatever the reply-length setting says.
+    static let minimumReplyTokens = 16_000
 
     init(store: CalendarStore, desktop: DesktopExecutionService, registry: ToolRegistry,
          activities: NativeActivityGate, config: @escaping () -> Config,
@@ -164,6 +167,7 @@ final class CalendarCollectionRunner: ObservableObject {
             error = ConversationBackend.setupMessage(config: settings)
             return nil
         }
+        client.maxTokens = max(client.maxTokens, Self.minimumReplyTokens)
         return client
     }
 
