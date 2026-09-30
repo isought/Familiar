@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 
 /// The attention test's record on this Mac: what each card step read from script sources, which of those items it
@@ -76,7 +77,7 @@ final class AttentionLedger: ObservableObject {
         let now = clock()
         let events = AttentionImplicit.signals(from: previous, to: next).compactMap { change -> AttentionEvent? in
             guard let card = next.cards.first(where: { $0.id == change.cardID }), let item = item(for: change.key, card: card) else { return nil }
-            return event(.implicit(.init(key: change.key, signal: change.signal, retracts: change.retracts, optionIndex: change.optionIndex,
+            return event(.implicit(.init(key: item.key, signal: change.signal, retracts: change.retracts, optionIndex: change.optionIndex,
                 optionMode: change.optionMode, item: item, card: AttentionCardContext(card, at: now))), at: now)
         }
         guard !events.isEmpty else { return }
@@ -90,28 +91,38 @@ final class AttentionLedger: ObservableObject {
 
     func explanation(for key: String) -> String? { index.labels[key]?.explanation }
 
+    /// The key a card is labeled by, or nil for one the test does not read: a sample, a hand-written note, or a card
+    /// from a calendar or a screen read.
+    func labelKey(for card: MorningCard) -> String? {
+        guard !card.isSample, let tracking = card.tracking, index.sortedReads[tracking.sourceID] != nil else { return nil }
+        return tracking.key
+    }
+
     /// A thumb only labels the item: it never changes the card, its folder or its work.
     func tapThumb(key: String, card: MorningCard?, thumb: AttentionLabels.Thumb, via: AttentionVia) {
         label(key: key, card: card, value: AttentionLabels.next(current: effective(for: key).explicit, tapped: thumb), via: via)
     }
 
     /// Saves why an item was worth the person's notice, or not, and ends explaining it. The words never change the label.
+    /// A failed write leaves the item being explained, so the words stay in the field to save again.
     func explain(key: String, card: MorningCard?, text: String, via: AttentionVia) {
-        if explaining == key { explaining = nil }
         // Trimmed again after the cut, so the file holds what the index keeps and the same words are saved once.
         let text = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(AttentionLabels.explanationLimit))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text != explanation(for: key) ?? "" else { return }
-        label(key: key, card: card, value: .explain, via: via, text: text)
+        if text != explanation(for: key) ?? "" {
+            guard label(key: key, card: card, value: .explain, via: via, text: text) else { return }
+        }
+        if explaining == key { explaining = nil }
     }
 
     /// Records the label with the one in effect before it. An item neither read by a card step nor on a card has
-    /// nothing to label.
-    func label(key: String, card: MorningCard?, value: AttentionLabelValue, via: AttentionVia, text: String? = nil) {
+    /// nothing to label. False only when the write failed.
+    @discardableResult
+    func label(key: String, card: MorningCard?, value: AttentionLabelValue, via: AttentionVia, text: String? = nil) -> Bool {
         let card = card ?? store?.cards.first { $0.tracking?.key == key }
-        guard let item = item(for: key, card: card) else { return }
+        guard let item = item(for: key, card: card) else { return true }
         let now = clock()
-        append([event(.label(.init(key: key, value: value, weight: AttentionLabels.weight(value), prior: effective(for: key).state,
+        return append([event(.label(.init(key: item.key, value: value, weight: AttentionLabels.weight(value), prior: effective(for: item.key).state,
             text: text, via: via, item: item, card: card.map { AttentionCardContext($0, at: now) })), at: now)])
     }
 
@@ -138,9 +149,18 @@ final class AttentionLedger: ObservableObject {
         append([event(.opened(.init(trigger: trigger, route: AttentionOpen.route(route), desk: desk)), at: now)])
     }
 
+    /// A card came on screen. Looking is neither a yes nor a no, but it is using the pack that day. Samples and
+    /// hand-written notes are not part of the test.
+    func cardOpened(_ card: MorningCard) {
+        guard !card.isSample, let key = card.tracking?.key, let item = item(for: key, card: card) else { return }
+        let now = clock()
+        append([event(.engaged(.init(key: item.key, what: .cardOpened, card: AttentionCardContext(card, at: now))), at: now)])
+    }
+
     /// The item as a card step first read it. For a card the ledger has no copy of, such as one from before the ledger,
     /// it is the item as the card knows it, without mail facts. Only a source the test reads keeps the card's words; a
-    /// calendar or screen read is recorded by which item it was, never by what it said.
+    /// calendar or screen read is recorded by which item it was, never by what it said. Its key can be made of the
+    /// item's own words, such as a sender, a subject and a date, so it is recorded by a digest of that key.
     private func item(for key: String, card: MorningCard?) -> AttentionItem? {
         if var item = index.item[key] {
             item.shown = index.shownKeys.contains(key) || card != nil
@@ -148,8 +168,10 @@ final class AttentionLedger: ObservableObject {
         }
         guard let card, let tracking = card.tracking, tracking.key == key else { return nil }
         let source = card.sources.first, counted = index.sortedReads[tracking.sourceID] != nil
-        return AttentionItem(key: key, sourceID: tracking.sourceID, sourceName: tracking.sourceName, kind: source?.kind ?? "",
-            runID: tracking.changes.first { $0.runID != nil }?.runID ?? tracking.lastRunID, itemID: tracking.itemKey,
+        let itemID = counted ? tracking.itemKey : SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return AttentionItem(key: counted ? key : CardObservation.key(sourceID: tracking.sourceID, itemKey: itemID),
+            sourceID: tracking.sourceID, sourceName: tracking.sourceName, kind: source?.kind ?? "",
+            runID: tracking.changes.first { $0.runID != nil }?.runID ?? tracking.lastRunID, itemID: itemID,
             readAt: tracking.firstSeenAt, subject: counted ? source?.title ?? card.title : "",
             preview: counted ? String((source?.excerpt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(AttentionItem.previewLimit)) : "",
             url: counted ? (source?.url).flatMap { $0.isEmpty ? nil : $0 } : nil, shown: true)
@@ -157,21 +179,24 @@ final class AttentionLedger: ObservableObject {
 
     // MARK: - Writing
 
-    /// Writes the events in one append, starting the file first if it has no start yet, then folds them in.
-    private func append(_ events: [AttentionEvent]) {
+    /// Writes the events in one append, starting the file first if it has no start yet, then folds them in. False
+    /// only when the write failed.
+    @discardableResult
+    private func append(_ events: [AttentionEvent]) -> Bool {
         let events = index.startedAt == nil ? [event(.started, at: clock())] + events : events
-        guard !events.isEmpty else { return }
+        guard !events.isEmpty else { return true }
         do {
             try file.append(events)
         } catch {
             let code = (error as NSError).code
             Log.info("attention log write failed (errno \(code))")
             self.error = "Couldn’t save the attention log (error \(code))."
-            return
+            return false
         }
         for event in events { index.add(event) }
         error = nil
         revision += 1
+        return true
     }
 
     private func event(_ payload: AttentionEvent.Payload, at: Date) -> AttentionEvent {

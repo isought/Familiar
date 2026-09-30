@@ -234,18 +234,21 @@ struct AttentionLabelTests {
 
     @Test func onlySourcesTheTestReadsKeepTheirWords() throws {
         // A card from a source the test never read, such as a calendar or a screen read, is labeled by which item it
-        // was, never by what it said.
+        // was, never by what it said. Its key can be made of the item's own words, so it is recorded by a digest of it.
         let fixture = Fixture(read: false)
         defer { fixture.remove() }
         try fixture.store.setDisposition(cardID: fixture.cardID, to: .mine)
         fixture.ledger.tapThumb(key: fixture.key, card: nil, thumb: .up, via: .card)
         let items = fixture.implicit.map(\.item) + fixture.labels.map(\.item)
         #expect(items.count == 2 && items.allSatisfy { $0.subject.isEmpty && $0.preview.isEmpty && $0.url == nil })
-        #expect(items.allSatisfy { $0.key == fixture.key && $0.itemID == "lease@rent.example.test" && $0.kind == "mail" && $0.shown })
+        let digest = try #require(items.first?.key)
+        #expect(digest == CardObservation.key(sourceID: fixture.sourceID, itemKey: items[0].itemID) && items[0].itemID.count == 64)
+        #expect(items.allSatisfy { $0.key == digest && $0.itemID == items[0].itemID && $0.kind == "mail" && $0.shown })
+        #expect(fixture.implicit.map(\.key) + fixture.labels.map(\.key) == [digest, digest])
         let written = String(decoding: try Data(contentsOf: fixture.file), as: UTF8.self)
         #expect(!written.contains("Lease renewal") && !written.contains("Please sign") && !written.contains("signed lease")
-            && !written.contains("mail.example.test/lease"))
-        #expect(fixture.ledger.effective(for: fixture.key).state == .yes)
+            && !written.contains("mail.example.test/lease") && !written.contains("lease@rent.example.test"))
+        #expect(fixture.ledger.effective(for: digest).state == .yes && fixture.ledger.index.labels[fixture.key] == nil)
     }
 
     @Test func theLedgerNeverLeavesTheMac() throws {

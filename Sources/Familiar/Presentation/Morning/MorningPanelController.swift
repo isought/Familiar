@@ -51,7 +51,7 @@ import QuartzCore
                 self?.onHandoff?(item)
             }, calendarSources: calendarSources, calendarRunner: calendarRunner,
             teachCalendar: { [weak self] in self?.onTeachCalendar?() }, cardGeneration: cardGeneration,
-            discussCard: { [weak self] card in self?.onDiscussCard?(card) }
+            discussCard: { [weak self] card in self?.onDiscussCard?(card) }, attention: attention
         ))
         routeObservation = navigation.$route.combineLatest(store.$workspace)
             .receive(on: RunLoop.main)

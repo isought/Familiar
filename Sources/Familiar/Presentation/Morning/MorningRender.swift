@@ -211,6 +211,7 @@ enum MorningRender {
         try calendars.restoreSource(id: mailSource.id)
         try saveCalendars("sources-restored-result.png", selectedID: mailSource.id)
         try renderGeneratedCards(fixtures: fixtures, directory: directory)
+        try renderAttention(fixtures: fixtures, directory: directory)
     }
 
     /// Exercise the maintained reconciliation and views with clearly fictional
@@ -276,7 +277,7 @@ enum MorningRender {
         try save("generated-card-resolved-detail.png")
     }
 
-    @MainActor private static func image<V: View>(_ view: V, size: NSSize, to url: URL) throws {
+    @MainActor static func image<V: View>(_ view: V, size: NSSize, to url: URL) throws {
         let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .light).frame(width: size.width, height: size.height))
         hosting.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)

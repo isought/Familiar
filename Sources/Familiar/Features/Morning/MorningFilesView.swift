@@ -75,6 +75,7 @@ struct MorningFilesView: View {
     var teachCalendar: (() -> Void)? = nil
     var cardGeneration: CardGenerationService? = nil
     var discussCard: ((MorningCard) -> Void)? = nil
+    var attention: AttentionLedger? = nil
     @State private var localError: String?
     @State private var showingOriginal: UUID?   // the card whose original text is expanded
     @State private var undo: MorningCard?
@@ -348,9 +349,11 @@ struct MorningFilesView: View {
                     HStack {
                         Text(card.isSample ? "FICTIONAL SAMPLE" : card.displayDisposition.label.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(Pad.inkSoft)
                         Spacer()
+                        if let attention { AttentionThumbs(ledger: attention, card: card) }
                         Menu {
                             Button("Edit") { navigation.route = .editCard(card.id) }
                             if let discussCard { Button("Discuss or adjust") { discussCard(card) }.disabled(pending != nil) }
+                            if let attention { AttentionExplainMenuItem(ledger: attention, card: card) }
                             if card.disposition != .unreviewed {
                                 Button("Return to review folder") {
                                     perform { try store.returnToFolder(cardID: card.id); navigation.disposition = .unreviewed }
@@ -367,6 +370,7 @@ struct MorningFilesView: View {
                         Label(context, systemImage: "person.bubble").font(.system(size: 12)).lineLimit(2)
                             .foregroundStyle(Pad.inkSoft).help(context).accessibilityLabel("Your note: \(context)")
                     }
+                    if let attention { AttentionExplainSlot(ledger: attention, card: card) }
                     if card.isResolved, let evidence = card.tracking?.resolutionEvidence, !evidence.isEmpty {
                         Label(evidence, systemImage: "checkmark.circle").font(.system(size: 12)).lineLimit(2).foregroundStyle(Pad.inkSoft)
                     }
@@ -398,7 +402,7 @@ struct MorningFilesView: View {
                 originalLink(card)
                 workResults(card)
             }.padding(23)
-        }
+        }.task(id: card.id) { attention?.cardOpened(card) }
     }
 
     /// The card's options, best first; the first is the primary button. An option that works in your apps is marked, and
