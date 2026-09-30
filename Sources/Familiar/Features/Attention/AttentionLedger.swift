@@ -4,8 +4,10 @@ import Foundation
 
 /// The attention test's record on this Mac: what each card step read from script sources, which of those items it
 /// showed, and what the person said and did about them. It is kept apart from cards, runs and chat, is never given
-/// to a model and never goes into noteling.log. The file is read once at launch; an event joins the index only once
-/// it is on disk.
+/// to a model and never goes into noteling.log. Nothing is written, not even its folder, until a card step has read a
+/// mail job through a script, so someone without one gets no log at all, and what the person does stops being written
+/// once a week has passed without such a read. The file is read once at launch; an event joins the index only once it
+/// is on disk.
 @MainActor
 final class AttentionLedger: ObservableObject {
     /// Bumped after every write, and once the launch read is in, so views that read the index redraw.
@@ -51,7 +53,6 @@ final class AttentionLedger: ObservableObject {
         guard inBackground else {
             index = read(url, now, timeZone)
             isLoaded = true
-            append([])   // a new file begins with `started`
             return
         }
         index = AttentionIndex(now: now, timeZone: timeZone)
@@ -65,12 +66,11 @@ final class AttentionLedger: ObservableObject {
     /// Returns once the launch read is in.
     func untilLoaded() async { await loading?.value }
 
-    /// The launch read is in: the screens can show it, a new file is started, and what waited for it runs in order.
+    /// The launch read is in: the screens can show it, and what waited for it runs in order.
     private func loaded(_ read: AttentionIndex) {
         index = read
         isLoaded = true
         revision += 1
-        append([])
         let work = waiting
         waiting = []
         for step in work { step() }
@@ -84,20 +84,21 @@ final class AttentionLedger: ObservableObject {
 
     /// Records what one card step read from script sources and which of those items it showed as cards: one line
     /// per receipt, written once. Calendar and screen reads are not part of the test, so a step without a script
-    /// read writes nothing.
+    /// read has no line; it still tries again what waits after a failed write, so a receipt that could not be written
+    /// is tried at every card step as well as at every write.
     func recordSorted(_ observations: [CardObservation], runIDs: [UUID], runs: SourceRunStore, cards: [MorningCard],
                       backfilled: Bool = false, at: Date? = nil) {
         let at = at ?? clock()
         whenLoaded { [self] in
-            guard let event = sorted(observations, runIDs: runIDs, runs: runs, cards: cards, backfilled: backfilled, at: at) else { return }
-            append([event])
+            let event = sorted(observations, runIDs: runIDs, runs: runs, cards: cards, backfilled: backfilled, at: at)
+            append(event.map { [$0] } ?? [])
         }
     }
 
     /// Records the receipts saved since the ledger started that have no line yet, such as one saved just before
-    /// Noteling quit. Receipts from before the start are never pulled in, so the test starts clean. As in the card
-    /// step, a job removed while its step ran was never sorted, so only jobs that are still active count. At launch it
-    /// waits for the file to be read.
+    /// Noteling quit. Receipts from before the start are never pulled in, and a ledger with no start, new or deleted,
+    /// pulls in none, so the test starts clean. As in the card step, a job removed while its step ran was never sorted,
+    /// so only jobs that are still active count. At launch it waits for the file to be read.
     func backfill(receipts: [CardGenerationRecord], sources: CalendarStore, cards: [MorningCard]) {
         whenLoaded { [self] in
             guard let startedAt = index.startedAt else { return }
@@ -149,9 +150,10 @@ final class AttentionLedger: ObservableObject {
     func explanation(for key: String) -> String? { index.labels[key]?.explanation }
 
     /// The key a card is labeled by, or nil for one the test does not read: a sample, a hand-written note, or a card
-    /// from a calendar or a screen read.
+    /// from a calendar or a screen read. A card whose source's read is not on disk yet, or one left from a test that
+    /// is no longer running, has no key either, so it shows no thumbs that could not be saved.
     func labelKey(for card: MorningCard) -> String? {
-        guard !card.isSample, let tracking = card.tracking, index.sortedReads[tracking.sourceID] != nil else { return nil }
+        guard !card.isSample, let tracking = card.tracking, index.sortedReads[tracking.sourceID] != nil, isRunning else { return nil }
         return tracking.key
     }
 
@@ -242,17 +244,18 @@ final class AttentionLedger: ObservableObject {
         }
     }
 
-    /// The item as a card step first read it. For a card the ledger has no copy of, such as one from before the ledger,
-    /// it is the item as the card knows it, without mail facts. Only a source the test reads keeps the card's words; a
-    /// calendar or screen read is recorded by which item it was, never by what it said. Its key can be made of the
-    /// item's own words, such as a sender, a subject and a date, so it is recorded by a digest of that key.
+    /// The item as a card step first read it. For a card the ledger has no copy of, such as one from before the ledger
+    /// or one whose read waits to be written, it is the item as the card knows it, without mail facts. Only a source
+    /// the test reads keeps the card's words; a calendar or screen read is recorded by which item it was, never by what
+    /// it said. Its key can be made of the item's own words, such as a sender, a subject and a date, so it is recorded
+    /// by a digest of that key.
     private func item(for key: String, card: MorningCard?) -> AttentionItem? {
         if var item = index.item[key] {
             item.shown = index.shownKeys.contains(key) || card != nil
             return item
         }
         guard let card, let tracking = card.tracking, tracking.key == key else { return nil }
-        let source = card.sources.first, counted = index.sortedReads[tracking.sourceID] != nil
+        let source = card.sources.first, counted = reads(tracking.sourceID)
         let itemID = counted ? tracking.itemKey : SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
         return AttentionItem(key: counted ? key : CardObservation.key(sourceID: tracking.sourceID, itemKey: itemID),
             sourceID: tracking.sourceID, sourceName: tracking.sourceName, kind: source?.kind ?? "",
@@ -265,10 +268,12 @@ final class AttentionLedger: ObservableObject {
     // MARK: - Writing
 
     /// Writes the events in one append, after any whose write failed before and starting the file first if it has no
-    /// start yet, then folds them in. False only when the write failed: then they wait for the next write, and the
-    /// failure is shown until they are written. An explanation never waits: its words stay in the field, to be saved
-    /// again or dropped, and are never written after the person moved on. Before the launch read is in, the write
-    /// waits for it.
+    /// start yet, then folds them in. The test runs from the first card step that read a script source until a week
+    /// without one, so the events are let go unless it runs or a read is waiting or in this write; what waits was kept
+    /// while it ran and is written all the same. False only when the write failed: then they wait for the next write,
+    /// and the failure is shown until they are written. An explanation never waits: its words stay in the field, to
+    /// be saved again or dropped, and are never written after the person moved on. Before the launch read is in, the
+    /// write waits for it.
     @discardableResult
     private func append(_ events: [AttentionEvent]) -> Bool {
         guard isLoaded else {
@@ -276,9 +281,13 @@ final class AttentionLedger: ObservableObject {
             return true
         }
         keepRecentItems()
-        let starts = index.startedAt == nil && !pending.contains { $0.type == .started }
-        let events = (starts ? [event(.started, at: clock())] : []) + pending + events
-        guard !events.isEmpty else { return true }
+        let withRead = (pending + events).contains { $0.type == .sorted }
+        var events = pending + (withRead || isRunning ? events : [])
+        let read = events.first { $0.type == .sorted }
+        guard !events.isEmpty, index.startedAt != nil || read != nil else { return true }
+        if index.startedAt == nil, !events.contains(where: { $0.type == .started }) {
+            events.insert(event(.started, at: min(read?.at ?? clock(), clock())), at: 0)   // started by its first read
+        }
         do {
             try file.append(events)
         } catch {
@@ -291,7 +300,8 @@ final class AttentionLedger: ObservableObject {
                     // A value JSON cannot hold fails the whole batch and never gets better, so only the rest wait.
                     return error.code != Int(EINVAL) || (try? event.line()) != nil
                 }
-                self.error = "Couldn’t save the attention log (error \(error.code))."
+                self.error = "Couldn’t save the attention test in Noteling’s attention folder (error \(error.code))."
+                    + " Your cards aren’t affected."
                 return false
             }
         }
@@ -328,6 +338,27 @@ final class AttentionLedger: ObservableObject {
             return []
         })
         return runIDs.allSatisfy { index.sortedRunIDs.contains($0) || waiting.contains($0) }
+    }
+
+    /// A card step read `sourceID` through a script, in a line on disk or in one waiting to be written, so what the
+    /// person does to its cards keeps their own key and words while the line waits.
+    private func reads(_ sourceID: UUID) -> Bool {
+        index.sortedReads[sourceID] != nil || pending.contains { event in
+            if case .sorted(let sorted) = event.payload { return sorted.sources.contains { $0.sourceID == sourceID } }
+            return false
+        }
+    }
+
+    /// The test runs while a card step's script read is on disk from today or one of the six days before, the days
+    /// the daily line looks back over. Once a week passes without one, such as after the mail job was removed, what
+    /// the person does is no longer written and cards have no thumbs, until the next read.
+    var isRunning: Bool {
+        guard !index.sortedReads.isEmpty else { return false }
+        let now = clock()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let from = AttentionTime.day(of: calendar.date(byAdding: .day, value: 1 - AttentionNumbers.weekDays, to: now) ?? now, in: timeZone)
+        return index.sortedReads.values.contains { reads in reads.contains { $0.day >= from } }
     }
 
     /// Full item copies are kept for messages first read in the last 14 days counted from today, so an app left

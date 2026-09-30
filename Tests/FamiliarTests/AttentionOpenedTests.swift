@@ -96,7 +96,7 @@ struct AttentionOpenedTests {
         let event = try #require(fixture.events.last)
         #expect(event.payload == .opened(.init(trigger: .taskPanel, route: "card", desk: 4)))
         #expect(event.at == at && event.day == "2026-09-30" && event.timeZone.identifier == "America/New_York")
-        #expect(ledger.revision == 2 && ledger.error == nil)   // one write for `started`, one for the open
+        #expect(ledger.revision == 1 && ledger.error == nil)   // one write, for the open
         let line = try #require(String(decoding: try Data(contentsOf: fixture.file), as: UTF8.self).split(separator: "\n").last)
         #expect(line.contains("\"type\":\"opened\"") && line.contains("\"trigger\":\"task_panel\"") && line.contains("\"desk\":4"))
         #expect(line.contains("\"at\":\"2026-09-30T22:30:00.250-04:00\""))
@@ -115,10 +115,10 @@ struct AttentionOpenedTests {
         #expect(AttentionOpenTrigger.allCases.filter { !$0.counts } == [.chat, .people, .run])
 
         // Every trigger is still written down, so the rule can be changed later from the ledger alone.
-        let ledger = fixture.ledger()
+        let ledger = fixture.ledger(clock: Self.date("2026-09-30T13:00:00.000Z"))
         for trigger in AttentionOpenTrigger.allCases { ledger.recordOpened(trigger, route: .folders, desk: 2, wasOpen: false) }
         #expect(fixture.opens.map(\.trigger) == AttentionOpenTrigger.allCases)
-        #expect(fixture.events.map(\.type) == [.started] + Array(repeating: .opened, count: AttentionOpenTrigger.allCases.count))
+        #expect(fixture.events.map(\.type) == [.started, .sorted] + Array(repeating: .opened, count: AttentionOpenTrigger.allCases.count))
     }
 
     // MARK: - Fixtures
@@ -131,9 +131,17 @@ struct AttentionOpenedTests {
         var events: [AttentionEvent] { AttentionLogFile.read(file).events }
         var opens: [AttentionEvent.Opened] { events.compactMap { if case .opened(let value) = $0.payload { return value }; return nil } }
 
-        @MainActor func ledger(clock: Date = Date()) -> AttentionLedger {
-            AttentionLedger(directory: root.appendingPathComponent("attention"), clock: { clock },
-                            timeZone: TimeZone(identifier: "America/New_York")!)
+        /// The ledger of someone whose mail job a card step read on Monday morning, so what they do that week is written.
+        @MainActor func ledger(clock: Date) -> AttentionLedger {
+            let zone = TimeZone(identifier: "America/New_York")!
+            if !FileManager.default.fileExists(atPath: file.path) {
+                let at = AttentionOpenedTests.date("2026-09-28T12:00:00.000Z")
+                let read = AttentionEvent.Sorted.Source(sourceID: UUID(), sourceName: "Example Gmail", script: "imap-mail__today",
+                    runID: UUID(), collectedAt: at, arrived: 0, returned: 0, truncated: false)
+                try? AttentionLogFile(url: file).append([AttentionEvent(.started, at: at, timeZone: zone),
+                    AttentionEvent(.sorted(.init(runIDs: [read.runID], backfilled: false, sources: [read], items: [])), at: at, timeZone: zone)])
+            }
+            return AttentionLedger(directory: root.appendingPathComponent("attention"), clock: { clock }, timeZone: zone)
         }
 
         func remove() { try? FileManager.default.removeItem(at: root) }

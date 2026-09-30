@@ -17,27 +17,38 @@ enum AttentionScreen: Equatable {
 }
 
 /// One line on the folders screen: what the latest read came to, and the way into its rest. It shows nothing when no
-/// script source was read in the last seven days, so nothing changes for anyone without a mail job.
+/// script source was read in the last seven days, so nothing changes for anyone without a mail job, unless the test
+/// can't be saved: then a job that reads mail through a script says so here, even before its first line.
 struct AttentionDailyLine: View {
     @ObservedObject var ledger: AttentionLedger
+    /// Whether a job reads mail through a script, asked each time the line is drawn.
+    var readsScript: () -> Bool = { false }
     /// Opens the rest of a day.
     let open: (String) -> Void
 
     var line: AttentionNumbers.Line? { ledger.numbers.line }
 
+    /// A failed write, said wherever the test runs; the card action behind it went through.
+    var error: String? {
+        guard let error = ledger.error, line != nil || readsScript() else { return nil }
+        return error
+    }
+
     var body: some View {
-        if let line {
+        let line = line, error = error
+        if line != nil || error != nil {
             VStack(alignment: .leading, spacing: 4) {
-                Button { tap() } label: {
-                    HStack(spacing: 5) {
-                        Text(line.text).fixedSize(horizontal: false, vertical: true)
-                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
-                    }.contentShape(Rectangle())
+                if let line {
+                    Button { tap() } label: {
+                        HStack(spacing: 5) {
+                            Text(line.text).fixedSize(horizontal: false, vertical: true)
+                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                        }.contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).help(line.help)
+                    .accessibilityHint("Shows everything this read, and what it left out")
                 }
-                .buttonStyle(.plain).help(line.help)
-                .accessibilityHint("Shows everything this read, and what it left out")
-                // A failed write is said here; the card action behind it went through.
-                if let error = ledger.error { Text(error).foregroundStyle(Pad.redInk).textSelection(.enabled) }
+                if let error { Text(error).foregroundStyle(Pad.redInk).textSelection(.enabled) }
             }.font(.system(size: 12)).foregroundStyle(Pad.inkSoft)
         }
     }

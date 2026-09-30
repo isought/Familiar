@@ -40,6 +40,43 @@ struct AttentionScreenTests {
         #expect(Set(with).count > 2)   // the folders were drawn, not a blank panel
     }
 
+    /// The first read's line couldn't be written, so there is no line and no thumbs yet. The failure is said where the
+    /// line would be, as long as a job reads mail through a script.
+    @Test func aLogThatCantBeWrittenIsSaidBeforeTheFirstLine() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attention-unsaved-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("not a folder".utf8).write(to: root.appendingPathComponent("attention"))
+        let sources = CalendarStore(directory: root.appendingPathComponent("calendar"))
+        let job = LearnedReadingSource(kind: .mail, name: "Example Gmail", meaning: "My personal inbox",
+            scope: "Show anything that needs a reply", script: "imap-mail__today")
+        try sources.saveReadingSource(job)
+        let rows: [[String: Any]] = (0..<3).map { ["key": "m\($0)@mail.example.test", "title": "Message \($0)", "tab": "primary"] }
+        try sources.saveReadingSnapshot(try ScriptReading.snapshot(from: ["mailbox": "INBOX", "arrived": 3, "items": rows],
+            request: ReadingReadRequest(source: job), collectedAt: Fixture.at("2026-09-30", "08:00")))
+        let store = MorningStore(directory: root.appendingPathComponent("morning"))
+        let ledger = AttentionLedger(directory: root.appendingPathComponent("attention"), clock: { Fixture.at("2026-09-30", "09:30") },
+                                     timeZone: Fixture.zone)
+        let input = CardGenerationInput.saved(in: sources, runID: nil, excluding: [])
+        try store.applyCardGeneration(observations: input.observations, proposals: [], runIDs: input.runIDs)
+        ledger.recordSorted(input.observations, runIDs: input.runIDs, runs: sources.runStore, cards: store.cards)
+        let error = try #require(ledger.error)
+        #expect(ledger.numbers.line == nil)
+
+        let navigation = MorningNavigation()
+        func view(attention: Bool = true) -> MorningFilesView {
+            MorningFilesView(store: store, navigation: navigation, close: {}, filed: {}, handoff: { _ in }, calendarSources: sources,
+                             discussCard: { _ in }, attention: attention ? ledger : nil)
+        }
+        let failing = try #require(find(AttentionDailyLine.self, in: view().body))
+        #expect(failing.line == nil && failing.error == error && find(Text.self, in: failing.body) != nil)
+
+        // Once no job reads mail through a script, the test is not running, so nothing of it shows.
+        try sources.removeSource(id: job.id)
+        let removed = try #require(find(AttentionDailyLine.self, in: view().body))
+        #expect(ledger.error == error && removed.error == nil && find(Text.self, in: removed.body) == nil)
+    }
+
     @Test func theWeekIsOneChipAway() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

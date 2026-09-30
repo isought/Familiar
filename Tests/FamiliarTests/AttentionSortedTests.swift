@@ -47,7 +47,7 @@ struct AttentionSortedTests {
         #expect(sorted.sources == [.init(sourceID: fixture.job.id, sourceName: "Example Gmail", script: "imap-mail__today", runID: run,
             collectedAt: readAt, since: Self.date("2026-09-29T12:00:00Z"), arrived: 64, returned: 40, truncated: true)])
         #expect(ledger.index.sortedRunIDs == [run] && ledger.index.sortedReads[fixture.job.id]?.map(\.arrived) == [64])
-        #expect(ledger.revision == 2 && ledger.error == nil)   // one write for `started`, one for the line
+        #expect(ledger.revision == 1 && ledger.error == nil)   // one write: the line, after the start it brought
     }
 
     @Test func recordingTwiceAddsNothing() throws {
@@ -95,11 +95,31 @@ struct AttentionSortedTests {
                 collectedAt: at, source: calendar))
         }
         let now = Date()
+        // Someone whose jobs read only a window they taught and a calendar gets no log at all: the card step makes
+        // their cards and they use the pack, but nothing is written, not even the folder.
+        ledger.watch(fixture.morning)
+        try saveOthers(now.addingTimeInterval(-60))
+        let unread = try fixture.sort(showing: 2)
+        ledger.recordSorted(unread.observations, runIDs: unread.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+        ledger.backfill(receipts: fixture.morning.workspace.cardGenerations ?? [], sources: fixture.sources, cards: fixture.morning.cards)
+        let card = try #require(fixture.morning.cards.first)
+        ledger.recordOpened(.launcher, route: .folders, desk: 2, wasOpen: false)
+        ledger.cardOpened(card)
+        try fixture.morning.setDisposition(cardID: card.id, to: .mine)
+        ledger.tapThumb(key: try #require(card.tracking?.key), card: card, thumb: .up, via: .card)
+        #expect(!FileManager.default.fileExists(atPath: fixture.file.deletingLastPathComponent().path))
+        #expect(ledger.error == nil && ledger.pending.isEmpty && ledger.revision == 0 && ledger.index.startedAt == nil)
+
+        // The first step that reads mail through a script starts the file with its line; what follows is written.
         let script = try fixture.read(3, at: now)
         try saveOthers(now)
         let mixed = try fixture.sort(showing: 5)   // every item gets a card, the taught and calendar ones too
         #expect(mixed.runIDs.count == 3 && mixed.observations.count == 5)
         ledger.recordSorted(mixed.observations, runIDs: mixed.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+        ledger.recordOpened(.menu, route: .folders, desk: 5, wasOpen: false)
+        let events = AttentionLogFile.read(fixture.file).events
+        #expect(events.map(\.type) == [.started, .sorted, .opened] && events[0].at == events[1].at)
+        #expect(ledger.index.startedAt == events[1].at && ledger.revision == 2)
 
         let sorted = try #require(fixture.sorted.first)
         #expect(sorted.runIDs == mixed.runIDs)   // the whole receipt, so it is never recorded twice
@@ -114,6 +134,33 @@ struct AttentionSortedTests {
         ledger.recordSorted(others.observations, runIDs: others.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
         ledger.backfill(receipts: fixture.morning.workspace.cardGenerations ?? [], sources: fixture.sources, cards: fixture.morning.cards)
         #expect(try Data(contentsOf: fixture.file) == before)
+
+        // The sixth day after the read is still in its week. A week with no script read, as after the mail job was
+        // removed, ends the test: its cards have no thumbs and nothing the person does is written, until the next read.
+        var days = Calendar(identifier: .gregorian)
+        days.timeZone = ledger.timeZone
+        let mail = try #require(fixture.morning.cards.first { $0.tracking?.sourceID == fixture.job.id })
+        let mailKey = try #require(mail.tracking?.key)
+        let sixth = try #require(days.date(byAdding: .day, value: 6, to: now))
+        ledger.clock = { sixth }
+        #expect(ledger.isRunning && ledger.labelKey(for: mail) == mailKey)
+        let week = try #require(days.date(byAdding: .day, value: 7, to: now))
+        ledger.clock = { week }
+        #expect(!ledger.isRunning && ledger.labelKey(for: mail) == nil)
+        ledger.recordOpened(.launcher, route: .folders, desk: 5, wasOpen: false)
+        ledger.cardOpened(mail)
+        try fixture.morning.setDisposition(cardID: mail.id, to: .mine)
+        ledger.tapThumb(key: mailKey, card: mail, thumb: .up, via: .card)
+        ledger.miss(key: mailKey)
+        ledger.restViewed(day: events[1].day, count: 0, reachedEnd: true, seconds: 5)
+        #expect(try Data(contentsOf: fixture.file) == before && ledger.error == nil && ledger.pending.isEmpty)
+
+        try fixture.read(2, key: { "next-\($0)@example.test" }, at: week)
+        let next = try fixture.sort(showing: 1, at: week)
+        ledger.recordSorted(next.observations, runIDs: next.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+        ledger.recordOpened(.launcher, route: .folders, desk: 6, wasOpen: false)
+        #expect(AttentionLogFile.read(fixture.file).events.map(\.type) == [.started, .sorted, .opened, .sorted, .opened])
+        #expect(ledger.isRunning && ledger.labelKey(for: mail) == mailKey)
     }
 
     @Test func theCardStepWritesSortedOnlyWhenItSucceeds() async throws {
@@ -158,6 +205,11 @@ struct AttentionSortedTests {
     @Test func aJobRemovedWhileItsStepRanIsNeverBackfilled() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
+        // The test began an hour ago with an earlier read.
+        let begun = Date().addingTimeInterval(-3_600)
+        try AttentionLogFile(url: fixture.file).append([AttentionEvent(.started, at: begun, timeZone: Self.newYork),
+                                                        Self.sorted(AttentionTime.string(begun, in: Self.newYork), keys: ["earlier"])])
+        let written = try Data(contentsOf: fixture.file)
         let ledger = fixture.ledger()
         let service = fixture.service { _, _, messages, executor in
             // The person removes the job while the model is still reading its mail.
@@ -173,10 +225,10 @@ struct AttentionSortedTests {
         await service.generate()?.value
         #expect(fixture.morning.workspace.cardGenerations?.map(\.runIDs) == [[run]] && fixture.morning.cards.isEmpty)
         #expect(fixture.sources.runStore.run(id: run) != nil && service.error == nil)   // its run is kept, so a restart can find it
-        let written = try Data(contentsOf: fixture.file)
+        #expect(try Data(contentsOf: fixture.file) == written)
 
         fixture.ledger().backfill(receipts: fixture.morning.workspace.cardGenerations ?? [], sources: fixture.sources, cards: fixture.morning.cards)
-        #expect(try Data(contentsOf: fixture.file) == written && fixture.sorted.isEmpty)
+        #expect(try Data(contentsOf: fixture.file) == written && fixture.sorted.count == 1)
     }
 
     @Test func backfillClosesTheCrashWindowButNeverReachesBeforeTheStart() throws {
@@ -186,9 +238,14 @@ struct AttentionSortedTests {
         try fixture.read(3, at: early)
         try fixture.sort(showing: 1, at: early)   // a receipt from before the ledger existed
 
+        // A ledger with no start pulls nothing in, so a new or deleted one starts clean.
         let ledger = fixture.ledger(clock: start)
         ledger.backfill(receipts: fixture.morning.workspace.cardGenerations ?? [], sources: fixture.sources, cards: fixture.morning.cards)
-        #expect(fixture.sorted.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fixture.file.path))
+        // The first read it is told of starts it.
+        try fixture.read(2, key: { "first-\($0)@example.test" }, at: start)
+        let first = try fixture.sort(showing: 0, at: start)
+        ledger.recordSorted(first.observations, runIDs: first.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
 
         // Saved, but Noteling quit before its line was written.
         try fixture.read(4, key: { "later-\($0)@example.test" }, at: late)
@@ -197,9 +254,10 @@ struct AttentionSortedTests {
         restarted.backfill(receipts: fixture.morning.workspace.cardGenerations ?? [], sources: fixture.sources, cards: fixture.morning.cards)
 
         let events = AttentionLogFile.read(fixture.file).events
-        #expect(events.map(\.type) == [.started, .sorted] && events[0].at == start)
-        #expect(events[1].at == late && events[1].day == "2026-09-30")   // the receipt's own time, not the launch's
-        let sorted = try #require(fixture.sorted.first)
+        #expect(events.map(\.type) == [.started, .sorted, .sorted] && events[0].at == start && events[1].at == start)
+        #expect(fixture.sorted.first?.runIDs == first.runIDs && fixture.sorted.first?.backfilled == false)
+        #expect(events[2].at == late && events[2].day == "2026-09-30")   // the receipt's own time, not the launch's
+        let sorted = try #require(fixture.sorted.last)
         #expect(sorted.backfilled && sorted.runIDs == missed.runIDs)
         #expect(sorted.items.map(\.key) == missed.observations.map(\.id) && sorted.items.filter(\.shown).count == 2)
         #expect(sorted.sources.map(\.collectedAt) == [late])
@@ -270,14 +328,18 @@ struct AttentionSortedTests {
             errno = EIO
             return -1
         }
+        let run = try fixture.read(2)
+        let input = try fixture.sort(showing: 1)
+        ledger.recordSorted(input.observations, runIDs: input.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
         ledger.recordOpened(.launcher, route: .folders, desk: 2, wasOpen: false)
-        // Its line is in the file, so the index has it too, and nothing waits to be written again.
-        #expect(AttentionLogFile.read(fixture.file).events.map(\.type) == [.started, .opened])
-        #expect(ledger.index.firstOpened["2026-09-30"] != nil && ledger.pending.isEmpty && ledger.error == nil && ledger.revision == 2)
+        // Their lines are in the file, so the index has them too, and nothing waits to be written again.
+        #expect(AttentionLogFile.read(fixture.file).events.map(\.type) == [.started, .sorted, .opened])
+        #expect(ledger.index.sortedRunIDs == [run] && ledger.index.firstOpened["2026-09-30"] != nil)
+        #expect(ledger.pending.isEmpty && ledger.error == nil && ledger.revision == 2)
 
         ledger.file.sync = { fsync($0) }
         ledger.recordOpened(.chat, route: .folders, desk: 2, wasOpen: false)
-        #expect(AttentionLogFile.read(fixture.file).events.map(\.type) == [.started, .opened, .opened])
+        #expect(AttentionLogFile.read(fixture.file).events.map(\.type) == [.started, .sorted, .opened, .opened])
     }
 
     @Test func aLineWrittenTwiceCountsOnce() throws {
@@ -366,30 +428,54 @@ struct AttentionSortedTests {
         #expect(invoice.preview == "Invoice 42 is overdue.\nPay it by Friday." && invoice.from == nil && invoice.tab == nil && invoice.received == nil)
     }
 
+    /// The first read's line can't be written: the folder is a file. The failure is shown and stands while what
+    /// follows waits behind it; the card from that read has no thumbs yet, but what the person does to it keeps its own
+    /// key and words; and the next card step tries again even when it read no script source, so nothing is lost once
+    /// the folder is fixed.
     @Test func aFailedWriteIsShownAndNeverThrown() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let folder = fixture.file.deletingLastPathComponent()
         try Data("not a folder".utf8).write(to: folder)
-        let ledger = fixture.ledger()
-        #expect(ledger.error == "Couldn’t save the attention log (error \(EEXIST)).")
-        #expect(ledger.index.startedAt == nil && ledger.revision == 0)
+        let readAt = Self.date("2026-09-30T12:00:00Z")
+        let ledger = fixture.ledger(clock: readAt)
+        ledger.watch(fixture.morning)
+        // Nothing is written before the first read, so nothing has failed yet.
+        #expect(ledger.error == nil && ledger.index.startedAt == nil && ledger.revision == 0)
 
-        try fixture.read(2)
-        let first = try fixture.sort(showing: 1)
+        try fixture.read(2, at: readAt)
+        let first = try fixture.sort(showing: 1, at: readAt)
         ledger.recordSorted(first.observations, runIDs: first.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
-        #expect(ledger.index.sortedRunIDs.isEmpty && ledger.error != nil)   // nothing joins the index that is not on disk
+        #expect(ledger.error == "Couldn’t save the attention test in Noteling’s attention folder (error \(EEXIST)). Your cards aren’t affected.")
+        #expect(ledger.index.sortedRunIDs.isEmpty && ledger.revision == 0)   // nothing joins the index that is not on disk
         #expect(ledger.pending.map(\.type) == [.started, .sorted])
 
-        // Once the folder can be made, the start and the line that waited are written ahead of the next one, and the
-        // error clears.
+        // The card from that read shows no thumbs that could not be saved, but it is one the test reads, so what the
+        // person does to it is kept under its own key.
+        let card = try #require(fixture.morning.cards.first)
+        let key = try #require(card.tracking?.key)
+        #expect(ledger.labelKey(for: card) == nil)
+        try fixture.morning.setDisposition(cardID: card.id, to: .mine)
+        // A small write while the folder is still a file fails too: the error stands and the open waits in line.
+        ledger.recordOpened(.launcher, route: .folders, desk: 1, wasOpen: false)
+        #expect(ledger.error != nil && ledger.pending.map(\.type) == [.started, .sorted, .implicit, .opened])
+
+        // Fixed. The next card step read only a window the person taught, so it has no line of its own, but what
+        // waited is written, the start at the first read's time, and the error clears.
         try FileManager.default.removeItem(at: folder)
-        try fixture.read(3, key: { "later-\($0)@example.test" })
-        let next = try fixture.sort(showing: 0)
-        ledger.recordSorted(next.observations, runIDs: next.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
-        #expect(AttentionLogFile.read(fixture.file).events.map(\.type) == [.started, .sorted, .sorted])
-        #expect(fixture.sorted.map(\.runIDs) == [first.runIDs, next.runIDs] && ledger.error == nil && ledger.revision == 1)
-        #expect(ledger.pending.isEmpty && ledger.index.sortedRunIDs == Set(first.runIDs + next.runIDs))
+        try fixture.readATaughtWindow()
+        let others = try fixture.sort(showing: 0)
+        ledger.recordSorted(others.observations, runIDs: others.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+        let events = AttentionLogFile.read(fixture.file).events
+        #expect(events.map(\.type) == [.started, .sorted, .implicit, .opened] && events[0].at == readAt)
+        #expect(ledger.error == nil && ledger.pending.isEmpty && ledger.revision == 1 && ledger.index.sortedRunIDs == Set(first.runIDs))
+        #expect(ledger.labelKey(for: card) == key)   // its read is on disk, so it has thumbs
+        guard case .implicit(let mine) = events[2].payload else {
+            Issue.record("The guess was not written after the line.")
+            return
+        }
+        #expect(mine.signal == .mine && mine.key == key && mine.item.subject == card.sources.first?.title && !mine.item.subject.isEmpty)
+        #expect(ledger.effective(for: key).state == .guessYes)
     }
 
     @Test func aMessageReadAgainKeepsItsFirstDay() {
@@ -506,6 +592,16 @@ struct AttentionSortedTests {
             let snapshot = try ScriptReading.snapshot(from: result, request: ReadingReadRequest(source: job), collectedAt: at)
             try sources.saveReadingSnapshot(snapshot)
             return try #require(sources.runStore.runs.first { $0.entries.first?.readingSnapshot?.id == snapshot.id }?.id)
+        }
+
+        /// Saves one read of a mail window the person taught, which the test does not count.
+        func readATaughtWindow() throws {
+            let taught = LearnedReadingSource(kind: .mail, name: "Work mail", meaning: "My work inbox",
+                url: "https://mail.example.test/inbox", scope: "Recent unread messages")
+            try sources.saveReadingSource(taught)
+            try sources.saveReadingSnapshot(ReadingSnapshot(requestID: UUID(), sourceID: taught.id, source: taught, collectedAt: Date(),
+                items: [ReadingItem(id: "row-1", title: "Budget review", text: "Budget review is due", evidence: "Visible row")],
+                coverage: .complete, accountEvidence: "Current account", sourceEvidence: "Inbox", scopeEvidence: "Recent rows"))
         }
 
         /// What a card step does with every saved run that has no receipt: a card for each of the first `count`

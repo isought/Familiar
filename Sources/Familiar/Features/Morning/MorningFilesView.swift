@@ -237,7 +237,10 @@ struct MorningFilesView: View {
                         }.padding(14).background(Pad.paperTop.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
                     }.buttonStyle(.plain)
                 }
-                if let attention { AttentionDailyLine(ledger: attention) { navigation.route = .attention(.rest(day: $0)) } }
+                if let attention {
+                    AttentionDailyLine(ledger: attention, readsScript: { calendarSources?.readingSources.contains(where: \.readsThroughScript) == true },
+                                       open: { navigation.route = .attention(.rest(day: $0)) })
+                }
                 if store.cards.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Your morning starts small.").font(HandFont.font(size: 24))

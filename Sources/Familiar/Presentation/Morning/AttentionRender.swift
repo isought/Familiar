@@ -28,6 +28,44 @@ extension MorningRender {
         // A second copy of the week, so the labels the size check gives leave the rendered week as it was.
         try checkThumbSizes(week: try AttentionWeek(directory: fixtures.appendingPathComponent("attention-sizes")), title: lease)
         try renderAttentionScreens(week: week, directory: directory)
+        try renderUnsaved(fixtures: fixtures, directory: directory)
+    }
+
+    /// The folders screen when a file stands where the ledger's folder goes, so the first read's line couldn't be
+    /// saved: there is no line and no thumbs yet, and the failure is said in the line's place.
+    @MainActor private static func renderUnsaved(fixtures: URL, directory: URL) throws {
+        let root = fixtures.appendingPathComponent("attention-unsaved")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("Not a folder.".utf8).write(to: root.appendingPathComponent("attention"))
+        let at = AttentionWeek.time("2026-09-30T08:05:00")
+        let sources = CalendarStore(directory: root.appendingPathComponent("sources"))
+        let store = MorningStore(directory: root.appendingPathComponent("morning"))
+        let ledger = AttentionLedger(directory: root.appendingPathComponent("attention"), clock: { at }, timeZone: AttentionWeek.zone)
+        let job = LearnedReadingSource(kind: .mail, name: "Example Gmail", meaning: "My personal inbox · fictional example",
+            scope: "Show what needs me: replies, deadlines, bills and appointments.", script: "imap-mail__today")
+        try sources.saveReadingSource(job)
+        let rows: [[String: Any]] = [
+            ["key": "lease@mail.example.test", "title": "Lease renewal: sign by Friday", "from": "Dana Ruiz <dana@rent.example.test>",
+             "tab": "primary", "preview": "Please sign the renewal by Friday so the rent stays the same."],
+            ["key": "sale@mail.example.test", "title": "50% off everything", "from": "Example Shop <deals@shop.example.test>",
+             "tab": "promotions", "bulk": true, "preview": "This weekend only."],
+        ]
+        try sources.saveReadingSnapshot(try ScriptReading.snapshot(from: ["mailbox": "INBOX", "arrived": rows.count, "items": rows],
+            request: ReadingReadRequest(source: job, requestedAt: at), collectedAt: at))
+        let input = CardGenerationInput.saved(in: sources, runID: nil, excluding: [])
+        guard let lease = input.observations.first(where: { $0.title.hasPrefix("Lease") }) else {
+            throw AttentionRenderFailure("The unsaved read has no lease.")
+        }
+        try store.applyCardGeneration(observations: input.observations, proposals: [CardProposal(observationKey: lease.id,
+            title: "Dana needs the signed lease by Friday", meaning: "The renewal lapses Friday; signing keeps this rent.",
+            action: MorningAction(title: "Draft a reply", instruction: "Draft a reply to the fictional message. Do not send it."))],
+            runIDs: input.runIDs, at: at)
+        ledger.recordSorted(input.observations, runIDs: input.runIDs, runs: sources.runStore, cards: store.cards)
+        guard ledger.error != nil, ledger.numbers.line == nil else { throw AttentionRenderFailure("The read that can’t be saved was saved.") }
+        try image(MorningFilesView(store: store, navigation: MorningNavigation(), close: {}, filed: {}, handoff: { _ in },
+                                   calendarSources: sources, discussCard: { _ in }, attention: ledger),
+                  size: NSSize(width: 650, height: MorningPanelController.preferredHeight(for: .folders)),
+                  to: directory.appendingPathComponent("attention-daily-line-unsaved.png"))
     }
 
     /// The daily line on the folders screen, today's rest, the week against the pass bar, and the rest again after a

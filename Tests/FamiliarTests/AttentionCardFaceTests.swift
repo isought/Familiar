@@ -85,7 +85,8 @@ struct AttentionCardFaceTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: fixture.file.path)
         slot.save("because rent")
         // The field stays open with the words in it, and says why.
-        #expect(slot.isOpen && ledger.explaining == key && ledger.error == "Couldn’t save the attention log (error \(EACCES)).")
+        #expect(slot.isOpen && ledger.explaining == key)
+        #expect(ledger.error == "Couldn’t save the attention test in Noteling’s attention folder (error \(EACCES)). Your cards aren’t affected.")
         #expect(ledger.explanation(for: key) == nil && fixture.labels.isEmpty)
 
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fixture.file.path)
@@ -178,7 +179,8 @@ struct AttentionCardFaceTests {
     // MARK: - Fixtures
 
     /// One card a card step made from an example inbox, on a Morning store with a ledger watching it. The ledger has
-    /// a script read of the inbox, unless `read` is false, as for a calendar or a screen read.
+    /// a script read of the inbox, unless `read` is false, as for a calendar or a screen read: then it has only
+    /// another job's script read.
     @MainActor private final class Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("attention-card-face-\(UUID())")
         let sourceID = UUID()
@@ -194,13 +196,11 @@ struct AttentionCardFaceTests {
 
         init(read: Bool = true) throws {
             let zone = TimeZone(identifier: "America/New_York")!, started = Date().addingTimeInterval(-60)
-            if read {
-                let job = AttentionEvent.Sorted.Source(sourceID: sourceID, sourceName: "Example Gmail", script: "imap-mail__today",
-                    runID: UUID(), collectedAt: started, since: started.addingTimeInterval(-86_400), arrived: 0, returned: 0, truncated: false)
-                try AttentionLogFile(url: root.appendingPathComponent("attention/signals.jsonl")).append([
-                    AttentionEvent(.started, at: started, timeZone: zone),
-                    AttentionEvent(.sorted(.init(runIDs: [job.runID], backfilled: false, sources: [job], items: [])), at: started, timeZone: zone)])
-            }
+            let job = AttentionEvent.Sorted.Source(sourceID: read ? sourceID : UUID(), sourceName: "Example Gmail", script: "imap-mail__today",
+                runID: UUID(), collectedAt: started, since: started.addingTimeInterval(-86_400), arrived: 0, returned: 0, truncated: false)
+            try AttentionLogFile(url: root.appendingPathComponent("attention/signals.jsonl")).append([
+                AttentionEvent(.started, at: started, timeZone: zone),
+                AttentionEvent(.sorted(.init(runIDs: [job.runID], backfilled: false, sources: [job], items: [])), at: started, timeZone: zone)])
             store = MorningStore(directory: root.appendingPathComponent("morning"))
             ledger = AttentionLedger(directory: root.appendingPathComponent("attention"), timeZone: zone)
             ledger.watch(store)

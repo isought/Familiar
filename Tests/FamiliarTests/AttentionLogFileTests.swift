@@ -160,6 +160,24 @@ struct AttentionLogFileTests {
         #expect(posixCode { try fixture.log.append([event(.started)]) } == EACCES)
     }
 
+    /// The privacy notice's table of what stays on the Mac lists the ledger's folder and what it holds, and the notice
+    /// says who can read it, that it never leaves the Mac, when it is made and when it stops, and how to erase it.
+    @Test func thePrivacyNoticeListsTheLedger() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let notice = try String(contentsOf: root.appendingPathComponent("PRIVACY.md"), encoding: .utf8)
+        let row = try #require(notice.split(separator: "\n").first { $0.hasPrefix("|") && $0.hasSuffix("| `attention/` |") })
+        for held in ["subject", "sender", "address", "preview", "link", "thumbs", "explanations", "open the pack"] {
+            #expect(row.contains(held), "The row doesn't say it holds \(held).")
+        }
+        let paragraph = try #require(notice.components(separatedBy: "\n\n").first { $0.hasPrefix("The attention test") })
+        for said in ["only once a mail job that reads through a script has run", "only ever adds to",
+                     "stops adding what you do once a week passes with no such read", "never leaves your Mac",
+                     "delete the `attention` folder", "starts again"] {
+            #expect(paragraph.contains(said), "The notice doesn't say “\(said)”.")
+        }
+        #expect(notice.contains("the attention test and the activity log can be read only by your macOS user account"))
+    }
+
     @Test func timesCarryTheLocalOffsetDayAndZone() throws {
         let newYork = try #require(TimeZone(identifier: "America/New_York"))
         let at = try #require(AttentionTime.date("2026-09-30T12:14:03.120Z"))
