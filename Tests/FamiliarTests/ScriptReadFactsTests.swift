@@ -68,6 +68,23 @@ struct ScriptReadFactsTests {
         #expect(snapshot.scriptRead == ScriptReadCounts(arrived: 640, returned: 3, truncated: true, since: nil))
     }
 
+    /// Told when the last sorted read was, the mail script says how many it cut off that arrived after it. The count
+    /// is kept as data beside the others; the text the card step reads is unchanged.
+    @Test func aScriptToldTheLastReadKeepsWhatItCutOffSince() throws {
+        let rows: [[String: Any]] = [["key": "m1@example.test", "title": "Message 1"], ["key": "m2@example.test", "title": "Message 2"]]
+        let result: [String: Any] = ["mailbox": "INBOX", "arrived": 30, "returned": 2, "truncated": true, "cut_off_since_last_read": 12,
+                                     "items": rows]
+        let parsed = try JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: result))
+        let snapshot = try ScriptReading.snapshot(from: parsed, request: ReadingReadRequest(source: mailJob()))
+        #expect(snapshot.scriptRead == ScriptReadCounts(arrived: 30, returned: 2, truncated: true, since: nil, cutOffSinceLastRead: 12))
+        var untold = result
+        untold["cut_off_since_last_read"] = nil
+        let plain = try ScriptReading.snapshot(from: untold, request: ReadingReadRequest(source: mailJob()))
+        #expect(plain.scriptRead?.cutOffSinceLastRead == nil)
+        #expect(snapshot.summary == plain.summary && snapshot.coverageNotes == plain.coverageNotes && snapshot.scopeEvidence == plain.scopeEvidence)
+        #expect(snapshot.items.map(\.text) == plain.items.map(\.text))
+    }
+
     @Test func runsSavedBeforeThisStillLoadAndRoundTrip() throws {
         let old = try SourceRunJSON.decoder().decode(ReadingSnapshot.self, from: Data(Self.savedBeforeThis.utf8))
         #expect(old.scriptRead == nil && old.items.allSatisfy { $0.mail == nil })

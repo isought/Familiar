@@ -186,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         calendarReader.trackedItems = { [weak self] sourceID in self?.morning.trackedItems(sourceID: sourceID) ?? [] }
         calendarReader.openSource = { await SourcePageOpener().prepare($0) }
         calendarReader.onRunFinished = { [weak self] runID in _ = self?.cardGeneration.generate(runID: runID) }
+        calendarReader.sortedRunIDs = { [weak self] in Set((self?.morning.workspace.cardGenerations ?? []).flatMap(\.runIDs)) }
         let cardConversation = CardConversation(store: morning)
         cardConversation.onHandoff = { [weak self] _ in self?.morningTasks.wake() }
         assistant.cardConversation = cardConversation

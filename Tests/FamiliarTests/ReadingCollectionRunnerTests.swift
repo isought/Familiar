@@ -279,7 +279,7 @@ struct ReadingCollectionRunnerTests {
         #expect(lines.contains { $0.hasPrefix("run: “Morning mail” failed") && $0.contains("isn't connected yet") })
     }
 
-    @Test func aScriptJobReadsBackToItsOwnLastReadThroughTheToolsFolder() async throws {
+    @Test func aScriptJobReadsBackToItsLastSortedReadThroughTheToolsFolder() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }
         // Real scripts in a real tools folder, run with no readScript hook. Each says how far back it was asked to read.
@@ -287,9 +287,10 @@ struct ReadingCollectionRunnerTests {
         try FileManager.default.createDirectory(at: pack.appendingPathComponent("scripts"), withIntermediateDirectories: true)
         try "---\nname: Mail\nsources: [today, plain]\n---\nReads mail.".write(to: pack.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         try """
-        def run(since_hours: int = 24) -> dict:
+        def run(since_hours: int = 24, last_read: str = "") -> dict:
             \"\"\"Fixture mail read.\"\"\"
-            return {"mailbox": "INBOX", "arrived": 1, "items": [{"key": "a@example.test", "title": f"Read back {since_hours} hours"}]}
+            title = f"Read back {since_hours} hours" + (f" to {last_read}" if last_read else "")
+            return {"mailbox": "INBOX", "arrived": 1, "items": [{"key": "a@example.test", "title": title}]}
         """.write(to: pack.appendingPathComponent("scripts/today.py"), atomically: true, encoding: .utf8)
         try """
         def run() -> dict:
@@ -305,23 +306,38 @@ struct ReadingCollectionRunnerTests {
             try fixture.store.saveReadingSource(job)
             return job
         }
-        let fresh = try job("New mail", "mail__today"), skipped = try job("Morning mail", "mail__today"), plain = try job("Other mail", "mail__plain")
-        // Read 29½ hours ago, so a day was skipped: whole hours since, plus one, is 31.
-        for source in [skipped, plain] {
-            let earlier = Date().addingTimeInterval(-29.5 * 3_600)
-            let result: [String: Any] = ["mailbox": "INBOX", "arrived": 1, "items": [["key": "c@example.test", "title": "Earlier read"]]]
-            try fixture.store.saveReadingSnapshot(ScriptReading.snapshot(from: result, request: ReadingReadRequest(source: source, requestedAt: earlier),
-                                                                         collectedAt: earlier))
+        let fresh = try job("New mail", "mail__today"), skipped = try job("Morning mail", "mail__today")
+        let twice = try job("Work mail", "mail__today"), plain = try job("Other mail", "mail__plain")
+        /// Saves a read of `source` at `at` and returns its run.
+        func saved(_ source: LearnedReadingSource, at: Date, title: String) throws -> UUID {
+            let result: [String: Any] = ["mailbox": "INBOX", "arrived": 1, "items": [["key": "c@example.test", "title": title]]]
+            let snapshot = try ScriptReading.snapshot(from: result, request: ReadingReadRequest(source: source, requestedAt: at), collectedAt: at)
+            try fixture.store.saveReadingSnapshot(snapshot)
+            return try #require(fixture.store.runStore.runs.first { $0.entries.first?.readingSnapshot?.id == snapshot.id }?.id)
         }
+        // The last reads a card step sorted, which have receipts: 29½ hours ago, so a day was skipped, and 10½ hours
+        // ago for a job read twice a day. There is no attention test at all, so nothing here depends on it.
+        let skippedDay = Date().addingTimeInterval(-29.5 * 3_600), thisMorning = Date().addingTimeInterval(-10.5 * 3_600)
+        let receipts = [try saved(skipped, at: skippedDay, title: "Sorted read"), try saved(plain, at: skippedDay, title: "Sorted read"),
+                        try saved(twice, at: thisMorning, title: "Sorted read")]
+        // Each was read again 15 minutes ago, but no card step sorted that read: its step failed, or was stopped. It
+        // moves nothing, so the mail since the sorted read is read again.
+        for source in [skipped, twice, plain] { _ = try saved(source, at: Date().addingTimeInterval(-0.25 * 3_600), title: "Unsorted read") }
+        // Wired as the app wires it: the run IDs the card step's receipts cover.
         let runner = fixture.runner(allowControl: false) { _, _, _, _ in "unexpected" }
+        runner.sortedRunIDs = { Set(receipts) }
         func read(_ source: LearnedReadingSource) async throws -> SourceRunEntry {
             await (try #require(runner.collect(source: source))).value
             return try #require(fixture.store.runStore.runs.first?.entries.first { $0.sourceID == source.id })
         }
+        func iso(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
 
-        // Each job's window is its own: one never read looks back the usual day, whatever the other job read.
+        // Each job's window is its own: one no card step sorted looks back the usual day, whatever the others read,
+        // and has no last read to count what it cut off from.
         #expect(try await read(fresh).readingSnapshot?.items.map(\.title) == ["Read back 24 hours"])
-        #expect(try await read(skipped).readingSnapshot?.items.map(\.title) == ["Read back 31 hours"])
+        // Whole hours since the sorted read, plus one: 31 after a skipped day, and 12, not a whole day, twice a day.
+        #expect(try await read(skipped).readingSnapshot?.items.map(\.title) == ["Read back 31 hours to \(iso(skippedDay))"])
+        #expect(try await read(twice).readingSnapshot?.items.map(\.title) == ["Read back 12 hours to \(iso(thisMorning))"])
         // A script that doesn't take since_hours is called as before, even after a skipped day.
         let other = try await read(plain)
         #expect(other.state == .complete && other.readingSnapshot?.items.map(\.title) == ["Read its own window"])

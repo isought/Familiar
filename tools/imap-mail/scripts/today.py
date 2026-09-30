@@ -35,13 +35,15 @@ class ServerRefused(Exception):
     """The server answered NO (busy, throttled): the read failed, which is not the same as an empty inbox."""
 
 
-def run(since_hours: int = 24, mailbox: str = "INBOX", limit: int = 200) -> dict:
+def run(since_hours: int = 24, mailbox: str = "INBOX", limit: int = 200, last_read: str = "") -> dict:
     """List the messages that arrived recently, newest first.
 
     Args:
         since_hours: how far back to look, in hours (1 to 168).
         mailbox: which mailbox to read (INBOX by default).
         limit: at most this many messages (1 to 500).
+        last_read: when the last read ended, as an ISO 8601 time. The reply then also says, in
+            cut_off_since_last_read, how many messages that arrived after it were left out past the limit.
     """
     address = os.environ.get("MAIL_ADDRESS", "").strip()
     password = os.environ.get("MAIL_APP_PASSWORD", "").strip().replace(" ", "")
@@ -55,13 +57,21 @@ def run(since_hours: int = 24, mailbox: str = "INBOX", limit: int = 200) -> dict
     since_hours = max(1, min(int(since_hours), 168))
     limit = max(1, min(int(limit), 500))
     cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+    after = None
+    if last_read:
+        try:
+            after = datetime.fromisoformat(last_read.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return {"error": f"last_read should be an ISO 8601 time, not {last_read!r}."}
+        if after.tzinfo is None:
+            after = after.replace(tzinfo=timezone.utc)
 
     try:
         conn = imaplib.IMAP4_SSL(host, 993, timeout=30)
     except OSError as e:
         return {"error": f"Couldn't reach {host} ({e}). Check your connection."}
     try:
-        return read(conn, host, address, password, mailbox, cutoff, since_hours, limit)
+        return read(conn, host, address, password, mailbox, cutoff, since_hours, limit, after)
     except ServerRefused as e:
         return {"error": f"{host} couldn't read {mailbox} right now ({e}). Try again in a few minutes."}
     finally:
@@ -71,7 +81,7 @@ def run(since_hours: int = 24, mailbox: str = "INBOX", limit: int = 200) -> dict
             pass
 
 
-def read(conn, host, address, password, mailbox, cutoff, since_hours, limit):
+def read(conn, host, address, password, mailbox, cutoff, since_hours, limit, after=None):
     """Signs in, then lists what arrived since the cutoff. A NO from the server raises ServerRefused."""
     try:
         conn.login(address, password)
@@ -106,9 +116,14 @@ def read(conn, host, address, password, mailbox, cutoff, since_hours, limit):
             if uid in arrivals:
                 items.append(describe(uid, meta, raw, arrivals[uid], tabs, gmail, address))
     items.sort(key=lambda item: item["received"], reverse=True)
-    return {"account": address, "server": host, "mailbox": mailbox, "since": cutoff.isoformat(timespec="seconds"),
-            "arrived": len(arrivals), "returned": len(items), "truncated": len(arrivals) > len(items),
-            "items": items}
+    reply = {"account": address, "server": host, "mailbox": mailbox, "since": cutoff.isoformat(timespec="seconds"),
+             "arrived": len(arrivals), "returned": len(items), "truncated": len(arrivals) > len(items),
+             "items": items}
+    if after is not None:
+        # The oldest are left out, and the window reaches back before the last read; only those after it went unread.
+        kept = set(newest)
+        reply["cut_off_since_last_read"] = sum(1 for uid, when in arrivals.items() if when >= after and uid not in kept)
+    return reply
 
 
 def describe(uid, meta, raw, when, tabs, gmail, address=""):

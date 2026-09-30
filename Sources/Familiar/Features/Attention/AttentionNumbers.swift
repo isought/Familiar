@@ -35,8 +35,8 @@ struct AttentionNumbers {
         var missed = 0
         /// The rest is empty, or it was scrolled to its end.
         var restChecked = true
-        /// Messages past the script's limit, which are not counted as read: for each source, the most any of the
-        /// day's reads left out.
+        /// Messages past the script's limit that no read returned, which are not counted as read: what the day's reads
+        /// left out where no earlier read had looked.
         var cutOff = 0
         /// The day's first open that counts, or the first thing done in the pack, whichever came first.
         var firstOpen: Date?
@@ -141,9 +141,15 @@ struct AttentionNumbers {
 
         var cutOff: [String: Int] = [:]
         for reads in index.sortedReads.values {
-            // A 24-hour window read twice a day cuts off the same messages twice, so only the most counts.
-            let most = reads.reduce(into: [String: Int]()) { most, read in
-                most[read.day] = max(most[read.day] ?? 0, read.truncated ? max(0, read.arrived - read.returned) : 0)
+            // Each read counts only what it left out where no earlier read looked, so a day's add up. A read that
+            // doesn't say where its window starts may cut off what another that day did, so of those only the most counts.
+            var most: [String: Int] = [:]
+            for read in reads {
+                if read.since == nil {
+                    most[read.day] = max(most[read.day] ?? 0, read.cutOff)
+                } else {
+                    cutOff[read.day, default: 0] += read.cutOff
+                }
             }
             cutOff.merge(most, uniquingKeysWith: +)
         }

@@ -3,9 +3,9 @@ import Foundation
 /// A job that reads through a tools-folder script. The script's JSON becomes the run's findings directly, with no
 /// model in between, so the counts are exact and everything that arrived is kept; the card step decides what matters.
 ///
-/// The script returns `{account, server, mailbox, since, arrived, returned, truncated, items}` or `{error}`. Each
-/// item has a stable `key` and a `title`, plus either its own `text` or the mail fields (`from`, `received`,
-/// `unread`, `starred`, `tab`, `important`, `bulk`, `preview`) that make one.
+/// The script returns `{account, server, mailbox, since, arrived, returned, truncated, items}` or `{error}`, and, when
+/// told the last read, `cut_off_since_last_read`. Each item has a stable `key` and a `title`, plus either its own
+/// `text` or the mail fields (`from`, `received`, `unread`, `starred`, `tab`, `important`, `bulk`, `preview`) that make one.
 enum ScriptReading {
     @MainActor
     static func snapshot(from result: Any, request: ReadingReadRequest, collectedAt: Date = Date()) throws -> ReadingSnapshot {
@@ -45,7 +45,8 @@ enum ScriptReading {
             accountEvidence: account.isEmpty ? "The account the script is connected to" : "Signed in as \(account)",
             sourceEvidence: place, scopeEvidence: "Everything that arrived since \(since): \(arrived) message\(arrived == 1 ? "" : "s")",
             summary: summary, scriptRead: ScriptReadCounts(arrived: arrived, returned: result["returned"] as? Int ?? items.count,
-                truncated: truncated, since: (result["since"] as? String).flatMap(date)))
+                truncated: truncated, since: (result["since"] as? String).flatMap(date),
+                cutOffSinceLastRead: result["cut_off_since_last_read"] as? Int))
         try snapshot.validate()
         return snapshot
     }

@@ -18,6 +18,8 @@ struct AttentionIndex {
         var arrived: Int
         var returned: Int
         var truncated: Bool
+        /// Messages past the script's limit that no earlier read looked at: see `cutOff(_:in:zone:)`.
+        var cutOff = 0
     }
 
     private(set) var startedAt: Date?
@@ -83,9 +85,10 @@ struct AttentionIndex {
         case .sorted(let sorted):
             sortedRunIDs.formUnion(sorted.runIDs)
             for source in sorted.sources {
+                let cutOff = cutOff(source, in: sorted, zone: event.timeZone)
                 sortedReads[source.sourceID, default: []].append(Read(day: event.day, sourceName: source.sourceName,
                     collectedAt: source.collectedAt, since: source.since, arrived: source.arrived, returned: source.returned,
-                    truncated: source.truncated))
+                    truncated: source.truncated, cutOff: cutOff))
                 sortedReads[source.sourceID]?.sort { $0.collectedAt < $1.collectedAt }
             }
             for item in sorted.items { read(item.key, shown: item.shown, copy: item, on: event.day, backfilled: sorted.backfilled) }
@@ -106,6 +109,39 @@ struct AttentionIndex {
         if [.label, .miss, .restViewed, .engaged].contains(event.type), firstActive[event.day].map({ event.at < $0 }) ?? true {
             firstActive[event.day] = event.at
         }
+    }
+
+    /// How many messages a read left out past the script's limit that no earlier read of its source looked at. A script
+    /// told when the last sorted read was counts those that arrived after it itself, which is exact. Otherwise it is
+    /// worked out here. The script leaves out the oldest in its window, and a window can reach back over an earlier
+    /// read's: when the oldest message it returned arrived before an earlier read ended, all it left out is where that
+    /// read looked, returned then or cut off and counted then. Otherwise it counts what it left out less what earlier
+    /// reads returned from its window; a message read then and archived or deleted since is no longer in the mailbox,
+    /// so this can count too few. A read that doesn't say where its window starts counts all it left out. Worked out
+    /// before the line's messages are folded in, from the copies the index keeps: a read older than those, which no
+    /// screen shows, may count all it left out.
+    private func cutOff(_ source: AttentionEvent.Sorted.Source, in sorted: AttentionEvent.Sorted, zone: TimeZone) -> Int {
+        let left = source.truncated ? max(0, source.arrived - source.returned) : 0
+        if let counted = source.cutOffSinceLastRead { return min(left, max(0, counted)) }
+        guard left > 0, let since = source.since,
+              let ended = sortedReads[source.sourceID]?.last(where: { $0.collectedAt < source.collectedAt })?.collectedAt,
+              ended > since else { return left }
+        // What this read returned: new messages in full, and those read before by the copy the index keeps.
+        let copies = sorted.items.filter { $0.sourceID == source.sourceID }
+            + (sorted.seen ?? []).compactMap { item[$0.key] }.filter { $0.sourceID == source.sourceID }
+        if let oldest = copies.compactMap(\.received).min(), oldest <= ended { return 0 }
+        let returned = Set(copies.map(\.key))
+        // A message is first read after it arrives; two days' slack covers any change of zone in between.
+        let from = AttentionTime.day(of: since.addingTimeInterval(-2 * 86_400), in: zone)
+        var readBefore = 0
+        for (day, keys) in keysByDay where day >= from {
+            for key in keys where !returned.contains(key) {
+                guard let copy = item[key], copy.sourceID == source.sourceID, let received = copy.received,
+                      received >= since, received <= source.collectedAt else { continue }
+                readBefore += 1
+            }
+        }
+        return max(0, left - readBefore)
     }
 
     /// A card step read `key` on `day`, with its full copy unless an earlier line holds it. The first read dates it; a

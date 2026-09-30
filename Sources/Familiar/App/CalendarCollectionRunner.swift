@@ -36,6 +36,9 @@ final class CalendarCollectionRunner: ObservableObject {
     var openSource: @MainActor (LearnedReadingSource) async -> String? = { _ in nil }
     /// Runs a script job's script and returns its result; nil uses the tools folder. Replaced in tests.
     var readScript: (@MainActor (LearnedReadingSource) async throws -> Any)?
+    /// The runs a card step has sorted, from its receipts (wired by the app), so a script job's next read goes back to
+    /// the last one it sorted. None reads the script's usual window.
+    var sortedRunIDs: @MainActor () -> Set<UUID> = { [] }
     private var pendingFinishedRunID: UUID?
 
     typealias PrepareExecution = SourceCollectionTask.PrepareExecution
@@ -296,8 +299,8 @@ final class CalendarCollectionRunner: ObservableObject {
         guard let id = source.script, let tool = registry.script(named: id) else {
             throw CalendarDataError.invalid("Its script, \(source.script ?? "unnamed"), isn't in the tools folder.")
         }
-        // Read back to the source's last read, so a skipped day's mail is still read.
-        let lastRead = ScriptReadWindow.lastRead(sourceID: source.id, runs: store.runStore.runs)
+        // Read back to the last read a card step sorted, so a skipped day's mail, or a read whose step failed, is still read.
+        let lastRead = ScriptReadWindow.lastRead(sourceID: source.id, runs: store.runStore.runs, sorted: sortedRunIDs())
         return try await registry.runner.result(tool, args: ScriptReadWindow.arguments(for: tool, lastRead: lastRead, now: Date()),
                                                 secrets: registry.pack(holdingScript: id)?.requires ?? [])
     }

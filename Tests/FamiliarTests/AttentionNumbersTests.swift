@@ -48,11 +48,111 @@ struct AttentionNumbersTests {
         #expect(measure(events, now: Self.at("2026-10-07", "09:00")).line == nil)
         #expect(measure([], now: now).line == nil)
 
-        // Messages past the script's limit are cut off, not read; a second read the same day cuts off the same ones.
+        // Messages past the script's limit are cut off, not read. Reads that don't say where their windows start may
+        // cut off the same ones, so of a day's only the most counts.
         events.append(sorted(Self.at("2026-09-30", "08:30"), keys: [], arrived: 202, returned: 42, truncated: true))
         events.append(sorted(Self.at("2026-09-30", "20:00"), keys: [], arrived: 150, returned: 42, truncated: true))
         #expect(measure(events, now: now.addingTimeInterval(12 * 3_600)).line?.text
                 == "Read 42 → showed 6 · you said yes to 4 · 0 missed · 160 cut off")
+    }
+
+    /// The script returns the newest 200 of what arrived in its window, so what it leaves out is the oldest, which is
+    /// where the window reaches back over an earlier read. Those were read then and are not cut off.
+    @Test func aReadCutsOffOnlyWhatNoEarlierReadReturned() {
+        var inbox = Inbox()
+        // 180 arrive from 18:00 to 08:00 and are all read at 08:00; 60 more by 18:00. A 24-hour read at 18:00 sees
+        // 240 and returns the newest 200. Every message was read.
+        inbox.arrive(180, from: Self.at("2026-09-29", "18:00"), to: Self.at("2026-09-30", "08:00"))
+        var events = [inbox.read(at: Self.at("2026-09-30", "08:00"), hours: 24)]
+        inbox.arrive(60, from: Self.at("2026-09-30", "08:00"), to: Self.at("2026-09-30", "18:00"))
+        events.append(inbox.read(at: Self.at("2026-09-30", "18:00"), hours: 24))
+        #expect(inbox.counts.last == .init(arrived: 240, returned: 200))
+        let evening = measure(events, now: Self.at("2026-09-30", "18:30"))
+        #expect(evening.day("2026-09-30").read == 240 && evening.day("2026-09-30").cutOff == 0)
+        #expect(evening.line?.text == "Read 240 → showed 0 · you said yes to 0 · 240 in the rest")   // was "· 40 cut off"
+        #expect(evening.week?.labels == "0 tapped (0 strong, 0 explained) · 0 guessed · 0 cut off")
+
+        // The next morning's 24-hour read reaches back to 08:00 and leaves out 20 of the 60, read the evening before.
+        inbox.arrive(160, from: Self.at("2026-09-30", "18:00"), to: Self.at("2026-10-01", "08:00"))
+        events.append(inbox.read(at: Self.at("2026-10-01", "08:00"), hours: 24))
+        #expect(inbox.counts.last == .init(arrived: 220, returned: 200))
+        let tomorrow = measure(events, now: Self.at("2026-10-01", "08:30"))
+        #expect(tomorrow.day("2026-10-01").cutOff == 0 && tomorrow.day("2026-10-01").read == 160 && tomorrow.week?.total.cutOff == 0)
+    }
+
+    @Test func aDayReadTwiceWithinADayCountsOnlyMailNoReadReturned() {
+        // 50 arrive from 08:00 to 20:00, 130 overnight, 150 the next day. The 20:00 read's 24-hour window holds 280 and
+        // it leaves out 80, all returned at 08:00.
+        var inbox = Inbox()
+        inbox.arrive(50, from: Self.at("2026-09-29", "08:00"), to: Self.at("2026-09-29", "20:00"))
+        inbox.arrive(130, from: Self.at("2026-09-29", "20:00"), to: Self.at("2026-09-30", "08:00"))
+        var events = [inbox.read(at: Self.at("2026-09-30", "08:00"), hours: 24)]
+        inbox.arrive(150, from: Self.at("2026-09-30", "08:00"), to: Self.at("2026-09-30", "20:00"))
+        events.append(inbox.read(at: Self.at("2026-09-30", "20:00"), hours: 24))
+        #expect(inbox.counts == [.init(arrived: 180, returned: 180), .init(arrived: 280, returned: 200)])
+        #expect(measure(events, now: Self.at("2026-09-30", "21:00")).day("2026-09-30").cutOff == 0)   // was 80
+
+        // 220 arrive in the 24 hours before 08:00, when the newest 200 are read and 20 are cut off; 100 more by 16:00.
+        // The 16:00 read's 24-hour window holds 250 and it leaves out 50, all among the 200 returned at 08:00.
+        var busy = Inbox()
+        busy.arrive(70, from: Self.at("2026-09-29", "08:00"), to: Self.at("2026-09-29", "16:00"))
+        busy.arrive(150, from: Self.at("2026-09-29", "16:00"), to: Self.at("2026-09-30", "08:00"))
+        var reads = [busy.read(at: Self.at("2026-09-30", "08:00"), hours: 24)]
+        busy.arrive(100, from: Self.at("2026-09-30", "08:00"), to: Self.at("2026-09-30", "16:00"))
+        reads.append(busy.read(at: Self.at("2026-09-30", "16:00"), hours: 24))
+        #expect(busy.counts == [.init(arrived: 220, returned: 200), .init(arrived: 250, returned: 200)])
+        let numbers = measure(reads, now: Self.at("2026-09-30", "17:00"))
+        #expect(numbers.day("2026-09-30").cutOff == 20 && numbers.day("2026-09-30").read == 300)   // was 50
+        #expect(numbers.line?.text.hasSuffix("· 300 in the rest · 20 cut off") == true)
+
+        // A read soon after whose window starts where the 08:00 one's did, as when it ran before the later reads were
+        // sorted, leaves out 121: the same 20, and 101 returned at 08:00. Nothing more was cut off.
+        busy.arrive(1, from: Self.at("2026-09-30", "16:00"), to: Self.at("2026-09-30", "16:05"))
+        reads.append(busy.read(at: Self.at("2026-09-30", "16:05"), since: Self.at("2026-09-29", "08:00")))
+        #expect(busy.counts.last == .init(arrived: 321, returned: 200))
+        #expect(measure(reads, now: Self.at("2026-09-30", "17:00")).day("2026-09-30").cutOff == 20)
+    }
+
+    @Test func mailPastTheLimitThatNoReadReturnedIsStillCutOff() {
+        // Read at 08:00; the 18:00 read goes back to 07:00, an hour before it. 10 of the 250 in its window were read at
+        // 08:00, and it leaves out 50: those 10, and 40 that arrived after 08:00 and were never read.
+        var inbox = Inbox()
+        inbox.arrive(90, from: Self.at("2026-09-29", "08:00"), to: Self.at("2026-09-30", "07:00"))
+        inbox.arrive(10, from: Self.at("2026-09-30", "07:00"), to: Self.at("2026-09-30", "08:00"))
+        var events = [inbox.read(at: Self.at("2026-09-30", "08:00"), hours: 24)]
+        inbox.arrive(240, from: Self.at("2026-09-30", "08:00"), to: Self.at("2026-09-30", "18:00"))
+        events.append(inbox.read(at: Self.at("2026-09-30", "18:00"), hours: ScriptReadWindow.hours(lastRead: Self.at("2026-09-30", "08:00"),
+                                                                                                   now: Self.at("2026-09-30", "18:00"))))
+        #expect(inbox.counts == [.init(arrived: 100, returned: 100), .init(arrived: 250, returned: 200)])
+        let numbers = measure(events, now: Self.at("2026-09-30", "18:30"))
+        #expect(numbers.day("2026-09-30").cutOff == 40 && numbers.day("2026-09-30").read == 300)
+        #expect(numbers.line?.text == "Read 300 → showed 0 · you said yes to 0 · 300 in the rest · 40 cut off")
+        #expect(numbers.week?.labels.hasSuffix("· 40 cut off") == true)
+    }
+
+    /// A message read before and archived since is no longer in the mailbox, so the script no longer counts it as
+    /// arrived. Told when the last sorted read was, the script counts what it cut off that arrived after it, which stays
+    /// exact. Without that count, as from an older copy of the script, the estimate takes away the archived ones too.
+    @Test func theScriptsOwnCountStaysExactWhenMailReadBeforeWasArchived() {
+        let morning = Self.at("2026-09-30", "08:00"), evening = Self.at("2026-09-30", "18:00")
+        var inbox = Inbox()
+        inbox.arrive(90, from: Self.at("2026-09-29", "08:00"), to: Self.at("2026-09-30", "07:00"))
+        inbox.arrive(30, from: Self.at("2026-09-30", "07:00"), to: morning)
+        let first = inbox.read(at: morning, hours: 24)
+        // The person archives 20 of those read at 08:00 that arrived after 07:00, and 260 more arrive by 18:00. The
+        // 18:00 read goes back to 07:00 and returns the newest 200: 60 of the 260 were never read.
+        inbox.archive(20, from: Self.at("2026-09-30", "07:00"), to: morning)
+        inbox.arrive(260, from: morning, to: evening)
+        let hours = ScriptReadWindow.hours(lastRead: morning, now: evening)
+        var told = inbox, untold = inbox
+        let counted = told.read(at: evening, hours: hours, lastRead: morning)
+        #expect(told.counts.last == .init(arrived: 270, returned: 200))
+        let numbers = measure([first, counted], now: Self.at("2026-09-30", "18:30"))
+        #expect(numbers.day("2026-09-30").cutOff == 60 && numbers.line?.text.hasSuffix("· 60 cut off") == true)
+        #expect(numbers.week?.labels.hasSuffix("· 60 cut off") == true)
+        // The estimate takes away all 30 read at 08:00 from its window, though only 10 are still there.
+        let estimated = untold.read(at: evening, hours: hours)
+        #expect(measure([first, estimated], now: Self.at("2026-09-30", "18:30")).day("2026-09-30").cutOff == 40)
     }
 
     @Test func openingTheRestWithoutReachingTheEndIsNotAChecked() {
@@ -315,6 +415,58 @@ struct AttentionNumbersTests {
     }
 
     // MARK: - Fixtures
+
+    /// A mailbox the mail script reads as it does: what arrived since the window's start, the newest `limit` returned,
+    /// and, told the last read, how many left out arrived after it; each read written as a card step writes it,
+    /// messages read before by key alone.
+    private struct Inbox {
+        struct Counts: Equatable {
+            var arrived: Int
+            var returned: Int
+        }
+
+        var arrivals: [(key: String, at: Date)] = []
+        var known: Set<String> = []
+        var counts: [Counts] = []
+
+        /// `count` messages spread evenly from `from` to `to`.
+        mutating func arrive(_ count: Int, from: Date, to: Date) {
+            let step = to.timeIntervalSince(from) / Double(count), first = arrivals.count
+            arrivals += (0..<count).map { ("mail\(first + $0)", from.addingTimeInterval(step * (Double($0) + 0.5))) }
+        }
+
+        /// The first `count` that arrived from `from` to `to` leave the inbox.
+        mutating func archive(_ count: Int, from: Date, to: Date) {
+            let gone = Set(arrivals.filter { $0.at >= from && $0.at <= to }.prefix(count).map(\.key))
+            arrivals.removeAll { gone.contains($0.key) }
+        }
+
+        mutating func read(at: Date, hours: Int, lastRead: Date? = nil) -> AttentionEvent {
+            read(at: at, since: at.addingTimeInterval(-Double(hours) * 3_600), lastRead: lastRead)
+        }
+
+        mutating func read(at: Date, since: Date, limit: Int = 200, lastRead: Date? = nil) -> AttentionEvent {
+            let arrived = arrivals.filter { $0.at >= since && $0.at <= at }
+            let returned = arrived.sorted { $0.at > $1.at }.prefix(limit)
+            let kept = Set(returned.map(\.key))
+            let runID = UUID(), sourceID = AttentionNumbersTests.inboxID
+            let items = returned.filter { !known.contains($0.key) }.map {
+                AttentionItem(key: $0.key, sourceID: sourceID, sourceName: "Example Gmail", kind: "mail", script: "imap-mail__today",
+                              runID: runID, itemID: $0.key, readAt: at, subject: "Subject \($0.key)", received: $0.at, preview: "", shown: false)
+            }
+            let seen = returned.filter { known.contains($0.key) }.map { AttentionEvent.Sorted.Seen(key: $0.key, shown: false) }
+            known.formUnion(returned.map(\.key))
+            counts.append(.init(arrived: arrived.count, returned: returned.count))
+            let source = AttentionEvent.Sorted.Source(sourceID: sourceID, sourceName: "Example Gmail", script: "imap-mail__today",
+                runID: runID, collectedAt: at, since: since, arrived: arrived.count, returned: returned.count,
+                truncated: arrived.count > returned.count,
+                cutOffSinceLastRead: lastRead.map { last in arrived.filter { $0.at >= last && !kept.contains($0.key) }.count })
+            return AttentionEvent(.sorted(.init(runIDs: [runID], backfilled: false, sources: [source], items: items,
+                                                seen: seen.isEmpty ? nil : seen)), at: at, timeZone: AttentionNumbersTests.zone, app: "0.5.4")
+        }
+    }
+
+    private static let inboxID = UUID()
 
     private static let zone = TimeZone(identifier: "America/New_York")!
     /// Thursday, September 24 to Wednesday, September 30.

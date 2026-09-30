@@ -61,4 +61,7 @@ struct ScriptReadCounts: Codable, Equatable {
     var returned: Int
     var truncated: Bool
     var since: Date? = nil
+    /// Of those left past the limit, the ones that arrived after the last read a card step sorted, so no read returned
+    /// them. Only a script told when that read was counts them; nil otherwise.
+    var cutOffSinceLastRead: Int? = nil
 }

@@ -409,7 +409,7 @@ final class AttentionLedger: ObservableObject {
             sources.append(.init(sourceID: read.entry.sourceID, sourceName: read.entry.sourceName, script: read.snapshot.source.script ?? "",
                 runID: read.run.id, collectedAt: read.snapshot.collectedAt, since: counts?.since,
                 arrived: counts?.arrived ?? read.snapshot.items.count, returned: counts?.returned ?? read.snapshot.items.count,
-                truncated: counts?.truncated ?? false))
+                truncated: counts?.truncated ?? false, cutOffSinceLastRead: counts?.cutOffSinceLastRead))
         }
         guard !sources.isEmpty else { return nil }
         return event(.sorted(.init(runIDs: runIDs, backfilled: backfilled, sources: sources, items: items, seen: again.isEmpty ? nil : again)), at: at)

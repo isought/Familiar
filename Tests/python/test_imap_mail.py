@@ -66,10 +66,10 @@ class FakeIMAP:
         ]
 
 
-def run_with(fake):
+def run_with(fake, **args):
     today.imaplib.IMAP4_SSL = lambda *args, **kwargs: fake
     os.environ["MAIL_ADDRESS"], os.environ["MAIL_APP_PASSWORD"] = "me@gmail.com", "abcd efgh ijkl mnop"
-    return today.run(since_hours=24)
+    return today.run(**{"since_hours": 24, **args})
 
 
 failures = []
@@ -95,6 +95,17 @@ url = items.get("Delivery date?", {}).get("url", "")
 check(url == "https://mail.google.com/mail/u/me@gmail.com/#search/rfc822msgid%3ACAMx2%2BuF8%3Dq3%2Fx%40mail.gmail.com",
       f"deep link encodes + = / @ and opens the right account: {url}")
 check(not fake.flag_changes, "nothing may change flags")
+check("cut_off_since_last_read" not in result, "only a read told when the last one was counts what it cut off since")
+
+# Told the last read ended 2½ hours ago, a read that keeps only the newest message counts the one left out that arrived
+# after it (2 hours ago), not the one that arrived before it (3 hours ago), which that read returned.
+last_read = (datetime.now(timezone.utc) - timedelta(hours=2.5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+result = run_with(FakeIMAP(), limit=1, last_read=last_read)
+check(result.get("cut_off_since_last_read") == 1, f"cut off since the last read: {result.get('cut_off_since_last_read')}")
+check(result.get("arrived") == 3, f"the window is still since_hours: {result.get('arrived')}")
+result = run_with(FakeIMAP(), last_read=last_read.replace("Z", "+00:00"))
+check(result.get("cut_off_since_last_read") == 0, f"nothing past the limit: {result.get('cut_off_since_last_read')}")
+check("ISO 8601" in run_with(FakeIMAP(), last_read="yesterday").get("error", ""), "a last_read that isn't a time is an error")
 
 for refused in ("search", "fetch"):
     result = run_with(FakeIMAP(refuse={refused}))

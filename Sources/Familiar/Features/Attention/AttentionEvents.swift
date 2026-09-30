@@ -69,6 +69,8 @@ struct AttentionEvent: Equatable, Identifiable {
             var arrived: Int
             var returned: Int
             var truncated: Bool
+            /// The script's own count of what it cut off that arrived after the last sorted read: `ScriptReadCounts`.
+            var cutOffSinceLastRead: Int? = nil
         }
     }
 

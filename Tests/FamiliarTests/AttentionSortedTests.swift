@@ -35,7 +35,7 @@ struct AttentionSortedTests {
         defer { fixture.remove() }
         let ledger = fixture.ledger()
         let readAt = Self.date("2026-09-30T13:00:00.250Z")
-        let run = try fixture.read(40, arrived: 64, at: readAt)
+        let run = try fixture.read(40, arrived: 64, at: readAt, cutOffSinceLastRead: 9)
         let input = try fixture.sort(showing: 6)
         ledger.recordSorted(input.observations, runIDs: input.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
 
@@ -45,8 +45,11 @@ struct AttentionSortedTests {
         #expect(sorted.runIDs == [run] && !sorted.backfilled)
         #expect(sorted.items.count == 40 && sorted.items.filter(\.shown).count == 6)
         #expect(sorted.sources == [.init(sourceID: fixture.job.id, sourceName: "Example Gmail", script: "imap-mail__today", runID: run,
-            collectedAt: readAt, since: Self.date("2026-09-29T12:00:00Z"), arrived: 64, returned: 40, truncated: true)])
+            collectedAt: readAt, since: Self.date("2026-09-29T12:00:00Z"), arrived: 64, returned: 40, truncated: true,
+            cutOffSinceLastRead: 9)])
         #expect(ledger.index.sortedRunIDs == [run] && ledger.index.sortedReads[fixture.job.id]?.map(\.arrived) == [64])
+        // The script counted 9 of the 24 it left out as arriving after the last sorted read: only those were never read.
+        #expect(ledger.index.sortedReads[fixture.job.id]?.map(\.cutOff) == [9])
         #expect(ledger.revision == 1 && ledger.error == nil)   // one write: the line, after the start it brought
     }
 
@@ -200,6 +203,80 @@ struct AttentionSortedTests {
         #expect(service.status == "Card generation stopped.")
         #expect((fixture.morning.workspace.cardGenerations ?? []).count == 2)
         #expect(try Data(contentsOf: fixture.file) == written)
+    }
+
+    /// The next read goes back to the last read a card step sorted, never to one no step sorted. Read on Monday at
+    /// 08:00, Tuesday skipped; Wednesday's 08:00 read reaches back over Tuesday, but its card step fails, and when it is
+    /// tried again the person presses Stop. The Read pressed again at 08:15 goes back to Monday, not to Wednesday 08:00,
+    /// so the mail from Monday 08:00 to Tuesday 08:15 is read and can land in the rest, and the week has no stretch
+    /// left unread.
+    @Test func aReadNoCardStepSortedNeverMovesTheNextReadsWindow() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let monday = Self.date("2026-09-28T08:00:00.000-04:00"), wednesday = Self.date("2026-09-30T08:00:00.000-04:00")
+        let again = Self.date("2026-09-30T08:15:00.000-04:00")
+        var now = monday
+        let ledger = AttentionLedger(directory: fixture.root.appendingPathComponent("attention"), clock: { now }, timeZone: Self.newYork)
+        var fail = false, stop: (() -> Void)?
+        let service = fixture.service { _, _, messages, executor in
+            if fail { throw MorningStoreError.invalid("The model is unavailable.") }
+            let submitted = await executor(CardGenerationSubmission.toolName, ["proposals": [Self.proposal(try Self.key(in: messages))]], nil)
+            #expect(!submitted.isError)
+            stop?()
+            return "Ready"
+        }
+        service.onSorted = { observations, runIDs in
+            ledger.recordSorted(observations, runIDs: runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+        }
+        #expect(fixture.lastSortedRead == nil)   // no sorted read yet: the usual day
+
+        try fixture.read(3, at: monday, since: monday.addingTimeInterval(-86_400))
+        await service.generate()?.value
+        #expect(fixture.lastSortedRead == monday)
+
+        now = wednesday
+        let unsorted = try fixture.read(2, key: { "wednesday-\($0)@example.test" }, at: wednesday, since: monday.addingTimeInterval(-3_600))
+        fail = true
+        await service.generate()?.value
+        #expect(service.error?.contains("unavailable") == true)
+        fail = false
+        stop = { service.stop() }
+        await service.generate()?.value
+        #expect(service.status == "Card generation stopped.")
+        #expect(fixture.morning.workspace.cardGenerations?.count == 1 && fixture.sources.runStore.run(id: unsorted) != nil)
+
+        now = again
+        let lastRead = fixture.lastSortedRead
+        #expect(lastRead == monday)
+        // 48¼ hours since, rounded up, plus the hour's margin: back to Monday 06:15.
+        let hours = ScriptReadWindow.hours(lastRead: lastRead, now: again)
+        #expect(hours == 50)
+        stop = nil
+        try fixture.read(2, key: { "again-\($0)@example.test" }, at: again, since: again.addingTimeInterval(-Double(hours) * 3_600))
+        await service.generate()?.value
+        #expect(fixture.sorted.count == 2 && fixture.sorted.last?.items.map(\.key).allSatisfy { $0.contains("again-") } == true)
+        #expect(fixture.lastSortedRead == again)
+        #expect(ledger.numbers.week?.gaps == [])   // before, "Not read: Mon 28 08:00 → Tue 29 08:15"
+    }
+
+    /// The read window comes from the card step's receipts, not from the attention test. Deleting the test's folder, as
+    /// the privacy notice says to erase it, starts the test again but never shortens a read: Friday's read was sorted,
+    /// the folder is deleted that evening, and Monday's read still goes back to Friday, so the weekend's mail is read.
+    @Test func deletingTheAttentionFolderNeverShortensTheNextRead() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let friday = Self.date("2026-09-25T08:00:00.000-04:00"), monday = Self.date("2026-09-28T08:00:00.000-04:00")
+        let ledger = fixture.ledger(clock: friday)
+        try fixture.read(3, at: friday)
+        let input = try fixture.sort(showing: 1, at: friday)
+        ledger.recordSorted(input.observations, runIDs: input.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+        #expect(ledger.index.sortedReads[fixture.job.id]?.last?.collectedAt == friday)
+
+        try FileManager.default.removeItem(at: fixture.file.deletingLastPathComponent())
+        let relaunched = fixture.ledger(clock: monday)
+        #expect(relaunched.index.sortedReads.isEmpty && relaunched.index.startedAt == nil)   // the test starts again
+        #expect(fixture.lastSortedRead == friday)
+        #expect(ScriptReadWindow.hours(lastRead: fixture.lastSortedRead, now: monday) == 73)   // not the usual 24
     }
 
     @Test func aJobRemovedWhileItsStepRanIsNeverBackfilled() async throws {
@@ -449,6 +526,8 @@ struct AttentionSortedTests {
         #expect(ledger.error == "Couldn’t save the attention test in Noteling’s attention folder (error \(EEXIST)). Your cards aren’t affected.")
         #expect(ledger.index.sortedRunIDs.isEmpty && ledger.revision == 0)   // nothing joins the index that is not on disk
         #expect(ledger.pending.map(\.type) == [.started, .sorted])
+        // The card step sorted it, so the next read goes back to it: the test's own failure never shortens a read.
+        #expect(fixture.lastSortedRead == readAt)
 
         // The card from that read shows no thumbs that could not be saved, but it is one the test reads, so what the
         // person does to it is kept under its own key.
@@ -567,6 +646,11 @@ struct AttentionSortedTests {
         let morning: MorningStore
         var file: URL { root.appendingPathComponent("attention/signals.jsonl") }
         var sorted: [AttentionEvent.Sorted] { AttentionLogFile.read(file).events.compactMap(\.sorted) }
+        /// The last read of the mail job a card step sorted, which the next read goes back to, as the app works it out.
+        var lastSortedRead: Date? {
+            ScriptReadWindow.lastRead(sourceID: job.id, runs: sources.runStore.runs,
+                                      sorted: Set((morning.workspace.cardGenerations ?? []).flatMap(\.runIDs)))
+        }
 
         init() throws {
             sources = CalendarStore(directory: root.appendingPathComponent("calendar"))
@@ -580,15 +664,18 @@ struct AttentionSortedTests {
 
         /// Saves one script read of `count` messages, cut off when more than that arrived, and returns its run.
         @discardableResult
-        func read(_ count: Int, arrived: Int? = nil, key: (Int) -> String = { "m\($0)@example.test" }, at: Date = Date()) throws -> UUID {
+        func read(_ count: Int, arrived: Int? = nil, key: (Int) -> String = { "m\($0)@example.test" }, at: Date = Date(),
+                  since: Date? = nil, cutOffSinceLastRead: Int? = nil) throws -> UUID {
             let arrived = arrived ?? count
             let rows: [[String: Any]] = (0..<count).map { index in
                 ["key": key(index), "title": "Message \(index)", "from": "Sender \(index) <sender\(index)@example.test>",
                  "received": "2026-09-30T08:\(String(format: "%02d", index % 60)):00+00:00", "unread": true, "tab": "primary",
                  "bulk": index % 3 == 0, "preview": "Preview \(index)", "url": "https://mail.google.com/mail/u/0/#search/rfc822msgid%3Am\(index)"]
             }
-            let result: [String: Any] = ["account": "me@example.test", "mailbox": "INBOX", "since": "2026-09-29T12:00:00+00:00",
+            var result: [String: Any] = ["account": "me@example.test", "mailbox": "INBOX",
+                "since": since.map { ISO8601DateFormatter().string(from: $0) } ?? "2026-09-29T12:00:00+00:00",
                 "arrived": arrived, "returned": count, "truncated": arrived > count, "items": rows]
+            if let cutOffSinceLastRead { result["cut_off_since_last_read"] = cutOffSinceLastRead }
             let snapshot = try ScriptReading.snapshot(from: result, request: ReadingReadRequest(source: job), collectedAt: at)
             try sources.saveReadingSnapshot(snapshot)
             return try #require(sources.runStore.runs.first { $0.entries.first?.readingSnapshot?.id == snapshot.id }?.id)
