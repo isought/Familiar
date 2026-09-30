@@ -279,6 +279,54 @@ struct ReadingCollectionRunnerTests {
         #expect(lines.contains { $0.hasPrefix("run: “Morning mail” failed") && $0.contains("isn't connected yet") })
     }
 
+    @Test func aScriptJobReadsBackToItsOwnLastReadThroughTheToolsFolder() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        // Real scripts in a real tools folder, run with no readScript hook. Each says how far back it was asked to read.
+        let pack = fixture.registry.root.appendingPathComponent("mail")
+        try FileManager.default.createDirectory(at: pack.appendingPathComponent("scripts"), withIntermediateDirectories: true)
+        try "---\nname: Mail\nsources: [today, plain]\n---\nReads mail.".write(to: pack.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try """
+        def run(since_hours: int = 24) -> dict:
+            \"\"\"Fixture mail read.\"\"\"
+            return {"mailbox": "INBOX", "arrived": 1, "items": [{"key": "a@example.test", "title": f"Read back {since_hours} hours"}]}
+        """.write(to: pack.appendingPathComponent("scripts/today.py"), atomically: true, encoding: .utf8)
+        try """
+        def run() -> dict:
+            \"\"\"Fixture read that takes no arguments.\"\"\"
+            return {"mailbox": "INBOX", "arrived": 1, "items": [{"key": "b@example.test", "title": "Read its own window"}]}
+        """.write(to: pack.appendingPathComponent("scripts/plain.py"), atomically: true, encoding: .utf8)
+        await fixture.registry.reload()
+        try #require(fixture.registry.script(named: "mail__today") != nil && fixture.registry.script(named: "mail__plain") != nil)
+
+        func job(_ name: String, _ script: String) throws -> LearnedReadingSource {
+            let job = LearnedReadingSource(kind: .mail, name: name, meaning: "My inbox", application: "Mail",
+                                           scope: "Skip promotions", script: script)
+            try fixture.store.saveReadingSource(job)
+            return job
+        }
+        let fresh = try job("New mail", "mail__today"), skipped = try job("Morning mail", "mail__today"), plain = try job("Other mail", "mail__plain")
+        // Read 29½ hours ago, so a day was skipped: whole hours since, plus one, is 31.
+        for source in [skipped, plain] {
+            let earlier = Date().addingTimeInterval(-29.5 * 3_600)
+            let result: [String: Any] = ["mailbox": "INBOX", "arrived": 1, "items": [["key": "c@example.test", "title": "Earlier read"]]]
+            try fixture.store.saveReadingSnapshot(ScriptReading.snapshot(from: result, request: ReadingReadRequest(source: source, requestedAt: earlier),
+                                                                         collectedAt: earlier))
+        }
+        let runner = fixture.runner(allowControl: false) { _, _, _, _ in "unexpected" }
+        func read(_ source: LearnedReadingSource) async throws -> SourceRunEntry {
+            await (try #require(runner.collect(source: source))).value
+            return try #require(fixture.store.runStore.runs.first?.entries.first { $0.sourceID == source.id })
+        }
+
+        // Each job's window is its own: one never read looks back the usual day, whatever the other job read.
+        #expect(try await read(fresh).readingSnapshot?.items.map(\.title) == ["Read back 24 hours"])
+        #expect(try await read(skipped).readingSnapshot?.items.map(\.title) == ["Read back 31 hours"])
+        // A script that doesn't take since_hours is called as before, even after a skipped day.
+        let other = try await read(plain)
+        #expect(other.state == .complete && other.readingSnapshot?.items.map(\.title) == ["Read its own window"])
+    }
+
     @Test func aSourceRunHasRoomForItsFindingsWhateverTheReplyLengthSetting() async throws {
         let fixture = Fixture()
         defer { fixture.remove() }

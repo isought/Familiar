@@ -296,7 +296,10 @@ final class CalendarCollectionRunner: ObservableObject {
         guard let id = source.script, let tool = registry.script(named: id) else {
             throw CalendarDataError.invalid("Its script, \(source.script ?? "unnamed"), isn't in the tools folder.")
         }
-        return try await registry.runner.result(tool, secrets: registry.pack(holdingScript: id)?.requires ?? [])
+        // Read back to the source's last read, so a skipped day's mail is still read.
+        let lastRead = ScriptReadWindow.lastRead(sourceID: source.id, runs: store.runStore.runs)
+        return try await registry.runner.result(tool, args: ScriptReadWindow.arguments(for: tool, lastRead: lastRead, now: Date()),
+                                                secrets: registry.pack(holdingScript: id)?.requires ?? [])
     }
 
     private func begin(_ request: SourceCollectionTask) throws -> TaskExecution {
