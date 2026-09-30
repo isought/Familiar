@@ -4,7 +4,13 @@ import Foundation
 /// The attention ledger on disk: one JSON line per event, appended and never rewritten, in an owner-only folder.
 /// Nothing here leaves the Mac. A line torn by a crash is skipped on read and sealed off before the next append.
 struct AttentionLogFile {
+    /// In the `userInfo` of an error thrown after every line reached the file and only flushing it to disk failed:
+    /// the lines read back from the file, so they count as written.
+    static let linesWritten = "AttentionLogFileLinesWritten"
+
     let url: URL
+    /// Flushes the file to disk; tests stand in one that fails.
+    var sync: (Int32) -> Int32 = { fsync($0) }
 
     /// Writes every line in one append, then fsyncs. The folder is kept 0700 and the file 0600. Every error it
     /// throws is a POSIX one, so a caller can report its number and nothing else.
@@ -51,7 +57,7 @@ struct AttentionLogFile {
                 offset += written
             }
         }
-        guard fsync(descriptor) == 0 else { throw Self.error(url) }
+        guard sync(descriptor) == 0 else { throw Self.error(url, linesWritten: true) }
     }
 
     /// Every line that decodes, in file order. Torn lines, lines from a newer schema and unknown types are
@@ -69,7 +75,9 @@ struct AttentionLogFile {
     private static let newline = UInt8(ascii: "\n")
 
     /// The POSIX error, `errno` unless given. A caller reports only its number, never the file's content.
-    private static func error(_ url: URL, _ code: Int32 = errno) -> NSError {
-        NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSFilePathErrorKey: url.path])
+    private static func error(_ url: URL, _ code: Int32 = errno, linesWritten: Bool = false) -> NSError {
+        var info: [String: Any] = [NSFilePathErrorKey: url.path]
+        if linesWritten { info[Self.linesWritten] = true }
+        return NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: info)
     }
 }

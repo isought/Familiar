@@ -44,7 +44,7 @@ struct AttentionScreenTests {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let rest = try fixture.restView()
-        #expect(rest.day == Self.wednesday && rest.days == [Self.wednesday, Self.tuesday])
+        #expect(rest.day == Self.wednesday && rest.days(fixture.ledger.numbers) == [Self.wednesday, Self.tuesday])
         rest.openWeek()
         #expect(fixture.navigation.route == .attention(.week))
 

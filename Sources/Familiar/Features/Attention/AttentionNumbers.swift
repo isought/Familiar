@@ -116,12 +116,19 @@ struct AttentionNumbers {
     }
 
     let index: AttentionIndex
-    let now: Date
+    /// Only a copy for a later time the same day changes it; see `at(_:)`.
+    private(set) var now: Date
     let timeZone: TimeZone
     /// "yyyy-MM-dd" in `timeZone`.
     let today: String
     private let calendar: Calendar
-    private let days: [String: Day]
+    /// For each day a script source was read, how many of its messages were past the script's limit.
+    private let cutOff: [String: Int]
+    /// The first open that counts, or the first thing done in the pack, on each day.
+    private let firstOpen: [String: Date]
+    /// The messages of the days a screen can show, sorted: the daily line looks back six days, and a week never
+    /// reaches further than six days either side of today. Any other day's are sorted when it is asked for.
+    private(set) var shownDays: [String: Day] = [:]
 
     init(index: AttentionIndex, now: Date, timeZone: TimeZone) {
         self.index = index
@@ -132,25 +139,39 @@ struct AttentionNumbers {
         self.calendar = calendar
         today = AttentionTime.day(of: now, in: timeZone)
 
-        let keys = index.firstDay.reduce(into: [String: [String]]()) { $0[$1.value, default: []].append($1.key) }
-        var days = keys.reduce(into: [String: Day]()) { $0[$1.key] = Day($1.key, keys: $1.value, index: index) }
+        var cutOff: [String: Int] = [:]
         for reads in index.sortedReads.values {
             // A 24-hour window read twice a day cuts off the same messages twice, so only the most counts.
-            let cutOff = reads.reduce(into: [String: Int]()) { most, read in
+            let most = reads.reduce(into: [String: Int]()) { most, read in
                 most[read.day] = max(most[read.day] ?? 0, read.truncated ? max(0, read.arrived - read.returned) : 0)
             }
-            for (day, count) in cutOff {
-                days[day, default: Day(day: day)].wasRead = true
-                days[day]?.cutOff += count
-            }
+            cutOff.merge(most, uniquingKeysWith: +)
         }
-        for (day, at) in index.firstOpened.merging(index.firstActive, uniquingKeysWith: min) {
-            days[day, default: Day(day: day)].firstOpen = at
+        self.cutOff = cutOff
+        firstOpen = index.firstOpened.merging(index.firstActive, uniquingKeysWith: min)
+        let reach = Self.weekDays - 1
+        for day in (-reach...reach).map({ self.day(today, plus: $0) }) {
+            if let keys = index.keysByDay[day], !keys.isEmpty { shownDays[day] = Day(day, keys: keys, index: index) }
         }
-        self.days = days
     }
 
-    func day(_ day: String) -> Day { days[day] ?? Day(day: day) }
+    /// The same numbers at a later time on the same day: what the clock says moves on, and the days are not worked
+    /// out again.
+    func at(_ now: Date) -> AttentionNumbers {
+        var numbers = self
+        numbers.now = now
+        return numbers
+    }
+
+    func day(_ day: String) -> Day {
+        var counts = shownDays[day] ?? index.keysByDay[day].flatMap { $0.isEmpty ? nil : Day(day, keys: $0, index: index) } ?? Day(day: day)
+        if let cutOff = cutOff[day] {
+            counts.wasRead = true
+            counts.cutOff = cutOff
+        }
+        counts.firstOpen = firstOpen[day]
+        return counts
+    }
 
     /// The day `offset` days after `day`, which can be negative.
     func day(_ day: String, plus offset: Int) -> String {
@@ -311,13 +332,14 @@ struct AttentionNumbers {
 
 private extension AttentionNumbers.Day {
     /// The day's messages, split into shown and the rest, each counted by its label as it stands now.
-    init(_ day: String, keys: [String], index: AttentionIndex) {
+    init(_ day: String, keys: Set<String>, index: AttentionIndex) {
         self.init(day: day, wasRead: true)
-        func arrived(_ key: String) -> Date {
-            guard let item = index.item[key] else { return .distantPast }
-            return item.received ?? item.readAt
+        // When each arrived, looked up once rather than at every comparison.
+        let arrived = keys.map { key -> (key: String, at: Date) in
+            guard let item = index.item[key] else { return (key, .distantPast) }
+            return (key, item.received ?? item.readAt)
         }
-        let newestFirst = keys.sorted { arrived($0) != arrived($1) ? arrived($0) > arrived($1) : $0 < $1 }
+        let newestFirst = arrived.sorted { $0.at != $1.at ? $0.at > $1.at : $0.key < $1.key }.map(\.key)
         for key in newestFirst {
             let label = index.labels[key] ?? .init()
             if label.explanation != nil { explained += 1 }
@@ -339,9 +361,4 @@ private extension AttentionNumbers.Day {
         }
         restChecked = restKeys.isEmpty || index.restCheckedDays.contains(day)
     }
-}
-
-extension AttentionLedger {
-    /// The numbers as the ledger stands now, in its zone.
-    var numbers: AttentionNumbers { AttentionNumbers(index: index, now: clock(), timeZone: timeZone) }
 }

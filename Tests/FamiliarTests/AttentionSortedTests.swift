@@ -210,6 +210,103 @@ struct AttentionSortedTests {
         #expect(try Data(contentsOf: fixture.file) == once)
     }
 
+    @Test func aMessageReadAgainIsListedByItsKeyAlone() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        // 08:00 and 20:00 in New York: the evening's 24 hours reach back over five of the morning's ten messages.
+        let morning = Self.date("2026-09-30T12:00:00Z"), evening = Self.date("2026-10-01T00:00:00Z")
+        let ledger = fixture.ledger(clock: evening)
+        try fixture.read(10, at: morning)
+        let first = try fixture.sort(showing: 2, at: morning)
+        ledger.recordSorted(first.observations, runIDs: first.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards, at: morning)
+        try fixture.read(10, key: { "m\($0 + 5)@example.test" }, at: evening)
+        let second = try fixture.sort(showing: 2, at: evening)   // two of the five read again get a card now
+        ledger.recordSorted(second.observations, runIDs: second.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards, at: evening)
+
+        let lines = fixture.sorted
+        #expect(lines.count == 2 && lines[0].items.count == 10 && lines[0].seen == nil)
+        #expect(lines[1].items.map(\.key) == second.observations.suffix(5).map(\.id) && lines[1].items.allSatisfy { !$0.shown })
+        #expect(lines[1].seen == second.observations.prefix(5).enumerated().map { .init(key: $1.id, shown: $0 < 2) })
+        let written = try String(contentsOf: fixture.file, encoding: .utf8).split(separator: "\n").map { Data($0.utf8) }
+        let evenings = try #require(JSONSerialization.jsonObject(with: written[2]) as? [String: Any])
+        #expect((evenings["items"] as? [Any])?.count == 5 && (evenings["seen"] as? [[String: Any]])?.first?.keys.sorted() == ["key", "shown"])
+        #expect(written[2].count * 4 < written[1].count * 3)   // ten messages in each, five of them by key alone
+
+        // The morning's copies stay, dated by the morning; the evening only adds that two of them were shown.
+        let again = first.observations[5].id
+        #expect(ledger.index.firstDay[again] == "2026-09-30" && ledger.index.item[again]?.readAt == morning)
+        #expect(ledger.index.shownKeys == Set((first.observations.prefix(2) + second.observations.prefix(2)).map(\.id)))
+        #expect(ledger.index.firstDay.count == 15 && ledger.index.item.count == 15)
+        let relaunched = fixture.ledger(clock: evening)
+        #expect(relaunched.index.firstDay == ledger.index.firstDay && relaunched.index.shownKeys == ledger.index.shownKeys)
+        #expect(relaunched.index.item == ledger.index.item)
+    }
+
+    @Test func aLongRunningAppLetsGoOfOldCopies() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        // Launched on September 1 and never quit: twenty mornings, three new messages each.
+        let first = Self.date("2026-09-01T12:00:00Z")
+        var now = first
+        let ledger = fixture.ledger(clock: first)
+        ledger.clock = { now }
+        for day in 0..<20 {
+            now = first.addingTimeInterval(Double(day) * 86_400)
+            try fixture.read(3, key: { "d\(day)-\($0)@example.test" }, at: now)
+            let input = try fixture.sort(showing: 0, at: now)
+            ledger.recordSorted(input.observations, runIDs: input.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
+        }
+        // On September 20 copies are kept from 14 days back; earlier days keep only when they were read.
+        #expect(ledger.index.keepsItemsFrom == "2026-09-06" && ledger.index.firstDay.count == 60)
+        #expect(ledger.index.item.count == 15 * 3 && ledger.index.item.values.allSatisfy { $0.readAt >= Self.date("2026-09-06T12:00:00Z") })
+        #expect(Set(fixture.ledger(clock: now).index.item.keys) == Set(ledger.index.item.keys))   // as a relaunch would keep
+    }
+
+    @Test func aWriteThatOnlyFailsToFlushCountsAsWritten() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let ledger = fixture.ledger(clock: Self.date("2026-09-30T13:00:00Z"))
+        ledger.file.sync = { _ in
+            errno = EIO
+            return -1
+        }
+        ledger.recordOpened(.launcher, route: .folders, desk: 2, wasOpen: false)
+        // Its line is in the file, so the index has it too, and nothing waits to be written again.
+        #expect(AttentionLogFile.read(fixture.file).events.map(\.type) == [.started, .opened])
+        #expect(ledger.index.firstOpened["2026-09-30"] != nil && ledger.pending.isEmpty && ledger.error == nil && ledger.revision == 2)
+
+        ledger.file.sync = { fsync($0) }
+        ledger.recordOpened(.chat, route: .folders, desk: 2, wasOpen: false)
+        #expect(AttentionLogFile.read(fixture.file).events.map(\.type) == [.started, .opened, .opened])
+    }
+
+    @Test func aLineWrittenTwiceCountsOnce() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let monday = Self.sorted("2026-09-28T13:00:00Z", keys: ["a", "b"], shown: ["a"])
+        let item = AttentionItem(key: "a", sourceID: Self.mailID, sourceName: "Example Gmail", kind: "mail", runID: UUID(), itemID: "a",
+            readAt: monday.at, subject: "Subject a", preview: "", shown: true)
+        let card = AttentionCardContext(cardID: UUID(), disposition: .delegated, displayDisposition: .delegated, optionCount: 1,
+            optionModes: [.prepare], cardAgeHours: 1, userEdited: false, hasPersonalContext: false, createdByRun: nil)
+        let tapped = AttentionEvent(.implicit(.init(key: "a", signal: .optionTapped, optionIndex: 0, optionMode: .prepare, item: item, card: card)),
+                                    at: monday.at.addingTimeInterval(60), timeZone: Self.newYork)
+        let index = AttentionIndex([monday, tapped, monday, tapped], now: tapped.at, timeZone: Self.newYork)
+        #expect(index.sortedReads[Self.mailID]?.count == 1 && index.labels["a"]?.signals == [.optionTapped])
+
+        // A write that failed partway left whole lines and a torn one behind; the retry wrote them all again.
+        let log = AttentionLogFile(url: fixture.file)
+        try log.append([.init(.started, at: monday.at, timeZone: Self.newYork), monday, tapped])
+        let handle = try FileHandle(forWritingTo: fixture.file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: try monday.line().prefix(40))
+        try handle.close()
+        try log.append([monday, tapped])
+        #expect(AttentionLogFile.read(fixture.file).events.count == 5)
+        let ledger = fixture.ledger(clock: tapped.at)
+        #expect(ledger.index.sortedReads[Self.mailID]?.count == 1 && ledger.index.labels["a"]?.signals == [.optionTapped])
+        #expect(ledger.effective(for: "a").state == .guessYes)
+    }
+
     @Test func anEmptyReadStillCounts() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -282,45 +379,86 @@ struct AttentionSortedTests {
         let first = try fixture.sort(showing: 1)
         ledger.recordSorted(first.observations, runIDs: first.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
         #expect(ledger.index.sortedRunIDs.isEmpty && ledger.error != nil)   // nothing joins the index that is not on disk
+        #expect(ledger.pending.map(\.type) == [.started, .sorted])
 
-        // Once the folder can be made, the start is written with the next line and the error clears.
+        // Once the folder can be made, the start and the line that waited are written ahead of the next one, and the
+        // error clears.
         try FileManager.default.removeItem(at: folder)
         try fixture.read(3, key: { "later-\($0)@example.test" })
         let next = try fixture.sort(showing: 0)
         ledger.recordSorted(next.observations, runIDs: next.runIDs, runs: fixture.sources.runStore, cards: fixture.morning.cards)
-        #expect(AttentionLogFile.read(fixture.file).events.map(\.type) == [.started, .sorted])
-        #expect(fixture.sorted.map(\.runIDs) == [next.runIDs] && ledger.error == nil && ledger.revision == 1)
+        #expect(AttentionLogFile.read(fixture.file).events.map(\.type) == [.started, .sorted, .sorted])
+        #expect(fixture.sorted.map(\.runIDs) == [first.runIDs, next.runIDs] && ledger.error == nil && ledger.revision == 1)
+        #expect(ledger.pending.isEmpty && ledger.index.sortedRunIDs == Set(first.runIDs + next.runIDs))
     }
 
     @Test func aMessageReadAgainKeepsItsFirstDay() {
-        let sourceID = UUID(), newYork = TimeZone(identifier: "America/New_York")!
-        func sorted(_ time: String, keys: [String], shown: Set<String> = []) -> AttentionEvent {
-            let at = Self.date(time), runID = UUID()
-            let items = keys.map { key in
-                AttentionItem(key: key, sourceID: sourceID, sourceName: "Example Gmail", kind: "mail", script: "imap-mail__today", runID: runID,
-                    itemID: key, readAt: at, subject: "Subject \(key) \(time)", preview: "", shown: shown.contains(key))
-            }
-            return AttentionEvent(.sorted(.init(runIDs: [runID], backfilled: false, sources: [.init(sourceID: sourceID, sourceName: "Example Gmail",
-                script: "imap-mail__today", runID: runID, collectedAt: at, arrived: keys.count, returned: keys.count, truncated: false)],
-                items: items)), at: at, timeZone: newYork)
-        }
-        let old = sorted("2026-09-10T13:00:00Z", keys: ["old"])
-        let monday = sorted("2026-09-28T13:00:00Z", keys: ["a", "b"])
-        let tuesday = sorted("2026-09-29T13:00:00Z", keys: ["b", "c"], shown: ["b"])
-        let sunday = sorted("2026-09-27T23:30:00Z", keys: ["c"])   // backfilled after Tuesday's line: 7:30 PM Sunday in New York
+        let old = Self.sorted("2026-09-10T13:00:00Z", keys: ["old"])
+        let monday = Self.sorted("2026-09-28T13:00:00Z", keys: ["a", "b"])
+        let tuesday = Self.sorted("2026-09-29T13:00:00Z", keys: ["b", "c"], shown: ["b"])
+        // Backfilled after Tuesday's line: 7:30 PM Sunday in New York.
+        let sunday = Self.sorted("2026-09-27T23:30:00Z", keys: ["c"], backfilled: true)
 
-        let index = AttentionIndex([old, monday, tuesday, sunday], now: Self.date("2026-09-30T13:00:00Z"), timeZone: newYork)
+        let index = AttentionIndex([old, monday, tuesday, sunday], now: Self.date("2026-09-30T13:00:00Z"), timeZone: Self.newYork)
         #expect(index.firstDay == ["old": "2026-09-10", "a": "2026-09-28", "b": "2026-09-28", "c": "2026-09-27"])
+        #expect(index.keysByDay.filter { !$0.value.isEmpty } == ["2026-09-10": ["old"], "2026-09-28": ["a", "b"], "2026-09-27": ["c"]])
         #expect(index.shownKeys == ["b"] && index.item["b"]?.subject == "Subject b 2026-09-28T13:00:00Z")
         #expect(index.item["c"]?.subject == "Subject c 2026-09-27T23:30:00Z")
         #expect(index.item["old"] == nil && index.keepsItemsFrom == "2026-09-16")   // older than 14 days: only its day
-        #expect(index.sortedReads[sourceID]?.map(\.day) == ["2026-09-10", "2026-09-27", "2026-09-28", "2026-09-29"])
+        #expect(index.sortedReads[Self.mailID]?.map(\.day) == ["2026-09-10", "2026-09-27", "2026-09-28", "2026-09-29"])
         #expect(index.startedAt == nil && index.sortedRunIDs.count == 4)
+
+        // A backfilled line that lists a known message by its key alone dates it earlier too, and it keeps its copy.
+        let saturday = Self.sorted("2026-09-26T14:00:00Z", keys: [], seen: ["a": false], backfilled: true)
+        let moved = AttentionIndex([old, monday, tuesday, sunday, saturday], now: Self.date("2026-09-30T13:00:00Z"), timeZone: Self.newYork)
+        #expect(moved.firstDay["a"] == "2026-09-26" && moved.keysByDay["2026-09-28"] == ["b"] && moved.keysByDay["2026-09-26"] == ["a"])
+        #expect(moved.item["a"]?.subject == "Subject a 2026-09-28T13:00:00Z")
+    }
+
+    /// Reads in Tokyo on Monday and Tuesday at 08:00 and on Wednesday at 01:00, each rest looked through; then, after a
+    /// flight east over the date line, a read in Los Angeles on Tuesday at 19:00 that returns only Wednesday's two.
+    @Test func aReadThatCarriesAnEarlierDayNeverMovesAMessage() {
+        let tokyo = TimeZone(identifier: "Asia/Tokyo")!, losAngeles = TimeZone(identifier: "America/Los_Angeles")!
+        let monday = Self.sorted("2026-09-28T08:00:00.000+09:00", keys: ["a", "b"], shown: ["a"], in: tokyo)
+        let tuesday = Self.sorted("2026-09-29T08:00:00.000+09:00", keys: ["c", "d"], shown: ["c"], in: tokyo)
+        let wednesday = Self.sorted("2026-09-30T01:00:00.000+09:00", keys: ["e", "f"], shown: ["e"], in: tokyo)
+        let looked = ["2026-09-28", "2026-09-29", "2026-09-30"].map { day in
+            AttentionEvent(.restViewed(.init(restDay: day, count: 1, reachedEnd: true, seconds: 20)),
+                           at: Self.date("2026-09-30T02:00:00.000+09:00"), timeZone: tokyo)
+        }
+        let again = Self.sorted("2026-09-29T19:00:00.000-07:00", keys: ["e", "f"], shown: ["e"], in: losAngeles)
+        #expect(tuesday.day == "2026-09-29" && wednesday.day == "2026-09-30" && again.day == "2026-09-29")
+
+        let now = Self.date("2026-09-29T19:05:00.000-07:00")
+        let index = AttentionIndex([monday, tuesday, wednesday] + looked + [again], now: now, timeZone: losAngeles)
+        #expect(index.firstDay["e"] == "2026-09-30" && index.firstDay["f"] == "2026-09-30")
+        #expect(index.restCheckedDays == ["2026-09-28", "2026-09-29", "2026-09-30"])
+        let numbers = AttentionNumbers(index: index, now: now, timeZone: losAngeles)
+        #expect(numbers.day("2026-09-29").read == 2 && numbers.day("2026-09-29").restChecked)
+        #expect(numbers.day("2026-09-30").read == 2 && numbers.day("2026-09-30").restChecked)
     }
 
     // MARK: - Fixtures
 
+    private static let newYork = TimeZone(identifier: "America/New_York")!
+    private static let mailID = UUID()
+
     private static func date(_ text: String) -> Date { AttentionTime.date(text)! }
+
+    /// One card step's line at `time`: `keys` read for the first time, and `seen` read again, each with whether it was shown.
+    private static func sorted(_ time: String, keys: [String], shown: Set<String> = [], seen: [String: Bool] = [:],
+                               backfilled: Bool = false, in zone: TimeZone? = nil) -> AttentionEvent {
+        let at = date(time), runID = UUID()
+        let items = keys.map { key in
+            AttentionItem(key: key, sourceID: mailID, sourceName: "Example Gmail", kind: "mail", script: "imap-mail__today", runID: runID,
+                itemID: key, readAt: at, subject: "Subject \(key) \(time)", preview: "", shown: shown.contains(key))
+        }
+        let again = seen.sorted { $0.key < $1.key }.map { AttentionEvent.Sorted.Seen(key: $0.key, shown: $0.value) }
+        let read = AttentionEvent.Sorted.Source(sourceID: mailID, sourceName: "Example Gmail", script: "imap-mail__today", runID: runID,
+            collectedAt: at, arrived: keys.count + seen.count, returned: keys.count + seen.count, truncated: false)
+        return AttentionEvent(.sorted(.init(runIDs: [runID], backfilled: backfilled, sources: [read], items: items, seen: again.isEmpty ? nil : again)),
+                              at: at, timeZone: zone ?? newYork)
+    }
 
     private static func proposal(_ key: String) -> [String: Any] {
         ["observationKey": key, "title": "Reply about the lease", "meaning": "The renewal lapses Friday.",

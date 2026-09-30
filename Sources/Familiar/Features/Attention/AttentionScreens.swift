@@ -112,8 +112,8 @@ struct AttentionRestView: View {
     }
 
     /// The days read this week, newest first, and the one on screen.
-    var days: [String] {
-        let read = (ledger.numbers.week?.days ?? []).filter(\.wasRead).map(\.day).reversed()
+    func days(_ numbers: AttentionNumbers) -> [String] {
+        let read = (numbers.week?.days ?? []).filter(\.wasRead).map(\.day).reversed()
         return read.contains(day) ? Array(read) : [day] + read
     }
 
@@ -160,7 +160,7 @@ struct AttentionRestView: View {
 
     private func chips(_ numbers: AttentionNumbers) -> some View {
         HStack(spacing: 6) {
-            ForEach(days, id: \.self) { chip in
+            ForEach(days(numbers), id: \.self) { chip in
                 let on = chip == day
                 Button { open(chip) } label: {
                     Text(chip == numbers.today ? "Today" : numbers.format(chip, "EEE d"))

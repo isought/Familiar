@@ -8,30 +8,78 @@ import Foundation
 /// it is on disk.
 @MainActor
 final class AttentionLedger: ObservableObject {
-    /// Bumped after every write, so views that read the index redraw.
+    /// Bumped after every write, and once the launch read is in, so views that read the index redraw.
     @Published private(set) var revision = 0
-    /// The last write failure, for the person to see. A failed write never fails the card action behind it.
+    /// The last write failure, for the person to see. A failed write never fails the card action behind it: its events
+    /// wait and go ahead of the next write, and the failure stands until they are written. An explanation's words wait
+    /// in their field instead.
     @Published private(set) var error: String?
     /// The key whose explanation is being typed.
     @Published private(set) var explaining: String?
     private(set) var index: AttentionIndex
+    /// False while the app reads the file in the background at launch. The screens show nothing until it is read,
+    /// and what the ledger is told meanwhile waits for it, in order, keeping its own time.
+    private(set) var isLoaded: Bool
+    /// Events whose write failed, oldest first.
+    private(set) var pending: [AttentionEvent] = []
     /// Render and tests set this to write events at other times.
     var clock: () -> Date
     /// By default it follows the Mac's zone while Noteling keeps running; each event keeps the zone it was written in.
     let timeZone: TimeZone
-    private let file: AttentionLogFile
+    /// Tests make its flush fail.
+    var file: AttentionLogFile
     /// The watched store, for finding a label's card, and its last saved workspace.
     private weak var store: MorningStore?
     private var last: MorningWorkspace?
     private var watching: AnyCancellable?
+    private var loading: Task<Void, Never>?
+    private var waiting: [() -> Void] = []
+    /// The numbers as of a revision and a day, so every view that draws them asks once and pays once.
+    private var worked: (revision: Int, today: String, numbers: AttentionNumbers)?
 
+    /// Reads the file before it returns, unless `inBackground`: the app reads it off the main thread, so a long ledger
+    /// never holds up the launch. `read` reads and folds the file; tests watch which thread it runs on.
     init(directory: URL = Config.dir.appendingPathComponent("attention"), clock: @escaping () -> Date = Date.init,
-         timeZone: TimeZone = .autoupdatingCurrent) {
+         timeZone: TimeZone = .autoupdatingCurrent, inBackground: Bool = false,
+         read: @escaping @Sendable (URL, Date, TimeZone) -> AttentionIndex = {
+             AttentionIndex(AttentionLogFile.read($0).events, now: $1, timeZone: $2)
+         }) {
         file = AttentionLogFile(url: directory.appendingPathComponent("signals.jsonl"))
         self.clock = clock
         self.timeZone = timeZone
-        index = AttentionIndex(AttentionLogFile.read(file.url).events, now: clock(), timeZone: timeZone)
-        append([])   // a new file begins with `started`
+        let url = file.url, now = clock()
+        guard inBackground else {
+            index = read(url, now, timeZone)
+            isLoaded = true
+            append([])   // a new file begins with `started`
+            return
+        }
+        index = AttentionIndex(now: now, timeZone: timeZone)
+        isLoaded = false
+        loading = Task { [weak self] in
+            let folded = await Task.detached(priority: .userInitiated) { read(url, now, timeZone) }.value
+            self?.loaded(folded)
+        }
+    }
+
+    /// Returns once the launch read is in.
+    func untilLoaded() async { await loading?.value }
+
+    /// The launch read is in: the screens can show it, a new file is started, and what waited for it runs in order.
+    private func loaded(_ read: AttentionIndex) {
+        index = read
+        isLoaded = true
+        revision += 1
+        append([])
+        let work = waiting
+        waiting = []
+        for step in work { step() }
+    }
+
+    /// Runs `work` now, or once the launch read is in: finding a message's first line, its item or whether today was
+    /// already opened needs the whole file.
+    private func whenLoaded(_ work: @escaping () -> Void) {
+        if isLoaded { work() } else { waiting.append(work) }
     }
 
     /// Records what one card step read from script sources and which of those items it showed as cards: one line
@@ -39,24 +87,30 @@ final class AttentionLedger: ObservableObject {
     /// read writes nothing.
     func recordSorted(_ observations: [CardObservation], runIDs: [UUID], runs: SourceRunStore, cards: [MorningCard],
                       backfilled: Bool = false, at: Date? = nil) {
-        guard let event = sorted(observations, runIDs: runIDs, runs: runs, cards: cards, backfilled: backfilled, at: at ?? clock()) else { return }
-        append([event])
+        let at = at ?? clock()
+        whenLoaded { [self] in
+            guard let event = sorted(observations, runIDs: runIDs, runs: runs, cards: cards, backfilled: backfilled, at: at) else { return }
+            append([event])
+        }
     }
 
     /// Records the receipts saved since the ledger started that have no line yet, such as one saved just before
     /// Noteling quit. Receipts from before the start are never pulled in, so the test starts clean. As in the card
-    /// step, a job removed while its step ran was never sorted, so only jobs that are still active count.
+    /// step, a job removed while its step ran was never sorted, so only jobs that are still active count. At launch it
+    /// waits for the file to be read.
     func backfill(receipts: [CardGenerationRecord], sources: CalendarStore, cards: [MorningCard]) {
-        guard let startedAt = index.startedAt else { return }
-        let active = Set(sources.sources.map(\.id) + sources.readingSources.map(\.id))
-        let missing = receipts.filter { $0.completedAt >= startedAt && !$0.runIDs.allSatisfy(index.sortedRunIDs.contains) }
-        let events = missing.compactMap { receipt in
-            let observations = Self.scriptReads(runIDs: receipt.runIDs, runs: sources.runStore).flatMap {
-                CardGenerationInput.observations(run: $0.run, entry: $0.entry)
-            }.filter { active.contains($0.sourceID) }
-            return sorted(observations, runIDs: receipt.runIDs, runs: sources.runStore, cards: cards, backfilled: true, at: receipt.completedAt)
+        whenLoaded { [self] in
+            guard let startedAt = index.startedAt else { return }
+            let active = Set(sources.sources.map(\.id) + sources.readingSources.map(\.id))
+            let missing = receipts.filter { $0.completedAt >= startedAt && !isRecorded($0.runIDs) }
+            let events = missing.compactMap { receipt in
+                let observations = Self.scriptReads(runIDs: receipt.runIDs, runs: sources.runStore).flatMap {
+                    CardGenerationInput.observations(run: $0.run, entry: $0.entry)
+                }.filter { active.contains($0.sourceID) }
+                return sorted(observations, runIDs: receipt.runIDs, runs: sources.runStore, cards: cards, backfilled: true, at: receipt.completedAt)
+            }
+            append(events)
         }
-        append(events)
     }
 
     // MARK: - What the person did
@@ -74,14 +128,17 @@ final class AttentionLedger: ObservableObject {
     private func observe(_ next: MorningWorkspace) {
         guard let previous = last else { return }
         last = next
-        let now = clock()
-        let events = AttentionImplicit.signals(from: previous, to: next).compactMap { change -> AttentionEvent? in
-            guard let card = next.cards.first(where: { $0.id == change.cardID }), let item = item(for: change.key, card: card) else { return nil }
-            return event(.implicit(.init(key: item.key, signal: change.signal, retracts: change.retracts, optionIndex: change.optionIndex,
-                optionMode: change.optionMode, item: item, card: AttentionCardContext(card, at: now))), at: now)
+        let now = clock(), changes = AttentionImplicit.signals(from: previous, to: next)
+        guard !changes.isEmpty else { return }
+        whenLoaded { [self] in
+            let events = changes.compactMap { change -> AttentionEvent? in
+                guard let card = next.cards.first(where: { $0.id == change.cardID }), let item = item(for: change.key, card: card) else { return nil }
+                return event(.implicit(.init(key: item.key, signal: change.signal, retracts: change.retracts, optionIndex: change.optionIndex,
+                    optionMode: change.optionMode, item: item, card: AttentionCardContext(card, at: now))), at: now)
+            }
+            guard !events.isEmpty else { return }
+            append(events)
         }
-        guard !events.isEmpty else { return }
-        append(events)
     }
 
     // MARK: - Labels
@@ -116,32 +173,48 @@ final class AttentionLedger: ObservableObject {
     }
 
     /// Records the label with the one in effect before it. An item neither read by a card step nor on a card has
-    /// nothing to label. False only when the write failed.
+    /// nothing to label. False only when the write failed. A thumb whose write failed never took effect, so tapping
+    /// the same one again while it waits only tries the write again, and another one takes its place: `prior` is
+    /// always the label the person saw. An explanation never waits; its words stay in the field instead. Only a
+    /// screen that shows the ledger gives labels, so none comes before the launch read is in.
     @discardableResult
     func label(key: String, card: MorningCard?, value: AttentionLabelValue, via: AttentionVia, text: String? = nil) -> Bool {
         let card = card ?? store?.cards.first { $0.tracking?.key == key }
         guard let item = item(for: key, card: card) else { return true }
         let now = clock()
-        return append([event(.label(.init(key: item.key, value: value, weight: AttentionLabels.weight(value), prior: effective(for: item.key).state,
-            text: text, via: via, item: item, card: card.map { AttentionCardContext($0, at: now) })), at: now)])
+        let label = AttentionEvent.Label(key: item.key, value: value, weight: AttentionLabels.weight(value), prior: effective(for: item.key).state,
+            text: text, via: via, item: item, card: card.map { AttentionCardContext($0, at: now) })
+        if value != .explain {
+            if waits(.label(label)) { return append([]) }
+            pending.removeAll { if case .label(let waiting) = $0.payload { return waiting.key == item.key }; return false }
+        }
+        return append([event(.label(label), at: now)])
     }
 
     func beginExplaining(_ key: String) { explaining = key }
 
     func cancelExplaining() { explaining = nil }
 
-    /// "Should have shown me" on an item a card step read, or taking it back.
+    /// "Should have shown me" on an item a card step read, or taking it back. Tapping it again while it waits to be
+    /// written only tries the write again.
     func miss(key: String, retract: Bool = false) {
-        guard var item = index.item[key] else { return }
-        item.shown = index.shownKeys.contains(key)
-        append([event(.miss(.init(key: key, retract: retract, item: item)), at: clock())])
+        let now = clock()
+        whenLoaded { [self] in
+            guard var item = index.item[key] else { return }
+            item.shown = index.shownKeys.contains(key)
+            let miss = AttentionEvent.Miss(key: key, retract: retract, item: item)
+            append(waits(.miss(miss)) ? [] : [event(.miss(miss), at: now)])
+        }
     }
 
     /// The rest of `day`, holding `count` messages, was on screen for `seconds`. Only reaching its end makes the day's
     /// "0 missed" count, and a rest already looked through to its end is not recorded again until a new message joins it.
     func restViewed(day: String, count: Int, reachedEnd: Bool, seconds: TimeInterval) {
-        if reachedEnd, index.restCheckedDays.contains(day) { return }
-        append([event(.restViewed(.init(restDay: day, count: count, reachedEnd: reachedEnd, seconds: seconds)), at: clock())])
+        let now = clock()
+        whenLoaded { [self] in
+            if reachedEnd, index.restCheckedDays.contains(day) { return }
+            append([event(.restViewed(.init(restDay: day, count: count, reachedEnd: reachedEnd, seconds: seconds)), at: now)])
+        }
     }
 
     // MARK: - Opening the pack
@@ -150,18 +223,23 @@ final class AttentionLedger: ObservableObject {
     /// brought it into view is recorded whatever the trigger; when it `wasOpen` already, only the day's first open
     /// that counts is. Only the launcher, the menu and the task panel count as a day the pack was opened.
     func recordOpened(_ trigger: AttentionOpenTrigger, route: MorningNavigation.Route, desk: Int, wasOpen: Bool) {
-        let now = clock()
-        let countedToday = index.firstOpened[AttentionTime.day(of: now, in: timeZone)] != nil
-        guard AttentionOpen.records(trigger, wasOpen: wasOpen, countedToday: countedToday) else { return }
-        append([event(.opened(.init(trigger: trigger, route: AttentionOpen.route(route), desk: desk)), at: now)])
+        let now = clock(), screen = AttentionOpen.route(route)
+        whenLoaded { [self] in
+            let countedToday = index.firstOpened[AttentionTime.day(of: now, in: timeZone)] != nil
+            guard AttentionOpen.records(trigger, wasOpen: wasOpen, countedToday: countedToday) else { return }
+            append([event(.opened(.init(trigger: trigger, route: screen, desk: desk)), at: now)])
+        }
     }
 
     /// A card came on screen. Looking is neither a yes nor a no, but it is using the pack that day. Samples and
     /// hand-written notes are not part of the test.
     func cardOpened(_ card: MorningCard) {
-        guard !card.isSample, let key = card.tracking?.key, let item = item(for: key, card: card) else { return }
+        guard !card.isSample, let key = card.tracking?.key else { return }
         let now = clock()
-        append([event(.engaged(.init(key: item.key, what: .cardOpened, card: AttentionCardContext(card, at: now))), at: now)])
+        whenLoaded { [self] in
+            guard let item = item(for: key, card: card) else { return }
+            append([event(.engaged(.init(key: item.key, what: .cardOpened, card: AttentionCardContext(card, at: now))), at: now)])
+        }
     }
 
     /// The item as a card step first read it. For a card the ledger has no copy of, such as one from before the ledger,
@@ -186,20 +264,38 @@ final class AttentionLedger: ObservableObject {
 
     // MARK: - Writing
 
-    /// Writes the events in one append, starting the file first if it has no start yet, then folds them in. False
-    /// only when the write failed.
+    /// Writes the events in one append, after any whose write failed before and starting the file first if it has no
+    /// start yet, then folds them in. False only when the write failed: then they wait for the next write, and the
+    /// failure is shown until they are written. An explanation never waits: its words stay in the field, to be saved
+    /// again or dropped, and are never written after the person moved on. Before the launch read is in, the write
+    /// waits for it.
     @discardableResult
     private func append(_ events: [AttentionEvent]) -> Bool {
-        let events = index.startedAt == nil ? [event(.started, at: clock())] + events : events
+        guard isLoaded else {
+            waiting.append { [self] in append(events) }
+            return true
+        }
+        keepRecentItems()
+        let starts = index.startedAt == nil && !pending.contains { $0.type == .started }
+        let events = (starts ? [event(.started, at: clock())] : []) + pending + events
         guard !events.isEmpty else { return true }
         do {
             try file.append(events)
         } catch {
-            let code = (error as NSError).code
-            Log.info("attention log write failed (errno \(code))")
-            self.error = "Couldn’t save the attention log (error \(code))."
-            return false
+            let error = error as NSError
+            Log.info("attention log write failed (errno \(error.code))")
+            // Every line reached the file and only flushing it failed: the lines read back, so they count as written.
+            if error.userInfo[AttentionLogFile.linesWritten] as? Bool != true {
+                pending = events.filter { event in
+                    if case .label(let label) = event.payload, label.value == .explain { return false }
+                    // A value JSON cannot hold fails the whole batch and never gets better, so only the rest wait.
+                    return error.code != Int(EINVAL) || (try? event.line()) != nil
+                }
+                self.error = "Couldn’t save the attention log (error \(error.code))."
+                return false
+            }
         }
+        pending = []
         for event in events { index.add(event) }
         error = nil
         revision += 1
@@ -210,14 +306,58 @@ final class AttentionLedger: ObservableObject {
         AttentionEvent(payload, at: at, timeZone: timeZone)
     }
 
+    /// The same thumb or miss as the latest one about its key still waiting to be written.
+    private func waits(_ payload: AttentionEvent.Payload) -> Bool {
+        for event in pending.reversed() {
+            switch (event.payload, payload) {
+            case (.label(let waiting), .label(let new)) where waiting.key == new.key:
+                return waiting.value == new.value
+            case (.miss(let waiting), .miss(let new)) where waiting.key == new.key:
+                return waiting.retract == new.retract
+            default:
+                continue
+            }
+        }
+        return false
+    }
+
+    /// Every run is in a `sorted` line, or in one waiting to be written.
+    private func isRecorded(_ runIDs: [UUID]) -> Bool {
+        let waiting = Set(pending.flatMap { event -> [UUID] in
+            if case .sorted(let sorted) = event.payload { return sorted.runIDs }
+            return []
+        })
+        return runIDs.allSatisfy { index.sortedRunIDs.contains($0) || waiting.contains($0) }
+    }
+
+    /// Full item copies are kept for messages first read in the last 14 days counted from today, so an app left
+    /// running for weeks lets go of older ones as the days roll on.
+    private func keepRecentItems() {
+        index.keepItems(from: AttentionIndex.keepsItems(at: clock(), in: timeZone))
+    }
+
+    // MARK: - The numbers
+
+    /// The numbers as the ledger stands now, in its zone. They are worked out once for each write and each day, so a
+    /// screen can ask for them as often as it draws.
+    var numbers: AttentionNumbers {
+        let now = clock(), today = AttentionTime.day(of: now, in: timeZone)
+        if let worked, worked.revision == revision, worked.today == today { return worked.numbers.at(now) }
+        let numbers = AttentionNumbers(index: index, now: now, timeZone: timeZone)
+        worked = (revision, today, numbers)
+        return numbers
+    }
+
     // MARK: - What a card step read
 
-    /// The `sorted` event for one receipt, or nil when its runs are already recorded or it read no script source.
+    /// The `sorted` event for one receipt, or nil when its runs are already recorded or it read no script source. A
+    /// message an earlier line holds is listed by its key alone; one read twice in the receipt is listed once.
     private func sorted(_ observations: [CardObservation], runIDs: [UUID], runs: SourceRunStore, cards: [MorningCard],
                         backfilled: Bool, at: Date) -> AttentionEvent? {
-        guard !runIDs.allSatisfy(index.sortedRunIDs.contains) else { return nil }
+        guard !isRecorded(runIDs) else { return nil }
         let shown = Set(cards.compactMap { $0.tracking?.key })
-        var sources: [AttentionEvent.Sorted.Source] = [], items: [AttentionItem] = [], seen: Set<String> = []
+        var sources: [AttentionEvent.Sorted.Source] = [], items: [AttentionItem] = [], again: [AttentionEvent.Sorted.Seen] = []
+        var listed: Set<String> = []
         for read in Self.scriptReads(runIDs: runIDs, runs: runs) {
             let observed = observations.filter { $0.runID == read.run.id && $0.sourceID == read.entry.sourceID }
             // Items the step never saw, from a source removed while it ran, were not sorted.
@@ -226,8 +366,13 @@ final class AttentionLedger: ObservableObject {
                 (CardObservation.key(sourceID: read.entry.sourceID, itemKey: CardGenerationInput.identity($0.identityKey, fallback: $0.id)), $0)
             }, uniquingKeysWith: { first, _ in first })
             for observation in observed {
-                guard let item = byKey[observation.id], seen.insert(observation.id).inserted else { continue }
-                items.append(attentionItem(item, observation: observation, script: read.snapshot.source.script, shown: shown.contains(observation.id)))
+                guard let item = byKey[observation.id], listed.insert(observation.id).inserted else { continue }
+                let wasShown = shown.contains(observation.id)
+                guard index.firstDay[observation.id] == nil else {
+                    again.append(.init(key: observation.id, shown: wasShown))
+                    continue
+                }
+                items.append(attentionItem(item, observation: observation, script: read.snapshot.source.script, shown: wasShown))
             }
             let counts = read.snapshot.scriptRead
             sources.append(.init(sourceID: read.entry.sourceID, sourceName: read.entry.sourceName, script: read.snapshot.source.script ?? "",
@@ -236,7 +381,7 @@ final class AttentionLedger: ObservableObject {
                 truncated: counts?.truncated ?? false))
         }
         guard !sources.isEmpty else { return nil }
-        return event(.sorted(.init(runIDs: runIDs, backfilled: backfilled, sources: sources, items: items)), at: at)
+        return event(.sorted(.init(runIDs: runIDs, backfilled: backfilled, sources: sources, items: items, seen: again.isEmpty ? nil : again)), at: at)
     }
 
     /// Each script source's read in a card step: its latest complete or partial one among the step's runs, which is

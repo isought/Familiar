@@ -25,6 +25,9 @@ struct AttentionIndex {
     /// The local day of the first card step that sorted each key (its `sorted` event's day, as for `Read.day`), so a
     /// message read again later that day or the next counts once.
     private(set) var firstDay: [String: String] = [:]
+    /// `firstDay` the other way round: the keys first read on each local day, so a day's numbers never look through
+    /// every day ever read.
+    private(set) var keysByDay: [String: Set<String>] = [:]
     /// Keys a card step showed in any `sorted` event.
     private(set) var shownKeys: Set<String> = []
     /// The copy of each recently read key from the `sorted` event that first held it.
@@ -43,13 +46,13 @@ struct AttentionIndex {
     /// Days read whose rest was scrolled to its end, and has had no message join it since.
     private(set) var restCheckedDays: Set<String> = []
     /// Keys first read before this day keep only their `firstDay`.
-    let keepsItemsFrom: String
+    private(set) var keepsItemsFrom: String
+    /// Every event folded so far, so one in the file twice, such as one written again after a write that failed
+    /// partway, counts once.
+    private var folded: Set<UUID> = []
 
     init(_ events: [AttentionEvent] = [], now: Date, timeZone: TimeZone) {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone
-        let cutoff = calendar.date(byAdding: .day, value: -Self.itemDays, to: now) ?? now
-        self.init(events, keepsItemsFrom: AttentionTime.day(of: cutoff, in: timeZone))
+        self.init(events, keepsItemsFrom: Self.keepsItems(at: now, in: timeZone))
     }
 
     init(_ events: [AttentionEvent] = [], keepsItemsFrom day: String) {
@@ -57,7 +60,23 @@ struct AttentionIndex {
         for event in events { add(event) }
     }
 
+    /// The first day whose items keep their full copy at `now`: `itemDays` days before today.
+    static func keepsItems(at now: Date, in timeZone: TimeZone) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return AttentionTime.day(of: calendar.date(byAdding: .day, value: -itemDays, to: now) ?? now, in: timeZone)
+    }
+
+    /// Moves the day items are kept from, and lets go of the copies of those first read before it, as the days roll
+    /// on while Noteling keeps running. A copy already let go of is not brought back when the day moves back.
+    mutating func keepItems(from day: String) {
+        guard day != keepsItemsFrom else { return }
+        if day > keepsItemsFrom { item = item.filter { firstDay[$0.key].map { $0 >= day } ?? false } }
+        keepsItemsFrom = day
+    }
+
     mutating func add(_ event: AttentionEvent) {
+        guard folded.insert(event.id).inserted else { return }
         switch event.payload {
         case .started:
             if startedAt == nil { startedAt = event.at }
@@ -69,17 +88,8 @@ struct AttentionIndex {
                     truncated: source.truncated))
                 sortedReads[source.sourceID]?.sort { $0.collectedAt < $1.collectedAt }
             }
-            for item in sorted.items {
-                if item.shown { shownKeys.insert(item.key) }
-                // The earliest day wins, not the first line: a backfilled receipt can be written after a later
-                // step's line while carrying its own earlier day.
-                if let day = firstDay[item.key], day <= event.day { continue }
-                firstDay[item.key] = event.day
-                self.item[item.key] = event.day >= keepsItemsFrom ? item : nil
-                // Events fold in the order they were written, so a later read, or a receipt backfilled after the rest
-                // was looked through, leaves the day's rest to check again.
-                if !shownKeys.contains(item.key) { restCheckedDays.remove(event.day) }
-            }
+            for item in sorted.items { read(item.key, shown: item.shown, copy: item, on: event.day, backfilled: sorted.backfilled) }
+            for again in sorted.seen ?? [] { read(again.key, shown: again.shown, copy: nil, on: event.day, backfilled: sorted.backfilled) }
         case .label(let label):
             labels[label.key, default: .init()].add(label.value, text: label.text)
         case .implicit(let implicit):
@@ -96,5 +106,22 @@ struct AttentionIndex {
         if [.label, .miss, .restViewed, .engaged].contains(event.type), firstActive[event.day].map({ event.at < $0 }) ?? true {
             firstActive[event.day] = event.at
         }
+    }
+
+    /// A card step read `key` on `day`, with its full copy unless an earlier line holds it. The first read dates it; a
+    /// later one only adds whether it was shown. Only a receipt backfilled after a later step's line dates a message
+    /// earlier: a read that merely carries an earlier day, after the Mac's zone or clock moved back, never moves it.
+    private mutating func read(_ key: String, shown: Bool, copy: AttentionItem?, on day: String, backfilled: Bool) {
+        if shown { shownKeys.insert(key) }
+        if let first = firstDay[key] {
+            guard backfilled, day < first else { return }
+            keysByDay[first]?.remove(key)
+        }
+        firstDay[key] = day
+        keysByDay[day, default: []].insert(key)
+        if day < keepsItemsFrom { item[key] = nil } else if let copy { item[key] = copy }
+        // Events fold in the order they were written, so a later read, or a receipt backfilled after the rest was
+        // looked through, leaves the day's rest to check again.
+        if !shownKeys.contains(key) { restCheckedDays.remove(day) }
     }
 }

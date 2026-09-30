@@ -232,6 +232,86 @@ struct AttentionLabelTests {
         #expect(fixture.labels.last?.text == ledger.explanation(for: key))
     }
 
+    @Test func aGuessWhoseWriteFailedIsWrittenWithTheNextWrite() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store, ledger = fixture.ledger
+        // The disk refuses the write just as the person chooses "I'll do it".
+        try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: fixture.file.path)
+        try store.setDisposition(cardID: fixture.cardID, to: .mine)
+        #expect(fixture.implicit.isEmpty && ledger.error == "Couldn’t save the attention log (error \(EACCES)).")
+        #expect(ledger.pending.map(\.type) == [.implicit] && ledger.effective(for: fixture.key).state == .notSet)
+        // Opening another card while it still fails keeps the error, and both wait.
+        ledger.cardOpened(store.cards[0])
+        #expect(ledger.error != nil && ledger.pending.map(\.type) == [.implicit, .engaged])
+
+        // The next write that goes through, however unrelated, writes them first, in order, and only then clears the error.
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fixture.file.path)
+        ledger.cardOpened(store.cards[0])
+        #expect(fixture.events.suffix(3).map(\.type) == [.implicit, .engaged, .engaged])
+        #expect(fixture.implicit.map(\.signal) == [.mine] && fixture.implicit.first?.key == fixture.key)
+        #expect(ledger.effective(for: fixture.key).state == .guessYes && ledger.error == nil && ledger.pending.isEmpty)
+        #expect(fixture.reopened().effective(for: fixture.key).state == .guessYes)
+    }
+
+    @Test func tappingAgainAfterAFailedWriteOnlyTriesItAgain() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let ledger = fixture.ledger, key = fixture.key
+        try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: fixture.file.path)
+        ledger.tapThumb(key: key, card: nil, thumb: .up, via: .card)
+        // The thumb did not change, so the person taps it again.
+        ledger.tapThumb(key: key, card: nil, thumb: .up, via: .card)
+        #expect(ledger.pending.count == 1 && ledger.effective(for: key).state == .notSet && ledger.error != nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fixture.file.path)
+        ledger.tapThumb(key: key, card: nil, thumb: .up, via: .card)
+        #expect(fixture.labels.map(\.value) == [.yes] && ledger.effective(for: key).state == .yes && ledger.error == nil)
+
+        // A thumb that could not be written never took effect: the card still shows yes. Another tap takes its place,
+        // so the file never holds the no the person replaced, and the strong yes follows the yes they saw.
+        try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: fixture.file.path)
+        ledger.tapThumb(key: key, card: nil, thumb: .down, via: .card)
+        ledger.tapThumb(key: key, card: nil, thumb: .up, via: .card)
+        #expect(ledger.pending.count == 1 && ledger.effective(for: key).state == .yes)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fixture.file.path)
+        ledger.tapThumb(key: key, card: nil, thumb: .up, via: .card)
+        #expect(fixture.labels.map(\.value) == [.yes, .strongYes] && fixture.labels.map(\.prior) == [.notSet, .yes])
+        #expect(ledger.effective(for: key).state == .strongYes && ledger.pending.isEmpty && ledger.error == nil)
+    }
+
+    @Test func wordsWhoseSaveFailedAreNeverWrittenOnceThePersonMovesOn() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let card = fixture.store.cards[0], ledger = fixture.ledger, key = fixture.key
+        // The disk refuses a thumb, then the words the person saves. The thumb waits; the words stay in the field.
+        try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: fixture.file.path)
+        ledger.tapThumb(key: key, card: card, thumb: .up, via: .card)
+        ledger.beginExplaining(key)
+        ledger.explain(key: key, card: card, text: "Pat Quill never renews on time.", via: .card)
+        #expect(ledger.explaining == key && ledger.error != nil && ledger.pending.map(\.type) == [.label])
+        // A write that goes through while the field is open writes the thumb, never words the person may still change.
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fixture.file.path)
+        ledger.cardOpened(card)
+        #expect(fixture.labels.map(\.value) == [.yes] && ledger.explaining == key && ledger.explanation(for: key) == nil)
+
+        // Cancelled after a failed save, the words are dropped.
+        try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: fixture.file.path)
+        ledger.explain(key: key, card: card, text: "Pat Quill never renews on time.", via: .card)
+        ledger.cancelExplaining()
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fixture.file.path)
+        ledger.cardOpened(card)
+        #expect(fixture.labels.map(\.value) == [.yes] && ledger.error == nil && ledger.pending.isEmpty)
+
+        // Rewritten after a failed save, only the words saved are kept.
+        ledger.beginExplaining(key)
+        try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: fixture.file.path)
+        ledger.explain(key: key, card: card, text: "Pat Quill never renews on time.", via: .card)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fixture.file.path)
+        ledger.explain(key: key, card: card, text: "The landlord never renews on time.", via: .card)
+        #expect(fixture.labels.compactMap(\.text) == ["The landlord never renews on time."] && ledger.explaining == nil)
+        #expect(try !String(contentsOf: fixture.file, encoding: .utf8).contains("Pat Quill"))
+    }
+
     @Test func onlySourcesTheTestReadsKeepTheirWords() throws {
         // A card from a source the test never read, such as a calendar or a screen read, is labeled by which item it
         // was, never by what it said. Its key can be made of the item's own words, so it is recorded by a digest of it.

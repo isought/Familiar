@@ -277,6 +277,43 @@ struct AttentionNumbersTests {
         #expect(ledger.numbers.today == "2026-09-30" && ledger.numbers.line == nil && ledger.numbers.week == nil)
     }
 
+    @Test func onlyTheDaysAScreenCanShowAreSortedAhead() {
+        // Two months read every morning, 30 new messages a day, one of them shown.
+        let reads = (0..<60).map { offset in
+            sorted(Self.at("2026-08-01").addingTimeInterval(Double(offset) * 86_400), keys: (0..<30).map { "d\(offset)m\($0)" },
+                   shown: ["d\(offset)m0"])
+        }
+        let numbers = measure(reads, now: Self.at("2026-09-29", "12:00"))
+        // The daily line looks back six days and the week at most six either side of today; nothing after today was read.
+        #expect(numbers.shownDays.keys.sorted() == (23...29).map { "2026-09-\($0)" })
+        #expect(numbers.line?.text == "Read 30 → showed 1 · you said yes to 0 · 29 in the rest" && numbers.week?.total.read == 7 * 30)
+        // Any other day is worked out when it is asked for, the same as a day shown.
+        let august = numbers.day("2026-08-10"), september = numbers.day("2026-09-28")
+        #expect(august.read == 30 && august.shownKeys == ["d9m0"] && august.wasRead && !august.restChecked)
+        #expect(september == measure(reads, now: Self.at("2026-10-20", "12:00")).day("2026-09-28"))
+    }
+
+    @Test @MainActor func theLedgerWorksItsNumbersOutOncePerWriteAndDay() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attention-numbers-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try AttentionLogFile(url: root.appendingPathComponent("signals.jsonl")).append([
+            event(.started, at: Self.at("2026-09-28", "07:00")), sorted(Self.at("2026-09-28"), keys: ["a", "b"], shown: ["a"])])
+        var now = Self.at("2026-09-29", "09:00")
+        let ledger = AttentionLedger(directory: root, clock: { now }, timeZone: Self.zone)
+        #expect(ledger.numbers.line?.text == "Yesterday: Read 2 → showed 1 · you said yes to 0 · 1 in the rest")
+        #expect(ledger.numbers.week?.gaps == [])
+
+        // Nothing is written by 11:00, so the days are not worked out again, but the time moves on: 27 hours after
+        // the last read, the week says so.
+        now = Self.at("2026-09-29", "11:00")
+        #expect(ledger.numbers.now == now && ledger.numbers.week?.gaps == ["No read since Mon 28 08:00"])
+        // A write works them out again, and so does a new day.
+        ledger.recordOpened(.menu, route: .folders, desk: 1, wasOpen: false)
+        #expect(ledger.numbers.day("2026-09-29").firstOpen == now)
+        now = Self.at("2026-09-30", "09:00")
+        #expect(ledger.numbers.today == "2026-09-30" && ledger.numbers.line?.text.hasPrefix("Mon: ") == true)
+    }
+
     // MARK: - Fixtures
 
     private static let zone = TimeZone(identifier: "America/New_York")!

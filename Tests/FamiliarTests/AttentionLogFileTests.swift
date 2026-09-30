@@ -86,7 +86,7 @@ struct AttentionLogFileTests {
     @Test func theFeatureSchemaIsFrozen() throws {
         let envelope: Set = ["schema", "id", "type", "at", "day", "tz", "app"]
         let payloads: [AttentionEventType: Set<String>] = [
-            .started: [], .sorted: ["runIDs", "backfilled", "sources", "items"],
+            .started: [], .sorted: ["runIDs", "backfilled", "sources", "items", "seen"],
             .label: ["key", "value", "weight", "prior", "text", "via", "item", "card"],
             .implicit: ["key", "signal", "retracts", "optionIndex", "optionMode", "item", "card"],
             .miss: ["key", "retract", "item"], .opened: ["trigger", "route", "desk"],
@@ -98,6 +98,7 @@ struct AttentionLogFileTests {
         let cardKeys: Set = ["cardID", "disposition", "displayDisposition", "optionCount", "optionModes", "cardAgeHours", "userEdited",
             "hasPersonalContext", "createdByRun"]
         let sourceKeys: Set = ["sourceID", "sourceName", "script", "runID", "collectedAt", "since", "arrived", "returned", "truncated"]
+        let seenKeys: Set = ["key", "shown"]
 
         let events = everyEvent()
         #expect(Set(events.map(\.type)) == Set(AttentionEventType.allCases) && Set(payloads.keys) == Set(AttentionEventType.allCases))
@@ -115,7 +116,17 @@ struct AttentionLogFileTests {
             if let card = json["card"] as? [String: Any] { #expect(Set(card.keys) == cardKeys) }
             for item in json["items"] as? [[String: Any]] ?? [] { #expect(Set(item.keys) == itemKeys) }
             for source in json["sources"] as? [[String: Any]] ?? [] { #expect(Set(source.keys) == sourceKeys) }
+            for again in json["seen"] as? [[String: Any]] ?? [] { #expect(Set(again.keys) == seenKeys) }
         }
+        // A line from before messages read again were listed by key has no `seen`, and reads back without one.
+        var older = try object(event(.sorted(sorted(items: [item()]))).line())
+        older["seen"] = nil
+        let read = try AttentionEvent(line: JSONSerialization.data(withJSONObject: older))
+        guard case .sorted(let sorted) = read.payload else {
+            Issue.record("An older line did not read back as `sorted`.")
+            return
+        }
+        #expect(sorted.seen == nil && sorted.items == [item()])
 
         #expect(AttentionEventType.allCases.map(\.rawValue) == ["started", "sorted", "label", "implicit", "miss", "opened", "rest_viewed", "engaged"])
         #expect(AttentionLabelValue.allCases.map(\.rawValue) == ["yes", "no", "strong_yes", "strong_no", "explain", "clear"])
@@ -171,6 +182,48 @@ struct AttentionLogFileTests {
         #expect(AttentionTime.date(AttentionTime.string(at, in: tokyo)) == at && AttentionTime.day(of: at, in: tokyo) == "2026-09-30")
     }
 
+    @Test func theLedgersOwnTimesReadTheSameWithoutAFormatter() {
+        let milliseconds = ISO8601DateFormatter(), whole = ISO8601DateFormatter()
+        milliseconds.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        whole.formatOptions = [.withInternetDateTime]
+        /// How times were read before: by the formatters alone.
+        func formatted(_ text: String) -> Date? { milliseconds.date(from: text).map(AttentionTime.toTheMillisecond) ?? whole.date(from: text) }
+
+        // From 1906 to 2112, in zones with half- and quarter-hour offsets, the date line's both sides and UTC: as the
+        // ledger writes them, and in whole seconds as the mail script gives them.
+        let zones = ["UTC", "America/New_York", "America/Los_Angeles", "America/St_Johns", "Asia/Kolkata", "Asia/Kathmandu",
+                     "Australia/Lord_Howe", "Pacific/Chatham", "Pacific/Kiritimati", "Pacific/Pago_Pago"]
+        let times = zones.compactMap(TimeZone.init(identifier:)).flatMap { zone in
+            let seconds = ISO8601DateFormatter()
+            seconds.formatOptions = [.withInternetDateTime]
+            seconds.timeZone = zone
+            return (0..<500).flatMap { step in
+                let date = Date(timeIntervalSince1970: -2_000_000_000 + Double(step) * 13_000_003.217)
+                return [AttentionTime.string(date, in: zone), seconds.string(from: date)]
+            }
+        }
+        let mismatches = times.filter { AttentionTime.date($0) != formatted($0) }
+        #expect(mismatches.isEmpty, "\(mismatches.prefix(5))")
+        // Reading them by hand is what keeps the launch read short: well under a third of the formatters' time.
+        func fastest(_ read: (String) -> Date?) -> TimeInterval {
+            (0..<3).map { _ in
+                let started = Date()
+                _ = times.map(read)
+                return Date().timeIntervalSince(started)
+            }.min() ?? 0
+        }
+        #expect(fastest(AttentionTime.date) * 3 < fastest(formatted))
+        #expect(AttentionTime.date("2026-09-30T08:14:03.120-04:00") == Date(timeIntervalSince1970: 1_790_770_443.12))
+        #expect(AttentionTime.date("2026-09-30T12:10:00+00:00") == AttentionTime.date("2026-09-30T08:10:00.000-04:00"))
+
+        // Forms the ledger never writes, and times that are not times, read as the formatters read them.
+        for text in ["2026-09-30T08:14:03.1Z", "2026-09-30T08:14:03.12345+02:00", "2026-09-30T08:14:03+0530", "2026-09-30 08:14:03Z",
+                     "2026-02-29T08:00:00Z", "2024-02-29T08:00:00Z", "2026-09-31T08:00:00Z", "2026-09-30T24:00:00Z", "2026-09-30t08:14:03z",
+                     "1899-12-31T23:59:59Z", "2026-09-30T08:14:03.120+19:00", "2026-09-30T08:14:03", "garbage", ""] {
+            #expect(AttentionTime.date(text) == formatted(text), "\(text)")
+        }
+    }
+
     @Test func aTwoHundredItemSortedLineRoundTrips() throws {
         let fixture = Fixture()
         defer { fixture.remove() }
@@ -204,17 +257,17 @@ struct AttentionLogFileTests {
 
     /// One event of every type, every field filled.
     private func everyEvent() -> [AttentionEvent] {
-        [event(.started), event(.sorted(sorted(items: [item(), item(index: 1)]))), event(.label(label())),
+        [event(.started), event(.sorted(sorted(items: [item(), item(index: 1)], seen: [.init(key: "k2", shown: true)]))), event(.label(label())),
          event(.implicit(.init(key: "k", signal: .retract, retracts: .optionTapped, optionIndex: 1, optionMode: .prepare, item: item(), card: card()))),
          event(.miss(.init(key: "k", retract: true, item: item()))), event(.opened(.init(trigger: .taskPanel, route: "card", desk: 4))),
          event(.restViewed(.init(restDay: "2026-09-29", count: 36, reachedEnd: true, seconds: 41.5))),
          event(.engaged(.init(key: "k", what: .cardOpened, card: card())))]
     }
 
-    private func sorted(items: [AttentionItem]) -> AttentionEvent.Sorted {
+    private func sorted(items: [AttentionItem], seen: [AttentionEvent.Sorted.Seen]? = nil) -> AttentionEvent.Sorted {
         AttentionEvent.Sorted(runIDs: [runID], backfilled: true, sources: [.init(sourceID: sourceID, sourceName: "Example Gmail",
             script: "imap-mail__today", runID: runID, collectedAt: Date(timeIntervalSinceReferenceDate: 812_345_600.000_4),
-            since: Date(timeIntervalSinceReferenceDate: 812_259_200.5), arrived: 240, returned: 200, truncated: true)], items: items)
+            since: Date(timeIntervalSinceReferenceDate: 812_259_200.5), arrived: 240, returned: 200, truncated: true)], items: items, seen: seen)
     }
 
     private func label() -> AttentionEvent.Label {

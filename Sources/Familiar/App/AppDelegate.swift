@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var taskPanel: BackgroundTaskPanelController!
     private let morning = MorningStore()
     private let calendarSources = CalendarStore()
-    private let attention = AttentionLedger()
+    private let attention = AttentionLedger(inBackground: true)
     private var calendarReader: CalendarCollectionRunner!
     private var morningPanel: MorningPanelController!
     private var morningTasks: MorningTaskRunner!

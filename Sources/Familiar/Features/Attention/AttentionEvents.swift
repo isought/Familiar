@@ -40,12 +40,23 @@ struct AttentionEvent: Equatable, Identifiable {
         case engaged(Engaged)
     }
 
-    /// What one card step read from script sources and which of those items it showed as cards.
+    /// What one card step read from script sources and which of those items it showed as cards. A message is written in
+    /// full by the first line that reads it; a later read lists it in `seen` by its key alone, so a window read twice a
+    /// day does not write the same mail twice.
     struct Sorted: Codable, Equatable {
         var runIDs: [UUID]
         var backfilled: Bool
         var sources: [Source]
+        /// Messages no earlier line read, in full.
         var items: [AttentionItem]
+        /// Messages an earlier line already holds, read again. Nil when there were none, and in lines from before it.
+        var seen: [Seen]? = nil
+
+        /// A message read again: its key, and whether this step showed it.
+        struct Seen: Codable, Equatable {
+            var key: String
+            var shown: Bool
+        }
 
         /// One script read in the step, including a read that found nothing.
         struct Source: Codable, Equatable {
@@ -143,9 +154,10 @@ enum AttentionVia: String, Codable, CaseIterable { case card, shown, rest }
 
 enum AttentionEngagement: String, Codable, CaseIterable { case cardOpened = "card_opened" }
 
-/// One item a card step read, with the facts a later filter could learn from. Copied into every event about it,
-/// so the ledger stands on its own after runs and cards are deleted. Mail fields are nil when the read had none.
-/// At its longest an item is about 1.25 KB of JSON, so a 200-item `sorted` line is about 250 KB.
+/// One item a card step read, with the facts a later filter could learn from. Written in full by the `sorted` line that
+/// first read it and copied into every other event about it, so the ledger stands on its own after runs and cards are
+/// deleted. Mail fields are nil when the read had none. At its longest an item is about 1.25 KB of JSON, so a `sorted`
+/// line of 200 new messages is about 250 KB.
 struct AttentionItem: Codable, Equatable {
     static let previewLimit = 280
 
@@ -314,7 +326,7 @@ private extension AttentionItem {
 
 /// How the ledger writes times and days: ISO-8601 to the millisecond with the local offset, and local calendar days.
 /// Making a formatter costs far more than using one, and the whole file is read at launch, two times an item, so
-/// formatters are made once for reading and once per line for writing.
+/// formatters are made once per line for writing, and the ledger's own times are read without one.
 enum AttentionTime {
     /// For example 2026-09-30T08:14:03.120-04:00.
     static func string(_ date: Date, in zone: TimeZone) -> String {
@@ -331,8 +343,58 @@ enum AttentionTime {
 
     /// Any offset; a time without milliseconds is read too.
     static func date(_ text: String) -> Date? {
+        var text = text
+        if let date = text.withUTF8(fixedFormat) { return date }
         if let date = withMilliseconds.date(from: text) { return toTheMillisecond(date) }
         return wholeSeconds.date(from: text)
+    }
+
+    /// The form the ledger writes, "2026-09-30T08:14:03.120-04:00", with or without the milliseconds and with "Z" for
+    /// UTC, read by hand: a formatter takes about 20 µs a time, which was most of reading the file at launch. Anything
+    /// else, or a year outside 1900-9999, is nil, for the formatters to read.
+    private static func fixedFormat(_ text: UnsafeBufferPointer<UInt8>) -> Date? {
+        func number(_ start: Int, _ count: Int) -> Int? {
+            guard start + count <= text.count else { return nil }
+            var value = 0
+            for index in start..<start + count {
+                guard (48...57).contains(text[index]) else { return nil }
+                value = value * 10 + Int(text[index] - 48)
+            }
+            return value
+        }
+        func byte(_ index: Int, is character: Unicode.Scalar) -> Bool { index < text.count && text[index] == UInt8(ascii: character) }
+        guard byte(4, is: "-"), byte(7, is: "-"), byte(10, is: "T"), byte(13, is: ":"), byte(16, is: ":"),
+              let year = number(0, 4), let month = number(5, 2), let day = number(8, 2),
+              let hour = number(11, 2), let minute = number(14, 2), let second = number(17, 2),
+              (1900...9999).contains(year), (1...12).contains(month), hour < 24, minute < 60, second < 60 else { return nil }
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+        guard day >= 1, day <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] else { return nil }
+        var next = 19, milliseconds = 0
+        if byte(next, is: ".") {
+            guard let fraction = number(20, 3) else { return nil }
+            milliseconds = fraction
+            next = 23
+        }
+        var offset = 0
+        if byte(next, is: "Z") {
+            next += 1
+        } else if byte(next, is: "+") || byte(next, is: "-") {
+            guard let hours = number(next + 1, 2), byte(next + 3, is: ":"), let minutes = number(next + 4, 2), hours <= 18, minutes < 60 else {
+                return nil
+            }
+            offset = (hours * 3_600 + minutes * 60) * (byte(next, is: "-") ? -1 : 1)
+            next += 6
+        } else {
+            return nil
+        }
+        guard next == text.count else { return nil }
+        // Days since 1970-01-01 in the proleptic Gregorian calendar, counting years from March so a leap day ends one.
+        let shifted = month <= 2 ? year - 1 : year
+        let era = shifted / 400, yearOfEra = shifted - era * 400
+        let dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1
+        let days = era * 146_097 + yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear - 719_468
+        let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - offset
+        return toTheMillisecond(Date(timeIntervalSince1970: Double(seconds) + Double(milliseconds) / 1_000))
     }
 
     // ISO8601DateFormatter is thread-safe, and reading never changes these.
