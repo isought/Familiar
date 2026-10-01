@@ -10,6 +10,8 @@ import SwiftUI
     @Published var disposition: MorningCardDisposition = .unreviewed
     @Published var newCardFolderID: UUID?
     @Published var calendarSourceID: UUID?
+    /// Where What you've taught was opened from, so Back goes there.
+    @Published var lessonsReturn: Route?
 }
 
 struct MorningLauncherView: View {
@@ -199,7 +201,7 @@ struct MorningFilesView: View {
                 LatestRunHost(store: calendarSources, runner: calendarRunner, openRun: openRun, manageSource: manageSource,
                               teaching: teaching)
             } else { empty("Run results are unavailable.") }
-        case .lessons: LessonsView(morning: store)
+        case .lessons: LessonsView(morning: store, attention: attention)
         case .attention(let screen):
             if let attention {
                 AttentionScreenView(ledger: attention, store: store, navigation: navigation, screen: screen,
@@ -577,13 +579,15 @@ struct MorningFilesView: View {
     }
     /// Run results teach through the morning store, and tell the attention test too.
     private var teaching: RunTeaching {
-        RunTeaching(morning: store, attention: attention, openLessons: { navigation.route = .lessons })
+        RunTeaching(morning: store, attention: attention,
+                    openLessons: { navigation.lessonsReturn = navigation.route; navigation.route = .lessons },
+                    openCard: { navigation.route = .card($0) })
     }
 
     func back() {
         switch navigation.route {
         case .sourceRun: navigation.route = .sourceRuns
-        case .lessons: navigation.route = .latestRun
+        case .lessons: navigation.route = navigation.lessonsReturn ?? .latestRun
         case .card(let id):
             if let card = store.cards.first(where: { $0.id == id }) {
                 navigation.disposition = card.displayDisposition

@@ -3,8 +3,9 @@ import CryptoKit
 import Foundation
 
 /// The attention test's record on this Mac: what each card step read from script sources, which of those items it
-/// showed, and what the person said and did about them. It is kept apart from cards, runs and chat, is never given
-/// to a model and never goes into noteling.log. Nothing is written, not even its folder, until a card step has read a
+/// showed, and what the person said and did about them. It is kept apart from cards, runs and chat; its file is never
+/// given to a model and never goes into noteling.log. What the person teaches here also goes to `onTaught`, which
+/// keeps it as a lesson that the card step sends. Nothing is written, not even its folder, until a card step has read a
 /// mail job through a script, so someone without one gets no log at all, and what the person does stops being written
 /// once a week has passed without such a read. The file is read once at launch; an event joins the index only once it
 /// is on disk.
@@ -30,8 +31,9 @@ final class AttentionLedger: ObservableObject {
     let timeZone: TimeZone
     /// Tests make its flush fail.
     var file: AttentionLogFile
-    /// Told what the person taught by a thumb, their words or "Matters to me", whether or not the test is recording:
-    /// the app keeps it as a lesson for the card step. The ledger's own file never leaves the Mac.
+    /// Told what the person taught by a card's thumb or its words, whether or not the test is recording: the app keeps
+    /// it as a lesson for the card step. "Matters to me" and words in the rest are taught by `LessonTeacher` instead,
+    /// so nothing here writes a lesson back over a newer one. The ledger's own file never leaves the Mac.
     var onTaught: ((LessonFacts, AttentionTeaching) -> Void)?
     /// The watched store, for finding a label's card, and its last saved workspace.
     private weak var store: MorningStore?
@@ -176,6 +178,13 @@ final class AttentionLedger: ObservableObject {
         return cards.first { shownKey(namedBy: $0) == key }
     }
 
+    /// A card from another job that names `key`'s Message-ID, as the rest's Shown row finds it. Almost no message is
+    /// named that way, and those are ruled out without looking at a single card.
+    func namingCard(for key: String, in cards: [MorningCard]) -> MorningCard? {
+        guard let id = AttentionMessageID.of(key: key), index.shownByMessageID[id] == key else { return nil }
+        return cards.first { shownKey(namedBy: $0) == key }
+    }
+
     /// A thumb only labels the item: it never changes the card, its folder or its work.
     func tapThumb(key: String, card: MorningCard?, thumb: AttentionLabels.Thumb, via: AttentionVia) {
         let value = AttentionLabels.next(current: effective(for: key).explicit, tapped: thumb)
@@ -191,8 +200,9 @@ final class AttentionLedger: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if text != explanation(for: key) ?? "" {
             guard label(key: key, card: card, value: .explain, via: via, text: text) else { return }
+            // Words in the rest are taught by LessonTeacher, which also tells the ledger; only a card's teach from here.
+            if via != .rest { taught(key, card: card, .why(text)) }
         }
-        taught(key, card: card, .why(text))
         if explaining == key { explaining = nil }
     }
 
@@ -230,7 +240,8 @@ final class AttentionLedger: ObservableObject {
 
     func cancelExplaining() { explaining = nil }
 
-    /// "Matters to me" on an item a card step read, or taking it back. Tapping it again while it waits to be
+    /// "Matters to me" on an item a card step read, or taking it back, as `LessonTeacher` tells it: the test counts it,
+    /// and the lesson is kept by the teacher, never from here. Tapping it again while it waits to be
     /// written only tries the write again.
     func miss(key: String, retract: Bool = false) {
         let now = clock()
@@ -239,9 +250,11 @@ final class AttentionLedger: ObservableObject {
             item.shown = index.shownKeys.contains(key)
             let miss = AttentionEvent.Miss(key: key, retract: retract, item: item)
             append(waits(.miss(miss)) ? [] : [event(.miss(miss), at: now)])
-            taught(key, card: nil, .verdict(retract ? nil : .matters))
         }
     }
+
+    /// Marked "Matters to me" in the test's record. What the person taught is the lesson; this is only what was counted.
+    func isMissed(_ key: String) -> Bool { index.missedKeys.contains(key) }
 
     /// The rest of `day`, holding `count` messages, was on screen for `seconds`. Only reaching its end makes the day's
     /// "0 missed" count, and a rest already looked through to its end is not recorded again until a new message joins it.

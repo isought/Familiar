@@ -146,8 +146,10 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    newer evidence can update or resolve a card, while missing items remain open. Human edits and handled decisions persist.
    The card step judges each item once: only items that are new or changed since its last judgment go to the model.
    While a job reads mail through a script, the one-week attention test adds thumbs and **Let me explain…** to its
-   cards, a daily line that opens the day's rest (with **Should have shown me**), and **This week**. Its append-only
-   ledger stays in `~/.noteling/attention/` and is never sent to a model.
+   cards, a daily line that opens the day's rest (with **Matters to me**), and **This week**. Its append-only
+   ledger stays in `~/.noteling/attention/` and is never sent to a model. Thumbs, explanations and **Matters to me**
+   (also offered on each run result that didn't become a card) become lessons in `morning/`, listed on **What you've
+   taught**; the card step sends each job's 40 newest lessons beside its rules.
    **Discuss or adjust** opens a focused card conversation; an explicit handoff queues its action for the shared executor.
    Cards, decisions and accepted work live in a local SQLite database, separate from source rules and run evidence.
    See [persistent cards](../architecture/persistent-cards.md) for identity and recheck limitations.

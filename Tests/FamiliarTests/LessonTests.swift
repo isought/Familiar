@@ -71,7 +71,7 @@ struct LessonTests {
     @Test func markingAResultTeachesWithoutMakingACard() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let teaching = ResultItemTeaching(morning: fixture.morning, attention: nil, facts: fixture.facts(5))
+        let teaching = ResultItemTeaching(morning: fixture.morning, teaching: RunTeaching(morning: fixture.morning), facts: fixture.facts(5))
         teaching.mark(true)
         #expect(fixture.morning.lesson(for: fixture.key(5))?.verdict == .matters && fixture.morning.cards.isEmpty)
         try fixture.morning.teach(fixture.facts(5), why: "From my landlord.")
@@ -102,6 +102,8 @@ struct LessonTests {
         #expect(lessons.last?["verdict"] as? String == "matters" && lessons.last?["why"] == nil)
         #expect(!fixture.prompts[0].contains("Secret project"))
         #expect(fixture.systems.first?.contains("lessons, when present, are this person's own verdicts") == true)
+        #expect(fixture.systems.first?.contains("Apply a lesson only to observations with the same sourceID") == true)
+        #expect(fixture.systems.first?.contains("lesson titles and senders") == true)
         #expect(fixture.morning.workspace.cardGenerations?.last?.lessons == 2)
         #expect(service.status == "0 new · 0 updated · 0 resolved · used 2 things you taught")
     }
@@ -148,6 +150,38 @@ struct LessonTests {
         #expect((fixture.inputs.last?["lessons"] as? [[String: Any]])?.count == 1)
     }
 
+    @Test func anItemsOwnLessonStaysOutWhileItIsSorted() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.morning.teach(fixture.facts(1), verdict: .matters)
+        try fixture.morning.teach(fixture.facts(100), verdict: .notForMe)
+        let service = fixture.service()
+        try fixture.read(0..<3)
+        await service.generate()?.value
+        let lessons = try #require(fixture.inputs.first?["lessons"] as? [[String: Any]])
+        #expect(lessons.map { $0["title"] as? String } == ["Message 100"])
+        #expect(fixture.morning.workspace.cardGenerations?.last?.lessons == 1)
+    }
+
+    @Test func onlyASortedItemCanBeTaughtAndACardOpens() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var opened: [UUID] = []
+        let teaching = RunTeaching(morning: fixture.morning, openCard: { opened.append($0) })
+        let row = ResultItemTeaching(morning: fixture.morning, teaching: teaching, facts: fixture.facts(0))
+        try fixture.read(0..<2)
+        #expect(!row.isSorted && row.card == nil)   // it may yet become a card
+        fixture.carding = [fixture.key(1)]
+        let service = fixture.service()
+        await service.generate()?.value
+        #expect(row.isSorted && row.card == nil)
+        let carded = ResultItemTeaching(morning: fixture.morning, teaching: teaching, facts: fixture.facts(1))
+        let card = try #require(carded.card)
+        #expect(card.tracking?.key == fixture.key(1))
+        teaching.openCard(card.id)
+        #expect(opened == [card.id])
+    }
+
     // MARK: - Fixtures
 
     @MainActor private final class Fixture {
@@ -162,6 +196,8 @@ struct LessonTests {
         var prompts: [String] = []
         var inputs: [[String: Any]] = []
         var sent: [[String]] = []
+        /// The observation keys the stand-in model makes a card for.
+        var carding: Set<String> = []
         private var clock = Date().addingTimeInterval(-86_400)
 
         init() throws {
@@ -201,7 +237,12 @@ struct LessonTests {
                     self.prompts.append(text)
                     self.inputs.append(input)
                     self.sent.append(try #require(input["observations"] as? [[String: Any]]).compactMap { $0["observationKey"] as? String })
-                    let submitted = await executor(CardGenerationSubmission.toolName, ["proposals": [[String: Any]]()], nil)
+                    let keys = self.sent.last ?? []
+                    let proposals: [[String: Any]] = keys.filter(self.carding.contains).map { key in
+                        ["observationKey": key, "title": "Reply to the sender", "meaning": "They are waiting on an answer from you.",
+                         "options": [["title": "Draft a reply", "instruction": "Draft a short reply to the saved message.", "mode": "prepare"]]]
+                    }
+                    let submitted = await executor(CardGenerationSubmission.toolName, ["proposals": proposals], nil)
                     #expect(!submitted.isError)
                     return "Ready"
                 }

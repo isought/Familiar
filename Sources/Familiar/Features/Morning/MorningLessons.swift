@@ -13,7 +13,7 @@ struct MorningLesson: Codable, Equatable, Identifiable {
             case .matters: return "Matters to me"
             case .mattersALot: return "Matters a lot"
             case .notForMe: return "Not for me"
-            case .notAtAll: return "Not at all"
+            case .notAtAll: return "Not at all for me"
             }
         }
 
@@ -64,7 +64,7 @@ extension MorningStore {
     /// Newest first.
     var lessons: [MorningLesson] { workspace.lessons ?? [] }
 
-    func lesson(for key: String) -> MorningLesson? { lessons.first { $0.key == key } }
+    func lesson(for key: String) -> MorningLesson? { lessonsByKey[key] }
 
     /// Records that an item mattered to the person or didn't, or takes that back with nil. Words already given stay.
     func teach(_ facts: LessonFacts, verdict: MorningLesson.Verdict?, at date: Date = Date()) throws {

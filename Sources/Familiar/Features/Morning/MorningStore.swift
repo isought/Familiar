@@ -15,8 +15,12 @@ enum MorningStoreError: LocalizedError {
 /// Domain transactions publish only after the repository commits the complete workspace.
 @MainActor
 final class MorningStore: ObservableObject {
-    @Published private(set) var workspace = MorningWorkspace()
+    @Published private(set) var workspace = MorningWorkspace() { didSet { reindex() } }
     @Published private(set) var error: String?
+    /// Generated cards by tracked item key, and lessons by item key, worked out once per change so a run's results
+    /// can ask about each of hundreds of rows.
+    private(set) var cardsByKey: [String: MorningCard] = [:]
+    private(set) var lessonsByKey: [String: MorningLesson] = [:]
     @Published var queueMessage: String?
 
     var folders: [MorningFolder] { workspace.folders }
@@ -33,6 +37,7 @@ final class MorningStore: ObservableObject {
 
     init(repository: any MorningRepository) {
         self.repository = repository
+        defer { reindex() }
         do {
             guard let stored = try repository.load() else {
                 try repository.save(workspace)
@@ -284,6 +289,11 @@ final class MorningStore: ObservableObject {
             return TrackedSourceItem(key: tracking.itemKey, title: source?.title ?? card.title,
                 details: source?.excerpt ?? card.meaning, url: source?.url ?? "", identityEvidence: tracking.identityEvidence)
         }
+    }
+
+    private func reindex() {
+        cardsByKey = Dictionary(workspace.cards.compactMap { card in card.tracking.map { ($0.key, card) } }) { first, _ in first }
+        lessonsByKey = Dictionary((workspace.lessons ?? []).map { ($0.key, $0) }) { first, _ in first }
     }
 
     /// Changes the lessons, newest first, keeping at most `MorningLesson.limit`.

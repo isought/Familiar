@@ -118,7 +118,8 @@ extension MorningRender {
         guard let statement = ledger.numbers.restItems(on: today).items.first(where: { $0.subject == "Your October statement is ready" }) else {
             throw AttentionRenderFailure("Today’s rest has no statement to miss.")
         }
-        ledger.miss(key: statement.key)
+        try LessonTeacher(morning: week.store, attention: ledger, facts: LessonFacts(key: statement.key, sourceID: statement.sourceID,
+            sourceName: statement.sourceName, title: statement.subject, from: statement.from ?? statement.fromName)).mark(true)
         try save("attention-rest-missed.png", .attention(.rest(day: today)))
         if let error = ledger.error { throw AttentionRenderFailure(error) }
     }

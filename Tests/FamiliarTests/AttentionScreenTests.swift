@@ -158,11 +158,12 @@ struct AttentionScreenTests {
         row.toggleMiss()
         #expect(fixture.misses.map(\.retract) == [false] && fixture.misses.first?.key == statement.key && row.isMissed)
         #expect(fixture.ledger.numbers.day(Self.wednesday).missed == 1)
+        #expect(fixture.store.lesson(for: statement.key)?.verdict == .matters)
         row.toggleMiss()
         #expect(fixture.misses.map(\.retract) == [false, true] && !row.isMissed)
         #expect(fixture.ledger.numbers.day(Self.wednesday).missed == 0)
-        // A miss never makes a card or touches the desk.
-        #expect(fixture.store.workspace == before)
+        // It only ever teaches: it never makes a card or touches the desk, and taking it back leaves no lesson.
+        #expect(fixture.store.cards == before.cards && fixture.store.workItems == before.workItems && fixture.store.lessons.isEmpty)
     }
 
     @Test func reachingTheEndChecksTheDayOnce() throws {
@@ -309,6 +310,7 @@ struct AttentionScreenTests {
         #expect(explained.value == .explain && explained.via == .rest && explained.text == "Statements are never urgent.")
         #expect(explained.key == item.key && explained.card == nil && explained.item.shown == false)
         #expect(fixture.ledger.explaining == nil && fixture.ledger.effective(for: item.key).state == .notSet)
+        #expect(fixture.store.lesson(for: item.key)?.why == "Statements are never urgent." && fixture.store.lesson(for: item.key)?.verdict == nil)
         field.save("after it closed")
         #expect(fixture.labels.count == 1)
     }
@@ -329,8 +331,8 @@ struct AttentionScreenTests {
         fixture.ledger.beginExplaining(statement.key)
         try #require(find(AttentionRowExplainField.self, in: row.body)).save("My bank statement")
         #expect(fixture.store.lesson(for: statement.key)?.why == "My bank statement")
-        row.toggleMiss()
-        #expect(fixture.store.lesson(for: statement.key)?.verdict == nil && fixture.store.lesson(for: statement.key)?.why != nil)
+        row.toggleMiss()   // taking the mark back takes its words too
+        #expect(fixture.store.lesson(for: statement.key) == nil)
 
         // A card's thumbs: yes, then very; the other thumb switches sides, then very, then clears.
         let card = try #require(fixture.store.cards.first), key = fixture.key("w", 0)
@@ -343,6 +345,47 @@ struct AttentionScreenTests {
         #expect(fixture.store.lesson(for: key) == nil)   // nothing left to teach
         fixture.ledger.tapThumb(key: key, card: card, thumb: .up, via: .card)
         #expect(fixture.store.lesson(for: key)?.title == "Message w0" && fixture.store.cards.count == 1)
+    }
+
+    /// A message marked on a run's results and one marked in the rest are the same lesson and the same count: each
+    /// place shows what the other did, a why given in one opens in the other, and Forget unmarks both.
+    @Test func runResultsAndTheRestShowTheSameLesson() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let numbers = fixture.ledger.numbers
+        let statement = try #require(numbers.restItems(on: Self.wednesday).items.first)
+        let facts = LessonFacts(key: statement.key, sourceID: fixture.sourceID, sourceName: "Example Gmail",
+                                title: statement.subject, from: "Sender 6")
+        let runTeacher = LessonTeacher(morning: fixture.store, attention: fixture.ledger, facts: facts)
+        try runTeacher.mark(true)
+        try runTeacher.explain("My bank statement")
+        let row = try fixture.restView().row(statement, numbers)
+        #expect(row.isMissed && fixture.ledger.isMissed(statement.key) && fixture.ledger.numbers.day(Self.wednesday).missed == 1)
+        #expect(fixture.ledger.explanation(for: statement.key) == "My bank statement")
+        fixture.ledger.beginExplaining(statement.key)
+        #expect(try #require(find(AttentionRowExplainField.self, in: row.body)).initial == "My bank statement")
+        fixture.ledger.cancelExplaining()
+
+        // A newer why from the rest wins, and the run results show it.
+        fixture.ledger.beginExplaining(statement.key)
+        try #require(find(AttentionRowExplainField.self, in: row.body)).save("Statements can wait a week")
+        #expect(runTeacher.lesson?.why == "Statements can wait a week" && runTeacher.matters)
+
+        LessonsView(morning: fixture.store, attention: fixture.ledger).forget(try #require(runTeacher.lesson))
+        #expect(runTeacher.lesson == nil && !row.isMissed && !fixture.ledger.isMissed(statement.key))
+        #expect(fixture.ledger.numbers.day(Self.wednesday).missed == 0)
+    }
+
+    @Test func backFromWhatYouveTaughtGoesWhereItWasOpened() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let run = MorningNavigation.Route.sourceRun(runID: UUID(), sourceID: nil)
+        fixture.navigation.lessonsReturn = run
+        fixture.view(.lessons).back()
+        #expect(fixture.navigation.route == run)
+        fixture.navigation.lessonsReturn = nil
+        fixture.view(.lessons).back()
+        #expect(fixture.navigation.route == .latestRun)
     }
 
     // MARK: - Fixtures

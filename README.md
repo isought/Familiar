@@ -71,17 +71,17 @@ When a job reads your mail through the mail pack, Noteling also runs a one-week 
 - A line in the folder sums up the latest read, such as “Read 42 → showed 5 · you said yes to 3 · 37 in the rest”. Tap it to see **the rest**: everything that was read and didn’t become a card. Mark anything you wanted to see with **Matters to me**.
 - **This week** puts the days side by side and checks the week against a bar set in advance: show at most 20% of what was read, and open the folder on 5 of 7 days. Misses are counted too, but over time rather than in one week: a week holds too few messages that matter to measure them, and what matters is personal.
 
-The test’s record stays on your Mac.
+The test’s record stays on your Mac. What you teach with the thumbs, **Let me explain…** and **Matters to me** is also kept as a lesson, which is sent with the card step (see below).
 
 ## Teach it what matters to you
 
 What matters to you isn’t what matters to someone else, so Noteling learns it from you. On **Latest run** or any run in **Run history**, each message that didn’t become a card has **Matters to me**; tap it, and **Why?** lets you say why in a few words if you like. The rest’s **Matters to me**, the thumbs on a card, and **Let me explain…** teach it too.
 
-Each of these is kept as a lesson. When Noteling next sorts what a job read, it reads that job’s newest lessons beside its rules, so a message like one you marked becomes a card, and one like a thumbs-down doesn’t. Lessons apply to mail that arrives later; teaching doesn’t sort what was already sorted again. **What you’ve taught** lists every lesson, and **Forget** removes one.
+Each of these is kept as a lesson. When Noteling next sorts what a job read, it sends that job’s 40 newest lessons (each one’s subject or title, sender, what you said and your words) to your Claude connection beside its rules, so a message like one you marked becomes a card, and one like a thumbs-down doesn’t. Lessons apply to mail that arrives later; teaching doesn’t sort what was already sorted again. **What you’ve taught** lists every lesson, and **Forget** removes one.
 
 ## Your information, your control
 
-Your saved sources, cards, and run history are stored on your Mac, and Noteling sends nothing to its developer. AI features send what a request needs to your configured Claude connection. Depending on the request, that can include screenshots, text from the window you’re using, the apps and web addresses you used recently, and what Noteling reads from your sources. **Watch Me** records only the demonstration you start. The [privacy notice](PRIVACY.md) lists exactly what is stored, what is sent, and how to delete it.
+Your saved sources, cards, and run history are stored on your Mac, and Noteling sends nothing to its developer. AI features send what a request needs to your configured Claude connection. Depending on the request, that can include screenshots, text from the window you’re using, the apps and web addresses you used recently, what Noteling reads from your sources, and the lessons you teach, in your own words. **Watch Me** records only the demonstration you start. The [privacy notice](PRIVACY.md) lists exactly what is stored, what is sent, and how to delete it.
 
 Mouse and keyboard control is off until you turn it on, in Settings or with the hand button on the chat pad. Tasks show their progress and any approval requests in the task window; **Stop** ends the work. Checking a tracked email conversation on screen may open it and mark it as read; the mail pack never does.
 

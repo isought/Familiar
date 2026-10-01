@@ -338,7 +338,7 @@ private struct SourceResultItemCard: View {
                 if readingHTTPURL(item.url), let url = URL(string: item.url) { Link("Open original", destination: url) }
             }.font(.system(size: 11)).foregroundStyle(Pad.penInk)
             if let (teaching, facts) = teaching {
-                ResultItemTeaching(morning: teaching.morning, attention: teaching.attention, facts: facts).padding(.top, 2)
+                ResultItemTeaching(morning: teaching.morning, teaching: teaching, facts: facts).padding(.top, 2)
             }
         }.frame(maxWidth: .infinity, alignment: .leading).padding(15)
             .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 9))

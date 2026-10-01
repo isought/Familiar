@@ -174,7 +174,7 @@ struct AttentionRestView: View {
         parts.append(numbers.format(when, AttentionTime.day(of: when, in: numbers.timeZone) == day ? "H:mm" : "EEE H:mm"))
         if item.important == true { parts.append("important") }
         if item.bulk == true { parts.append("list") }
-        return AttentionRestRow(ledger: ledger, item: item, details: parts.joined(separator: " · "))
+        return AttentionRestRow(ledger: ledger, morning: store, item: item, details: parts.joined(separator: " · "))
     }
 
     private var seconds: TimeInterval {
@@ -250,19 +250,25 @@ struct AttentionShownRow: View {
     }
 }
 
-/// A message the card step read and left out. "Matters to me" marks it missed, which never makes a card but teaches
-/// the card step through a lesson; "Why?" or right-click explains it.
+/// A message the card step read and left out. "Matters to me" marks it, which never makes a card but teaches the card
+/// step through a lesson; "Why?" or right-click says why. What it shows is the lesson, the same one a run's results
+/// show; the test is told what to count.
 struct AttentionRestRow: View {
     @ObservedObject var ledger: AttentionLedger
+    @ObservedObject var morning: MorningStore
     let item: AttentionItem
     /// "Dana Ruiz · Primary · 8:12 · important · list".
     let details: String
 
-    var isMissed: Bool { ledger.index.missedKeys.contains(item.key) }
+    var teacher: LessonTeacher {
+        LessonTeacher(morning: morning, attention: ledger, facts: LessonFacts(key: item.key, sourceID: item.sourceID,
+            sourceName: item.sourceName, title: item.subject, from: item.from ?? item.fromName ?? item.address))
+    }
+    var isMissed: Bool { teacher.matters }
     var isExplaining: Bool { ledger.explaining == item.key }
 
     var body: some View {
-        let explanation = ledger.explanation(for: item.key)
+        let explanation = teacher.lesson?.why
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -274,16 +280,22 @@ struct AttentionRestRow: View {
                     Image(systemName: "text.bubble").font(.system(size: 10)).foregroundStyle(Pad.penInk)
                         .help(explanation).accessibilityLabel("Your explanation: \(explanation)")
                 }
-                if isMissed && explanation == nil && !isExplaining {
-                    Button("Why?") { ledger.beginExplaining(item.key) }.buttonStyle(AttentionSmallButton())
+                if (isMissed || explanation != nil) && !isExplaining {
+                    Button(explanation == nil ? "Why?" : "Edit why") { ledger.beginExplaining(item.key) }
+                        .buttonStyle(AttentionSmallButton())
+                        .accessibilityLabel((explanation == nil ? "Say why: " : "Edit why: ") + item.subject)
                         .help("Say why it matters to you, so Noteling learns")
                 }
                 Button(isMissed ? "✓ Matters to me · undo" : "Matters to me") { toggleMiss() }
                     .buttonStyle(AttentionSmallButton(filled: isMissed))
-                    .accessibilityHint(isMissed ? "Takes back that this matters to you" : "Tells Noteling this matters to you, so it learns")
+                    .accessibilityLabel("Matters to me: \(item.subject)")
+                    .accessibilityAddTraits(isMissed ? .isSelected : [])
+                    .help(isMissed ? "Take it back, with any words" : "Tell Noteling this matters to you. It learns for mail that arrives next.")
                 if let page { Link(destination: page) { Image(systemName: "arrow.up.right.square") }.foregroundStyle(Pad.penInk).help("Open original") }
             }
-            if isExplaining { AttentionRowExplainField(ledger: ledger, key: item.key) }
+            if isExplaining {
+                AttentionRowExplainField(ledger: ledger, key: item.key, initial: explanation ?? "", persist: { try teacher.explain($0) })
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
         .background(Color.white.opacity(isMissed ? 0.85 : 0.6), in: RoundedRectangle(cornerRadius: 7))
@@ -292,42 +304,53 @@ struct AttentionRestRow: View {
         }
     }
 
-    /// Marks the message missed, or takes that back.
-    func toggleMiss() { ledger.miss(key: item.key, retract: isMissed) }
+    /// Marks the message as mattering, or takes that back with its words.
+    func toggleMiss() { try? teacher.mark(!isMissed) }
 
     private var page: URL? {
         item.url.flatMap(URL.init(string:)).flatMap { ["https", "http"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
     }
 }
 
-/// One line under a row of the rest, only while the person explains it. The words never change a label or a miss.
+/// One line under a row of the rest, only while the person explains it. The words never change a label or a mark.
 struct AttentionRowExplainField: View {
     @ObservedObject var ledger: AttentionLedger
     let key: String
+    /// The words already given, from the lesson.
+    let initial: String
+    let persist: (String) throws -> Void
     @State private var text = ""
+    @State private var failure: String?
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 12) {
-            Text("Let me explain").foregroundStyle(Pad.inkSoft)
-            TextField("Why is this worth your notice, or not?", text: $text)
-                .textFieldStyle(.roundedBorder).focused($focused).onSubmit { save(text) }
-            Button("Save") { save(text) }.foregroundStyle(Pad.penInk)
-            Button("Cancel") { ledger.cancelExplaining() }.foregroundStyle(Pad.penInk)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Text("Let me explain").foregroundStyle(Pad.inkSoft)
+                TextField("Why is this worth your notice, or not?", text: $text)
+                    .textFieldStyle(.roundedBorder).focused($focused).onSubmit { save(text) }
+                Button("Save") { save(text) }.foregroundStyle(Pad.penInk)
+                Button("Cancel") { ledger.cancelExplaining() }.foregroundStyle(Pad.penInk)
+            }
+            if let failure { Text(failure).foregroundStyle(Pad.redInk).textSelection(.enabled) }
         }
         .buttonStyle(.plain).font(.system(size: 12))
         .onAppear {
-            text = ledger.explanation(for: key) ?? ""
+            text = initial
             focused = true
         }
         .onExitCommand { ledger.cancelExplaining() }
         .onDisappear { if ledger.explaining == key { ledger.cancelExplaining() } }
     }
 
-    /// Saves up to 2000 characters and closes the field once they are written.
+    /// Saves the words as the lesson's why and closes the field; a lesson that can't be saved keeps it open.
     func save(_ text: String) {
         guard ledger.explaining == key else { return }
-        ledger.explain(key: key, card: nil, text: text, via: .rest)
+        do {
+            try persist(text)
+            failure = nil
+            if ledger.explaining == key { ledger.cancelExplaining() }
+        } catch { failure = error.localizedDescription }
     }
 }
 
