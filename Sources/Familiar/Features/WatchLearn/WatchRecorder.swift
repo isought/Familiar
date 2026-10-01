@@ -535,18 +535,26 @@ final class WatchRecorder {
         let sys = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(sys, 0.2)
         guard let el = AX.element(sys, kAXFocusedUIElementAttribute) else { return .hidden(why: "unknown field") }
-        let role = AX.string(el, kAXRoleAttribute) ?? ""
-        let sub = AX.string(el, kAXSubroleAttribute)
-        if sub == kAXSecureTextFieldSubrole || sub == "AXSecureTextField" { return .hidden(why: "password field") }
         let title = AX.string(el, kAXTitleAttribute), desc = AX.string(el, kAXDescriptionAttribute), placeholder = AX.string(el, kAXPlaceholderValueAttribute)
-        var name = [title, desc, placeholder].compactMap { $0 }.first { !$0.isEmpty }
-        if name == nil, let parent = AX.element(el, kAXParentAttribute) { name = AX.string(parent, kAXTitleAttribute) }
-        if Self.looksSecret(title) || Self.looksSecret(desc) || Self.looksSecret(placeholder) || Self.looksSecret(name) {
+        let named = [title, desc, placeholder].contains { $0?.isEmpty == false }
+        return Self.field(bundle: bundle, role: AX.string(el, kAXRoleAttribute) ?? "", subrole: AX.string(el, kAXSubroleAttribute),
+                          title: title, description: desc, placeholder: placeholder,
+                          parentTitle: named ? nil : AX.element(el, kAXParentAttribute).flatMap { AX.string($0, kAXTitleAttribute) })
+    }
+
+    /// The decision behind `focusedField`, apart from Accessibility so it can be tested: whether text typed into this
+    /// element may be written down, and under what name. Anything that might be a secret comes back hidden.
+    static func field(bundle: String, role: String, subrole: String?, title: String?, description: String?,
+                      placeholder: String?, parentTitle: String?) -> Field {
+        if terminalBundles.contains(bundle) { return .hidden(why: "terminal") }
+        if subrole == kAXSecureTextFieldSubrole || subrole == "AXSecureTextField" { return .hidden(why: "password field") }
+        let name = [title, description, placeholder].compactMap { $0 }.first { !$0.isEmpty } ?? parentTitle
+        if looksSecret(title) || looksSecret(description) || looksSecret(placeholder) || looksSecret(name) {
             return .hidden(why: "password field")
         }
-        let formField = Self.recordedRoles.contains(role) || (role == "AXTextArea" && ContextWatcher.browserBundles.contains(bundle))
-        guard formField else { return .hidden(why: role.isEmpty ? "unknown field" : Self.prettyRole(role)) }
-        let r = Self.prettyRole(role)
+        let formField = recordedRoles.contains(role) || (role == "AXTextArea" && ContextWatcher.browserBundles.contains(bundle))
+        guard formField else { return .hidden(why: role.isEmpty ? "unknown field" : prettyRole(role)) }
+        let r = prettyRole(role)
         return .text(label: (name?.isEmpty == false) ? "\(r) “\(name!.prefix(60))”" : r)
     }
 
