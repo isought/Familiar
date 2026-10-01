@@ -367,10 +367,10 @@ struct AttentionWeekView: View {
                     }.monospacedDigit()
                     VStack(alignment: .leading, spacing: 8) {
                         bar(week.showed)
-                        bar(week.missed)
                         bar(week.opened)
                     }
                     VStack(alignment: .leading, spacing: 4) {
+                        Text(week.missed + " · counted over time, not part of the bar")
                         if let screenRead = screenRead(numbers, week) { Text(screenRead) }
                         ForEach(week.gaps, id: \.self) { Text($0) }
                         if let power = week.power { Text(power) }

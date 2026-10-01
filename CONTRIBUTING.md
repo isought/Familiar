@@ -15,6 +15,8 @@ You keep the rights to your work. The project gets the rights it needs to keep d
 ./scripts/run.sh    # build and launch the app
 ```
 
+`scripts/test.sh` passes its arguments on to `swift test`. Use `./scripts/test.sh --filter <name>` to run only the tests whose names match, and add `--no-parallel` to run them one at a time. Unless you have set `NOTELING_HOME` yourself, the script points it at a fresh temporary folder, so tests never touch your `~/.noteling`.
+
 The [developer guide](docs/development/guide.md) covers setup, signing and the source layout. Keep pull requests focused, and add tests for any change in behavior.
 
 ## Code from elsewhere

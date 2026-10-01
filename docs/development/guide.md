@@ -33,9 +33,9 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    **Esc** or menu bar → **Land Noteling** brings it back early. Starting work brings it back too. Available while idle;
    with macOS Reduce Motion enabled, the fold and gentle flap stay at home.
 6. Claude can call the pack's scripts, `read_file` / `grep` over the docs, and `read_screen` (accessibility text).
-   General chat also knows the saved sources (the jobs taught with Watch Me).
+   General chat also knows the saved sources (the jobs taught with Watch Me or created in chat).
    - **Context:** every turn carries a short "Your saved jobs" list: name, kind, address, reading rules, and when each was taught and last run.
-   - **Tools** (`SourceConversation`): `get_source` shows one job with its latest findings, `update_source` edits it through the same store and checks as Manage sources, `remove_source` / `restore_source` take it out of future runs and bring it back, and `offer_run_source` adds a Run now tab.
+   - **Tools** (`SourceConversation`): `get_source` shows one job with its latest findings, `update_source` edits it through the same store and checks as Manage sources, `remove_source` / `restore_source` take it out of future runs and bring it back, `create_source` starts a job that reads through a pack script, with no teaching, and `offer_run_source` adds a Run now tab.
    - **Rules:** only the person's tap runs a job. Edits wait while a read is running, and they never clear a source's "needs review" flag. Each change leaves a receipt on the pad and an Open Manage sources tab.
 7. **Control** (off by default, Settings → "Allow Noteling to control the mouse and keyboard"): ask it to do something
    ("type the sum formula for me") and it does it through Claude's computer toolset. By default it works **in the
@@ -72,7 +72,7 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    it between steps, before the model thinks or inspects another screenshot. Typing or mouse input interrupts a
    borrowed action. Stop, completion and quitting return borrowed windows. Opening the live preview returns the window and stops
    the background task. Read-only questions never create a display or move a window.
-   This uses private macOS display APIs. The input-borrowing trial is on `codex/offscreen-input-borrow`;
+   This uses private macOS display APIs. Input borrowing is in `Sources/Familiar/Native/Control/Background/OffscreenInputBorrow.swift`;
    see [its scope and verification status](../architecture/offscreen-input-borrow.md).
    It keeps existing app logins and uses native Accessibility/process-event controls, with temporary input borrowing
    when approved. It does not create a separate desktop session or guarantee every app's text input. Full-screen windows and mirrored-display
@@ -100,7 +100,8 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    `--summarize-recording <dir> ["purpose"] [--tools-root <dir>] [--keep] [--claude-cli]` (prints the draft JSON; keeps into a temp folder by default).
 
 9. **Morning Files**: a small folder in the upper-left opens categorized folders and a spread of files. Choose any file
-   to read its sources, people, reasoning, unknowns and exact proposed action. **Ignore** files it away, **I'll do it**
+   to see its three parts: what it is, what it means for you, and one to three options, best first (hover an option for its
+   exact instruction). **Show original** shows what Noteling read. **Ignore** files it away, **I'll do it**
    keeps it yours, and handing it to Noteling saves the action before the file flies to the background task screen.
    Drag the small folder itself or a window's header to move it; the morning windows and background task list remember
    their positions. Add your own folders and files, and configure roles, relationships and identities through
@@ -124,18 +125,29 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    source’s time zone), and mail/web sources within their saved scope. It collects up to 25 visible mail/web observations,
    retaining evidence and coverage gaps. New-item inbox discovery uses visible rows and snippets. Separately,
    unresolved cards can request bounded rechecks of their tracked conversations, including opening a matching thread.
+   A job can instead read through a pack script that its SKILL.md lists under `sources:`, with no window, model or
+   computer control. The bundled `imap-mail` pack's `today` reads everything that arrived in the inbox over IMAP,
+   read-only, back to the last read a card step sorted (24 hours the first time, at most 7 days, the newest 200
+   messages). Chat creates such a job with `create_source`; the job's reading rules are applied by the card step.
    Results show which reads completed, were partial, or failed. Stop cancels the remaining reads
-   and keeps collections already saved. Clicking a completed row opens that run’s findings; **Manage sources**
-   is for saved setup and rules. **Run history** keeps earlier results available after a restart. Findings appear
-   before expandable collection details, and partial or failed reads remain clearly labeled.
+   and keeps collections already saved. **Run all sources** opens the **Latest run** screen, which follows the run and
+   names any source that didn't finish at the top. The card controls (**Make cards from saved results**, **View cards**)
+   are on the run screens; the main screen shows card work only while it runs or when it fails.
+   Clicking a completed row opens that run’s findings; **Manage sources** is for saved setup and rules.
+   **Run history** keeps earlier results available after a restart. Findings appear before expandable collection
+   details, and partial or failed reads remain clearly labeled.
    Each run is stored under `~/.noteling/runs/<readable-timestamp>/`, with `run.json`, per-source JSON
    exports, and a readable `report.md`. **Show run folder** opens the run folder. Existing saved collections
    are preserved as recovered results; future runs retain every collection instead of replacing previous ones.
    This first calendar collection supports exposed Accessibility navigation controls; unsupported controls are reported.
    Calendar collection does not create or move meetings. Reads are started explicitly; scheduled collection, preference
-   history, relationship-based recommendations, and direct service APIs are not connected yet.
+   history and relationship-based recommendations are not connected yet. Apart from script jobs, sources are read from the screen.
    Saved observations generate continuing cards. Repeated scans match cards using the source and an extracted item key;
    newer evidence can update or resolve a card, while missing items remain open. Human edits and handled decisions persist.
+   The card step judges each item once: only items that are new or changed since its last judgment go to the model.
+   While a job reads mail through a script, the one-week attention test adds thumbs and **Let me explain…** to its
+   cards, a daily line that opens the day's rest (with **Should have shown me**), and **This week**. Its append-only
+   ledger stays in `~/.noteling/attention/` and is never sent to a model.
    **Discuss or adjust** opens a focused card conversation; an explicit handoff queues its action for the shared executor.
    Cards, decisions and accepted work live in a local SQLite database, separate from source rules and run evidence.
    See [persistent cards](../architecture/persistent-cards.md) for identity and recheck limitations.
@@ -297,6 +309,10 @@ pre-approved, so the user clicks one prompt on first launch, once per install.
   - `Sources/FamiliarRuntime`: API/CLI providers, conversation history, execution lifecycle, tool routing, and process helpers; no app/native imports.
   - `Sources/Familiar/App`: composition, desktop activity ownership, shell state, app entry point, and headless/render commands.
   - `Sources/Familiar/Features`: Chat, WatchLearn, ContextNotes, Companion, and Settings. Each workflow keeps its own state; chat presents Watch events without owning recordings.
+    - `Features/Calendar`: sources and jobs (calendar, mail and web profiles in `CalendarStore`), screen reads (`SourceCollectionTask`) and script reads (`ScriptReading`, `ScriptReadWindow`), the run archive (`SourceRunStore`), chat's job tools (`SourceConversation`), and the Manage sources, Latest run and Run history screens. `App/CalendarCollectionRunner` runs the reads.
+    - `Features/Morning`: cards, Who's Who and queued work in `morning.sqlite` (`MorningStore`), the card step and its judgments (`CardGenerationService`, `CardGenerationSubmission`), reconciliation with continuing cards, card discussions, and the Morning Files screens.
+    - `Features/Attention`: the one-week attention test: its append-only ledger in `attention/`, labels from thumbs, explanations and card actions, the numbers, and the thumbs, daily line, rest and week screens.
+    - `Features/BackgroundTasks`: `BackgroundTaskStore`, the task screen's state: the running task and up to 20 recent results with their last frame.
   - `Sources/Familiar/Native`: Accessibility context/hit testing, screen capture, control mechanics, and permissions/hotkeys.
   - `Sources/Familiar/Presentation`: shared shell surfaces and execution preview; `Configuration`, `ToolPacks`, and `Knowledge` retain current settings, pack storage, and context assembly.
 - Cleanup goals and integration boundaries: [architecture plan](../architecture/next-phase-structure.md).
