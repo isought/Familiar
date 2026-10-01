@@ -229,16 +229,19 @@ final class MorningStore: ObservableObject {
     }
 
     /// `judged` is each read item's judgment revision, saved with the cards and receipt; nil leaves judgments as they are.
+    /// `lessons` is how many lessons the model read, kept on the receipt.
     @discardableResult
     func applyCardGeneration(observations: [CardObservation], proposals: [CardProposal], runIDs: [UUID],
-                             judged: [String: String]? = nil, at: Date = Date()) throws -> CardGenerationSummary {
+                             judged: [String: String]? = nil, lessons: Int = 0, at: Date = Date()) throws -> CardGenerationSummary {
         let previous = Set((workspace.cardGenerations ?? []).flatMap(\.runIDs))
         guard runIDs.contains(where: { !previous.contains($0) }) else { return CardGenerationSummary() }
         var result = CardGenerationSummary()
         try transact { next in
             result = try MorningCardReconciliation.apply(observations: observations, proposals: proposals, runIDs: runIDs, at: at, to: &next)
             if let judged { MorningCardReconciliation.recordJudgments(judged, at: at, in: &next) }
+            if lessons > 0, let receipt = next.cardGenerations?.indices.last { next.cardGenerations?[receipt].lessons = lessons }
         }
+        result.lessons = lessons
         return result
     }
 
@@ -280,6 +283,15 @@ final class MorningStore: ObservableObject {
             let source = card.sources.first
             return TrackedSourceItem(key: tracking.itemKey, title: source?.title ?? card.title,
                 details: source?.excerpt ?? card.meaning, url: source?.url ?? "", identityEvidence: tracking.identityEvidence)
+        }
+    }
+
+    /// Changes the lessons, newest first, keeping at most `MorningLesson.limit`.
+    func changeLessons(_ change: (inout [MorningLesson]) -> Void) throws {
+        try transact { next in
+            var lessons = next.lessons ?? []
+            change(&lessons)
+            next.lessons = Array(lessons.prefix(MorningLesson.limit))
         }
     }
 
@@ -347,6 +359,9 @@ final class MorningStore: ObservableObject {
             try require(!tracking.resolvedByUser || tracking.resolution == .resolved, "A user-resolved card has inconsistent state.")
             try require(tracking.resolution != .resolved || hasText(tracking.resolutionEvidence), "A resolved card needs supporting evidence.")
         }
+        let lessons = value.lessons ?? []
+        try require(Set(lessons.map(\.key)).count == lessons.count, "Two lessons are about the same item.")
+        try require(lessons.allSatisfy { hasText($0.key) && !$0.isEmpty }, "A lesson needs its item and something it teaches.")
         let generations = value.cardGenerations ?? []
         try require(unique(generations.map(\.id)), "Card generation contains duplicate receipts.")
         try require(generations.allSatisfy { !$0.runIDs.isEmpty && unique($0.runIDs) && $0.completedAt.timeIntervalSince1970.isFinite }, "Card generation contains an invalid run receipt.")

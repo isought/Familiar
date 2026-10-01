@@ -79,6 +79,9 @@ struct CardGenerationRecord: Codable, Equatable, Identifiable {
     var created: Int
     var updated: Int
     var resolved: Int
+    /// Lessons the step's model read, so a step that learned from the person can be told from one before any; nil when
+    /// none, and in receipts from before lessons.
+    var lessons: Int? = nil
 }
 
 /// What the card step last judged of one item, so an unchanged item isn't put to the model again (and so can't come
@@ -108,15 +111,18 @@ struct CardGenerationSummary: Equatable {
     /// Items the model read this step, and items left out because it had judged them before.
     var sent = 0
     var alreadySorted = 0
+    /// Lessons the model read beside the new items.
+    var lessons = 0
     /// Once some items were already sorted, it counts items sorted and cards changed apart, so "0 new" beside a count
-    /// of messages isn't read as "no new mail".
+    /// of messages isn't read as "no new mail". It says when the step used what the person taught.
     var message: String {
-        guard alreadySorted > 0 else { return "\(created) new · \(updated) updated · \(resolved) resolved" }
+        let taught = lessons > 0 ? " · used \(lessons) thing\(lessons == 1 ? "" : "s") you taught" : ""
+        guard alreadySorted > 0 else { return "\(created) new · \(updated) updated · \(resolved) resolved" + taught }
         let changes = [created > 0 ? "\(created) new card\(created == 1 ? "" : "s")" : nil,
                        updated > 0 ? "\(updated) updated" : nil, resolved > 0 ? "\(resolved) resolved" : nil].compactMap { $0 }
         if sent == 0, changes.isEmpty { return "Nothing new to sort: \(alreadySorted) already sorted." }
         let lead = sent == 0 ? "Nothing new to sort" : "Sorted \(sent) new item\(sent == 1 ? "" : "s")"
-        return lead + ": " + (changes.isEmpty ? "no new cards" : changes.joined(separator: " · ")) + " · \(alreadySorted) already sorted."
+        return lead + ": " + (changes.isEmpty ? "no new cards" : changes.joined(separator: " · ")) + " · \(alreadySorted) already sorted" + taught + "."
     }
 }
 

@@ -99,6 +99,14 @@ extension MorningRender {
         try save("morning-latest-run.png", .folders)
         try save("latest-run.png", .latestRun)
 
+        // Teaching from the run: the delayed package matters, and why; then the lessons it adds up to.
+        let package = LessonFacts(key: CardObservation.key(sourceID: mail.id, itemKey: "package"), sourceID: mail.id,
+                                  sourceName: mail.name, title: "Your package is delayed", from: "Example Shop <orders@shop.example.test>")
+        try store.teach(package, verdict: .matters, at: early.addingTimeInterval(600))
+        try store.teach(package, why: "It’s my kid’s birthday present.", at: early.addingTimeInterval(660))
+        try save("latest-run-taught.png", .latestRun)
+        try save("lessons.png", .lessons)
+
         // A newer run where the school portal failed, then cards being prepared from it, stopped, and failing.
         var failed = SourceRunEntry(reading: ReadingReadRequest(source: school, requestedAt: later.addingTimeInterval(45)), state: .failed,
             message: "The portal asked to sign in again. No new findings were saved in this run.")

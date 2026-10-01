@@ -250,8 +250,8 @@ struct AttentionShownRow: View {
     }
 }
 
-/// A message the card step read and left out. "Should have shown me" marks it missed, which never makes a card;
-/// right-click explains it.
+/// A message the card step read and left out. "Matters to me" marks it missed, which never makes a card but teaches
+/// the card step through a lesson; "Why?" or right-click explains it.
 struct AttentionRestRow: View {
     @ObservedObject var ledger: AttentionLedger
     let item: AttentionItem
@@ -274,9 +274,13 @@ struct AttentionRestRow: View {
                     Image(systemName: "text.bubble").font(.system(size: 10)).foregroundStyle(Pad.penInk)
                         .help(explanation).accessibilityLabel("Your explanation: \(explanation)")
                 }
-                Button(isMissed ? "✓ Missed · undo" : "Should have shown me") { toggleMiss() }
+                if isMissed && explanation == nil && !isExplaining {
+                    Button("Why?") { ledger.beginExplaining(item.key) }.buttonStyle(AttentionSmallButton())
+                        .help("Say why it matters to you, so Noteling learns")
+                }
+                Button(isMissed ? "✓ Matters to me · undo" : "Matters to me") { toggleMiss() }
                     .buttonStyle(AttentionSmallButton(filled: isMissed))
-                    .accessibilityHint(isMissed ? "Takes back that this should have been shown" : "Marks this as something you wanted to see")
+                    .accessibilityHint(isMissed ? "Takes back that this matters to you" : "Tells Noteling this matters to you, so it learns")
                 if let page { Link(destination: page) { Image(systemName: "arrow.up.right.square") }.foregroundStyle(Pad.penInk).help("Open original") }
             }
             if isExplaining { AttentionRowExplainField(ledger: ledger, key: item.key) }
@@ -435,7 +439,7 @@ struct AttentionWeekView: View {
 }
 
 /// A smaller MorningActionButton, for a control on every row of a long list.
-private struct AttentionSmallButton: ButtonStyle {
+struct AttentionSmallButton: ButtonStyle {
     var filled = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.system(size: 11, weight: .medium))

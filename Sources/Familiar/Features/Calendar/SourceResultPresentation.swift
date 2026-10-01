@@ -7,12 +7,17 @@ struct SourceResultPresentation: Equatable {
         var title: String
         var text: String
         var url: String
+        /// For a read item, what the card step calls it (its observation key) and, for mail, its sender: what a
+        /// lesson about it is kept under. Nil for a calendar event.
+        var key: String? = nil
+        var from: String? = nil
     }
     struct Detail: Identifiable, Equatable {
         var title: String
         var text: String
         var id: String { title }
     }
+    var sourceID: UUID
     var title: String
     var dateLabel: String
     var state: SourceRunEntry.State
@@ -26,6 +31,7 @@ struct SourceResultPresentation: Equatable {
     init(entry: SourceRunEntry) {
         let reading = entry.readingSnapshot
         let calendar = entry.calendarSnapshot
+        sourceID = entry.sourceID
         title = entry.sourceName
         dateLabel = entry.dateLabel
         state = entry.state
@@ -46,7 +52,11 @@ struct SourceResultPresentation: Equatable {
         calendarFacts = []
         details = []
         if let reading {
-            items = reading.items.map { Item(id: $0.id, title: $0.title, text: $0.text, url: $0.url) }
+            items = reading.items.map { item in
+                Item(id: item.id, title: item.title, text: item.text, url: item.url,
+                     key: CardObservation.key(sourceID: entry.sourceID, itemKey: CardGenerationInput.identity(item.identityKey, fallback: item.id)),
+                     from: item.mail.flatMap { $0.from.isEmpty ? nil : $0.from })
+            }
             details = [Detail(title: "Account observed", text: reading.accountEvidence),
                        Detail(title: "Source observed", text: reading.sourceEvidence),
                        Detail(title: "Coverage checked", text: reading.scopeEvidence)]

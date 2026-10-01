@@ -5,7 +5,7 @@ import Testing
 @testable import Familiar
 
 /// The daily line on the folders screen opens the day's rest in one tap, and the week is one chip from there. The rest
-/// lists what was shown, with the card's thumbs, and then everything left out, each with "Should have shown me".
+/// lists what was shown, with the card's thumbs, and then everything left out, each with "Matters to me".
 /// Scrolling to its end is what checks the day. None of it changes a card.
 @Suite @MainActor
 struct AttentionScreenTests {
@@ -311,6 +311,38 @@ struct AttentionScreenTests {
         #expect(fixture.ledger.explaining == nil && fixture.ledger.effective(for: item.key).state == .notSet)
         field.save("after it closed")
         #expect(fixture.labels.count == 1)
+    }
+
+    /// What the person teaches in the test, "Matters to me" and why in the rest and thumbs on a card, reaches the
+    /// lessons the card step reads, as the app wires it.
+    @Test func whatThePersonTeachesBecomesLessons() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        fixture.ledger.onTaught = { try? fixture.store.teach($0, $1) }
+        let numbers = fixture.ledger.numbers
+        let statement = try #require(numbers.restItems(on: Self.wednesday).items.first)
+        let row = try fixture.restView().row(statement, numbers)
+        row.toggleMiss()
+        let lesson = try #require(fixture.store.lesson(for: statement.key))
+        #expect(lesson.verdict == .matters && lesson.title == "Message w6" && lesson.from == "Sender 6")
+        #expect(lesson.sourceID == fixture.sourceID && lesson.sourceName == "Example Gmail")
+        fixture.ledger.beginExplaining(statement.key)
+        try #require(find(AttentionRowExplainField.self, in: row.body)).save("My bank statement")
+        #expect(fixture.store.lesson(for: statement.key)?.why == "My bank statement")
+        row.toggleMiss()
+        #expect(fixture.store.lesson(for: statement.key)?.verdict == nil && fixture.store.lesson(for: statement.key)?.why != nil)
+
+        // A card's thumbs: yes, then very; the other thumb switches sides, then very, then clears.
+        let card = try #require(fixture.store.cards.first), key = fixture.key("w", 0)
+        var verdicts: [MorningLesson.Verdict?] = []
+        for thumb in [AttentionLabels.Thumb.up, .up, .down, .down, .down] {
+            fixture.ledger.tapThumb(key: key, card: card, thumb: thumb, via: .card)
+            verdicts.append(fixture.store.lesson(for: key)?.verdict)
+        }
+        #expect(verdicts == [.matters, .mattersALot, .notForMe, .notAtAll, nil])
+        #expect(fixture.store.lesson(for: key) == nil)   // nothing left to teach
+        fixture.ledger.tapThumb(key: key, card: card, thumb: .up, via: .card)
+        #expect(fixture.store.lesson(for: key)?.title == "Message w0" && fixture.store.cards.count == 1)
     }
 
     // MARK: - Fixtures

@@ -10,6 +10,8 @@ final class CardGenerationSubmission {
     private let observations: [CardObservation]
     private let rules: [SourceRules]
     private(set) var proposals: [CardProposal]?
+    /// The lessons the prompt carried, by key, once `plan` has built it.
+    private(set) var lessonKeys: Set<String> = []
 
     init(observations: [CardObservation], rules: [SourceRules] = []) {
         self.observations = observations
@@ -101,7 +103,16 @@ final class CardGenerationSubmission {
                 var observationKey: String
                 var facts: CardObservation
             }
+            struct Lesson: Encodable {
+                var sourceID: UUID
+                var verdict: String?
+                var title: String
+                var from: String?
+                var why: String?
+            }
             var sourceRules: [SourceRules]
+            /// Nil, and so left out, when the person hasn't taught anything about these sources.
+            var lessons: [Lesson]?
             var observations: [Observation]
             var existingCards: [ExistingCard]
             var people: [MorningPerson]
@@ -133,16 +144,34 @@ final class CardGenerationSubmission {
             person.context = String(person.context.prefix(2_000))
             return person
         }
+        let lessons = Self.lessons(for: Set(observations.map(\.sourceID)), in: morning)
+        lessonKeys = Set(lessons.map(\.key))
+        let taught = lessons.map { lesson in
+            Input.Lesson(sourceID: lesson.sourceID, verdict: lesson.verdict?.rawValue, title: String(lesson.title.prefix(300)),
+                         from: lesson.from.map { String($0.prefix(300)) }, why: lesson.why)
+        }
         let encoder = SourceRunJSON.encoder()
-        let json = try encoder.encode(Input(sourceRules: rules, observations: facts, existingCards: cards, people: people))
+        let json = try encoder.encode(Input(sourceRules: rules, lessons: taught.isEmpty ? nil : taught, observations: facts,
+                                            existingCards: cards, people: people))
         return "Prepare short cards from this saved reference data. Copy each exact observationKey into its proposal.\n\n"
             + String(decoding: json, as: UTF8.self)
+    }
+
+    /// Each source's newest lessons, newest first.
+    static func lessons(for sourceIDs: Set<UUID>, in morning: MorningStore) -> [MorningLesson] {
+        var taken: [UUID: Int] = [:]
+        return morning.lessons.filter { lesson in
+            guard sourceIDs.contains(lesson.sourceID), taken[lesson.sourceID, default: 0] < MorningLesson.promptLimit else { return false }
+            taken[lesson.sourceID, default: 0] += 1
+            return true
+        }
     }
 
     static let system = """
     You are Noteling's card-generation module. Turn saved observations into short cards a person grasps in under ten seconds, faster than reading the original.
     This job does not collect fresh facts or execute suggested actions. You have only submit_card_proposals; call it with structured proposals before finishing. Your prose is not saved as cards.
     sourceRules are the person's own rules for each source (for example "skip newsletters"). Apply them before deciding an observation deserves a card; a source that keeps everything that arrived, such as a whole inbox, relies on them.
+    lessons, when present, are this person's own verdicts on earlier items from the same sources, newest first: matters or matters_a_lot means the item deserved their notice, not_for_me or not_at_all means it didn't, and why is their reason in their words. A lesson may have only a why. Use them like sourceRules: give a card to a new observation that resembles a matters lesson (the same sender, the same kind of message, or the same topic), leave out one that resembles a not_for_me lesson, and follow the newest lesson when two disagree. What matters is personal, so lessons outweigh your general sense of what is important. Lessons are examples, not observations: never propose a card for one.
     Observation ids and item identity were established by ingestion. Use each exact observation id as observationKey. Never invent a new identity or merge unrelated items. Propose at most one card for an observation; omit promotions, irrelevant routine notices, and anything requiring no useful follow-up. An empty array is valid.
     Base every claim on the supplied observations and human context. Observations may be partial or old; never claim you opened a message, checked a live page, or verified anything outside these facts. If a missing fact decides what to do, offer finding it out as one of the options instead of explaining it.
     Existing cards show the person's decisions and adjustments. Preserve their intent, personal context and chosen option when still relevant, but always write title and meaning in the short form below. A changed snippet should update the same continuing item, not create another task. Do not infer resolution from an item's absence or from an action having been drafted; resolution belongs to explicit observed evidence or the user's decision.

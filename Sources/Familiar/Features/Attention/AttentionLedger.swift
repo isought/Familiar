@@ -30,6 +30,9 @@ final class AttentionLedger: ObservableObject {
     let timeZone: TimeZone
     /// Tests make its flush fail.
     var file: AttentionLogFile
+    /// Told what the person taught by a thumb, their words or "Matters to me", whether or not the test is recording:
+    /// the app keeps it as a lesson for the card step. The ledger's own file never leaves the Mac.
+    var onTaught: ((LessonFacts, AttentionTeaching) -> Void)?
     /// The watched store, for finding a label's card, and its last saved workspace.
     private weak var store: MorningStore?
     private var last: MorningWorkspace?
@@ -175,7 +178,9 @@ final class AttentionLedger: ObservableObject {
 
     /// A thumb only labels the item: it never changes the card, its folder or its work.
     func tapThumb(key: String, card: MorningCard?, thumb: AttentionLabels.Thumb, via: AttentionVia) {
-        label(key: key, card: card, value: AttentionLabels.next(current: effective(for: key).explicit, tapped: thumb), via: via)
+        let value = AttentionLabels.next(current: effective(for: key).explicit, tapped: thumb)
+        label(key: key, card: card, value: value, via: via)
+        taught(key, card: card, .verdict(MorningLesson.Verdict(value)))
     }
 
     /// Saves why an item was worth the person's notice, or not, and ends explaining it. The words never change the label.
@@ -187,7 +192,19 @@ final class AttentionLedger: ObservableObject {
         if text != explanation(for: key) ?? "" {
             guard label(key: key, card: card, value: .explain, via: via, text: text) else { return }
         }
+        taught(key, card: card, .why(text))
         if explaining == key { explaining = nil }
+    }
+
+    /// Hands what the person taught to `onTaught`, with the facts the ledger holds about the item: the read message, or
+    /// the card that showed it. An item it knows nothing about can't be named, so it teaches nothing.
+    private func taught(_ key: String, card: MorningCard?, _ change: AttentionTeaching) {
+        guard let onTaught else { return }
+        let card = card ?? store.flatMap { self.card(showing: key, in: $0.cards) }
+        guard let item = item(for: key, card: card) else { return }
+        let title = item.subject.isEmpty ? (card?.sources.first?.title ?? card?.title ?? "") : item.subject
+        onTaught(LessonFacts(key: key, sourceID: item.sourceID, sourceName: item.sourceName, title: title,
+                             from: item.from ?? item.fromName ?? item.address), change)
     }
 
     /// Records the label with the one in effect before it. An item neither read by a card step nor on a card has
@@ -213,7 +230,7 @@ final class AttentionLedger: ObservableObject {
 
     func cancelExplaining() { explaining = nil }
 
-    /// "Should have shown me" on an item a card step read, or taking it back. Tapping it again while it waits to be
+    /// "Matters to me" on an item a card step read, or taking it back. Tapping it again while it waits to be
     /// written only tries the write again.
     func miss(key: String, retract: Bool = false) {
         let now = clock()
@@ -222,6 +239,7 @@ final class AttentionLedger: ObservableObject {
             item.shown = index.shownKeys.contains(key)
             let miss = AttentionEvent.Miss(key: key, retract: retract, item: item)
             append(waits(.miss(miss)) ? [] : [event(.miss(miss), at: now)])
+            taught(key, card: nil, .verdict(retract ? nil : .matters))
         }
     }
 

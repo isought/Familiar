@@ -117,4 +117,6 @@ struct MorningWorkspace: Codable, Equatable {
     var cardGenerations: [CardGenerationRecord]? = nil
     /// What the card step has judged, by observation id. Nil in workspaces saved before it was kept.
     var judgments: [String: CardJudgment]? = nil
+    /// What the person taught about items they read, newest first. Nil until the first lesson.
+    var lessons: [MorningLesson]? = nil
 }

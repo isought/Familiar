@@ -9,9 +9,10 @@ struct SourceRunResultsHost: View {
     let sourceID: UUID?
     let openRun: (UUID, UUID?) -> Void
     let manageSource: (UUID) -> Void
+    let teaching: RunTeaching?
 
     init(store: CalendarStore, runner: CalendarCollectionRunner, runID: UUID, sourceID: UUID?,
-         openRun: @escaping (UUID, UUID?) -> Void, manageSource: @escaping (UUID) -> Void) {
+         openRun: @escaping (UUID, UUID?) -> Void, manageSource: @escaping (UUID) -> Void, teaching: RunTeaching? = nil) {
         self.store = store
         self.runner = runner
         self.runs = store.runStore
@@ -19,6 +20,7 @@ struct SourceRunResultsHost: View {
         self.sourceID = sourceID
         self.openRun = openRun
         self.manageSource = manageSource
+        self.teaching = teaching
     }
 
     var body: some View {
@@ -31,7 +33,7 @@ struct SourceRunResultsHost: View {
                 SourceRunResultsView(run: run, sourceID: sourceID, directory: runs.directory(for: runID),
                     isRunning: runner.isRunning && runner.currentRunID == runID,
                     activeSourceIDs: Set(store.sources.map(\.id) + store.readingSources.map(\.id)),
-                    openRun: openRun, manageSource: manageSource, stop: { _ = runner.stopActive() })
+                    openRun: openRun, manageSource: manageSource, stop: { _ = runner.stopActive() }, teaching: teaching)
             } else {
                 Text("This run could not be found. Open Run history to choose another saved run.")
                     .font(.system(size: 13)).foregroundStyle(Pad.inkSoft).padding(23)
@@ -47,20 +49,22 @@ struct LatestRunHost: View {
     @ObservedObject private var runs: SourceRunStore
     let openRun: (UUID, UUID?) -> Void
     let manageSource: (UUID) -> Void
+    let teaching: RunTeaching?
 
     init(store: CalendarStore, runner: CalendarCollectionRunner,
-         openRun: @escaping (UUID, UUID?) -> Void, manageSource: @escaping (UUID) -> Void) {
+         openRun: @escaping (UUID, UUID?) -> Void, manageSource: @escaping (UUID) -> Void, teaching: RunTeaching? = nil) {
         self.store = store
         self.runner = runner
         self.runs = store.runStore
         self.openRun = openRun
         self.manageSource = manageSource
+        self.teaching = teaching
     }
 
     var body: some View {
         if let latest = runs.runs.first {
             SourceRunResultsHost(store: store, runner: runner, runID: latest.id, sourceID: nil,
-                                 openRun: openRun, manageSource: manageSource).id(latest.id)
+                                 openRun: openRun, manageSource: manageSource, teaching: teaching).id(latest.id)
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 if let error = runs.error {
@@ -123,6 +127,7 @@ struct SourceRunResultsView: View {
     var openRun: (UUID, UUID?) -> Void = { _, _ in }
     var manageSource: (UUID) -> Void = { _ in }
     var stop: () -> Void = {}
+    var teaching: RunTeaching? = nil
 
     private var entries: [SourceRunEntry] {
         if let sourceID { return run.entries.filter { $0.sourceID == sourceID } }
@@ -147,6 +152,7 @@ struct SourceRunResultsView: View {
                             Button("All sources in this run") { openRun(run.id, nil) }
                                 .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Pad.penInk)
                         }
+                        if let teaching { TaughtLink(morning: teaching.morning, open: teaching.openLessons) }
                     }
                     Spacer(minLength: 8)
                     if isRunning {
@@ -164,7 +170,8 @@ struct SourceRunResultsView: View {
                 ForEach(entries) { entry in
                     SourceResultContent(presentation: SourceResultPresentation(entry: entry),
                         collectedAt: entry.readingSnapshot?.collectedAt ?? entry.calendarSnapshot?.collectedAt,
-                        manageSource: activeSourceIDs.contains(entry.sourceID) ? { manageSource(entry.sourceID) } : nil)
+                        manageSource: activeSourceIDs.contains(entry.sourceID) ? { manageSource(entry.sourceID) } : nil,
+                        teaching: teaching)
                     if entry.id != entries.last?.id { Divider().padding(.vertical, 6) }
                 }
             }.padding(23)
@@ -241,6 +248,7 @@ struct SourceResultContent: View {
     let presentation: SourceResultPresentation
     var collectedAt: Date? = nil
     var manageSource: (() -> Void)? = nil
+    var teaching: RunTeaching? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
@@ -266,7 +274,14 @@ struct SourceResultContent: View {
             } else {
                 Text("\(presentation.items.count) \(presentation.items.count == 1 ? "finding" : "findings")")
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(Pad.inkSoft)
-                ForEach(presentation.items) { SourceResultItemCard(item: $0) }
+                ForEach(presentation.items) { item in
+                    SourceResultItemCard(item: item, teaching: teaching.flatMap { teaching in
+                        item.key.map { key in
+                            (teaching, LessonFacts(key: key, sourceID: presentation.sourceID, sourceName: presentation.title,
+                                                   title: item.title, from: item.from))
+                        }
+                    })
+                }
             }
             if !presentation.calendarFacts.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
@@ -307,6 +322,8 @@ struct SourceResultContent: View {
 
 private struct SourceResultItemCard: View {
     let item: SourceResultPresentation.Item
+    /// Where marking it "Matters to me" teaches, and what the lesson is about; nil when it can't be taught.
+    var teaching: (RunTeaching, LessonFacts)? = nil
     @State private var expanded = false
 
     var body: some View {
@@ -320,6 +337,9 @@ private struct SourceResultItemCard: View {
                 }
                 if readingHTTPURL(item.url), let url = URL(string: item.url) { Link("Open original", destination: url) }
             }.font(.system(size: 11)).foregroundStyle(Pad.penInk)
+            if let (teaching, facts) = teaching {
+                ResultItemTeaching(morning: teaching.morning, attention: teaching.attention, facts: facts).padding(.top, 2)
+            }
         }.frame(maxWidth: .infinity, alignment: .leading).padding(15)
             .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 9))
             .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Pad.tabEdge.opacity(0.35)))

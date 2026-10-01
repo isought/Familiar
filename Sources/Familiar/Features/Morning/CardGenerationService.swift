@@ -126,7 +126,7 @@ final class CardGenerationService: ObservableObject {
             let earlier = morning.workspace.judgments == nil ? sortedBefore() : nil
             let now = Date()
             let judged = earlier ?? (morning.workspace.judgments ?? [:]).filter { $0.value.isCurrent(at: now) }.mapValues(\.revision)
-            var proposals: [CardProposal] = []
+            var proposals: [CardProposal] = [], lessons: Set<String> = []
             let batches = input.candidateBatches(judged: judged)
             for (index, observations) in batches.enumerated() {
                 try Task.checkCancellation()
@@ -138,6 +138,7 @@ final class CardGenerationService: ObservableObject {
                 status = "Preparing cards from saved observations" + label + "…"
                 let submission = CardGenerationSubmission(observations: observations, rules: input.rules)
                 let plan = try submission.plan(morning: morning)
+                lessons.formUnion(submission.lessonKeys)
                 let result = try await task.run(plan, client: client, onStatus: { [weak self] in self?.status = $0 })
                 elapsed = result.elapsed
                 switch result.outcome {
@@ -164,7 +165,8 @@ final class CardGenerationService: ObservableObject {
             // Everything this step read counts as judged now, fresh or known; a first step also keeps what was sorted before.
             let revisions = (earlier ?? [:]).merging(input.revisions.filter { keys.contains($0.key) }) { _, current in current }
             var summary = try morning.applyCardGeneration(observations: observations,
-                proposals: proposals.filter { keys.contains($0.observationKey) }, runIDs: input.runIDs, judged: revisions, at: Date())
+                proposals: proposals.filter { keys.contains($0.observationKey) }, runIDs: input.runIDs, judged: revisions,
+                lessons: lessons.count, at: Date())
             summary.sent = Set(batches.joined().map(\.id)).count
             summary.alreadySorted = Set(observations.filter { input.isJudged($0, in: judged) }.map(\.id)).count
             onSorted?(observations, input.runIDs)

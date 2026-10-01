@@ -3,7 +3,7 @@ import SwiftUI
 @MainActor final class MorningNavigation: ObservableObject {
     enum Route: Equatable {
         case folders, folder(UUID), card(UUID), people, person(UUID), editPerson(UUID?), editCard(UUID?), editFolder(UUID?), sources
-        case sourceRuns, sourceRun(runID: UUID, sourceID: UUID?), latestRun
+        case sourceRuns, sourceRun(runID: UUID, sourceID: UUID?), latestRun, lessons
         case attention(AttentionScreen)
     }
     @Published var route: Route = .folders
@@ -163,6 +163,7 @@ struct MorningFilesView: View {
         case .sourceRuns: return "Run history"
         case .sourceRun: return "Collected results"
         case .latestRun: return "Latest run"
+        case .lessons: return "What you’ve taught"
         case .attention(let screen): return screen.heading
         case .folder(let id): return store.folders.first { $0.id == id }?.name ?? "Folder"
         case .card: return "On your desk"
@@ -191,12 +192,14 @@ struct MorningFilesView: View {
         case .sourceRun(let runID, let sourceID):
             if let calendarSources, let calendarRunner {
                 SourceRunResultsHost(store: calendarSources, runner: calendarRunner, runID: runID, sourceID: sourceID,
-                    openRun: openRun, manageSource: manageSource)
+                    openRun: openRun, manageSource: manageSource, teaching: teaching)
             } else { empty("Run results are unavailable.") }
         case .latestRun:
             if let calendarSources, let calendarRunner {
-                LatestRunHost(store: calendarSources, runner: calendarRunner, openRun: openRun, manageSource: manageSource)
+                LatestRunHost(store: calendarSources, runner: calendarRunner, openRun: openRun, manageSource: manageSource,
+                              teaching: teaching)
             } else { empty("Run results are unavailable.") }
+        case .lessons: LessonsView(morning: store)
         case .attention(let screen):
             if let attention {
                 AttentionScreenView(ledger: attention, store: store, navigation: navigation, screen: screen,
@@ -572,9 +575,15 @@ struct MorningFilesView: View {
         navigation.calendarSourceID = id
         navigation.route = .sources
     }
+    /// Run results teach through the morning store, and tell the attention test too.
+    private var teaching: RunTeaching {
+        RunTeaching(morning: store, attention: attention, openLessons: { navigation.route = .lessons })
+    }
+
     func back() {
         switch navigation.route {
         case .sourceRun: navigation.route = .sourceRuns
+        case .lessons: navigation.route = .latestRun
         case .card(let id):
             if let card = store.cards.first(where: { $0.id == id }) {
                 navigation.disposition = card.displayDisposition

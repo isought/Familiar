@@ -110,7 +110,7 @@ struct AttentionEvent: Equatable, Identifiable {
         var card: AttentionCardContext
     }
 
-    /// "Should have shown me" on an item that was not shown, or taking that back.
+    /// "Matters to me" on an item that was not shown (once "Should have shown me"), or taking that back.
     struct Miss: Codable, Equatable {
         var key: String
         var retract: Bool
@@ -163,6 +163,12 @@ enum AttentionOpenTrigger: String, Codable, CaseIterable {
 
 /// Where a label was given: on the card, in the rest screen's shown list, or on a row of the rest.
 enum AttentionVia: String, Codable, CaseIterable { case card, shown, rest }
+
+/// What one tap or one explanation taught about an item: a verdict, nil when taken back, or the person's words.
+enum AttentionTeaching: Equatable {
+    case verdict(MorningLesson.Verdict?)
+    case why(String)
+}
 
 enum AttentionEngagement: String, Codable, CaseIterable { case cardOpened = "card_opened" }
 
