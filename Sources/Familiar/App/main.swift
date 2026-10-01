@@ -60,6 +60,29 @@ if CommandLine.arguments.contains("--record-synthetic") {
         exit(0)
     }
     RunLoop.main.run()
+} else if CommandLine.arguments.contains("--read-page") {
+    // What the page reader sees in the browser window nearest the front, for checking it against a real page.
+    Task.detached {
+        if let page = PageReader.readFrontBrowser() {
+            if CommandLine.arguments.contains("--summary") {
+                // Counts only: no text, labels or addresses, so a check never copies what the page says.
+                let kinds = Dictionary(grouping: page.elements, by: \.kind).mapValues(\.count).sorted { $0.key < $1.key }
+                print("\(page.appName): \(page.documents.count) document(s), host \(page.key?.host ?? "none")")
+                print(kinds.map { "\($0.key) \($0.value)" }.joined(separator: " · "))
+                print("with a page id: \(page.elements.filter { $0.domID != nil }.count)")
+            } else {
+                print(page.text(limit: 60_000))
+            }
+            let visible = page.elements.filter(\.visible).count
+            print("\(page.elements.count) things read (\(visible) on screen) in \(Int(page.elapsed * 1_000)) ms"
+                  + (page.truncated ? ", stopped at the budget" : ""))
+        } else {
+            print("No browser window with a page was found, or Accessibility permission isn't granted to the app running this.")
+        }
+        PageReader.restore()
+        exit(0)
+    }
+    RunLoop.main.run()
 } else if CommandLine.arguments.contains("--selftest") {
     Task { @MainActor in
         await runSelfTest()

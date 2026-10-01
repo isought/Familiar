@@ -56,7 +56,9 @@ enum AX {
 final class ContextWatcher {
     private let queue = DispatchQueue(label: "familiar.watcher", qos: .utility)
     private var timer: DispatchSourceTimer?
-    private var urlCache: (key: String, url: String?)?
+    /// Where the front browser window's address was last found: its page, or its address bar. The address itself is
+    /// read again on every tick, so a page that changes its address but not its title is never shown stale.
+    private var urlSource: (window: AXUIElement, element: AXUIElement, attribute: String)?
 
     private let lock = NSLock()
     private var _current: ScreenContext?
@@ -72,6 +74,7 @@ final class ContextWatcher {
     static let browserBundles: Set<String> = [
         "com.apple.Safari", "com.google.Chrome", "com.microsoft.edgemac", "company.thebrowser.Browser",
         "com.brave.Browser", "org.mozilla.firefox", "com.vivaldi.Vivaldi", "com.google.Chrome.canary",
+        "com.operasoftware.Opera",
     ]
 
     func start(interval: TimeInterval) {
@@ -123,15 +126,7 @@ final class ContextWatcher {
             AXUIElementSetMessagingTimeout(axApp, 0.5)
             if let win = AX.element(axApp, kAXFocusedWindowAttribute) {
                 title = AX.string(win, kAXTitleAttribute) ?? ""
-                if ContextWatcher.browserBundles.contains(bundleID) {
-                    let key = bundleID + "|" + title
-                    if let c = urlCache, c.key == key {
-                        url = c.url
-                    } else {
-                        url = Self.browserURL(window: win)
-                        urlCache = (key, url)
-                    }
-                }
+                if ContextWatcher.browserBundles.contains(bundleID) { url = currentURL(window: win) }
             }
             if let el = AX.element(axApp, kAXFocusedUIElementAttribute) {
                 let role = AX.string(el, kAXRoleAttribute) ?? ""
@@ -148,21 +143,36 @@ final class ContextWatcher {
                              url: url, focused: focused, timestamp: Date())
     }
 
+    /// The address the window shows now. Finding where it lives takes a search of the window, done again only when
+    /// the window changes or the page it was found in goes away; reading it is one call.
+    private func currentURL(window: AXUIElement) -> String? {
+        if let doc = AX.string(window, kAXDocumentAttribute), !doc.isEmpty { return doc }
+        if let source = urlSource, CFEqual(source.window, window),
+           let url = AX.string(source.element, source.attribute), !url.isEmpty { return url }
+        urlSource = Self.browserURLSource(window: window).map { (window, $0.element, $0.attribute) }
+        return urlSource.flatMap { AX.string($0.element, $0.attribute) }
+    }
+
     /// The address a browser window shows: its document, web area or address bar.
     static func browserURL(window: AXUIElement) -> String? {
         if let doc = AX.string(window, kAXDocumentAttribute), !doc.isEmpty { return doc }
+        return browserURLSource(window: window).flatMap { AX.string($0.element, $0.attribute) }
+    }
+
+    /// Where a browser window's address can be read: its page's AXURL, else its address bar's value.
+    static func browserURLSource(window: AXUIElement) -> (element: AXUIElement, attribute: String)? {
         var queue = [window]
         var visited = 0
         while !queue.isEmpty && visited < 500 {
             let el = queue.removeFirst()
             visited += 1
             let role = AX.string(el, kAXRoleAttribute)
-            if role == "AXWebArea", let u = AX.string(el, "AXURL"), !u.isEmpty { return u }
+            if role == "AXWebArea", let u = AX.string(el, "AXURL"), !u.isEmpty { return (el, "AXURL") }
             if role == kAXTextFieldRole,
                let desc = (AX.string(el, kAXDescriptionAttribute) ?? AX.string(el, kAXTitleAttribute))?.lowercased(),
                desc.contains("address") || desc.contains("url") || desc.contains("location"),
                let val = AX.string(el, kAXValueAttribute), !val.isEmpty {
-                return val
+                return (el, kAXValueAttribute)
             }
             queue.append(contentsOf: AX.children(el))
         }

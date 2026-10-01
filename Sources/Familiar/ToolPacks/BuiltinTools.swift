@@ -76,6 +76,15 @@ enum BuiltinTools {
 }
 
 enum ScreenText {
+    /// The text of the window in front, read off the main thread: a browser's page through the page reader, which
+    /// reads the page rather than the browser's tabs and toolbars, and anything else as before.
+    static func readFrontmost() async -> ToolResult {
+        await Task.detached(priority: .userInitiated) {
+            let text = PageReader.readFrontmost()?.text() ?? dumpFrontmostWindow()
+            return ToolResult.text(text.isEmpty ? "Nothing readable (is Accessibility permission granted?)" : text)
+        }.value
+    }
+
     /// Depth-first text dump of the frontmost (non-Noteling) app's focused window.
     static func dumpFrontmostWindow(maxNodes: Int = 2000, maxChars: Int = 14_000) -> String {
         guard Permissions.accessibilityGranted else { return "" }

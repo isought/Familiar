@@ -43,6 +43,7 @@ enum ExecutionTools {
                     if name == "read_screen" { return control.readTargetScreen() }
                 }
                 if name == "look_at_screen" { return await lookAtScreen() }
+                if name == "read_screen" { return await ScreenText.readFrontmost() }
                 return BuiltinTools.execute(name, input, root: root)
             })
         }

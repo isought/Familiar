@@ -102,10 +102,10 @@ final class WatchRecorder {
     /// in editors, chat apps and the like typing is noted but the text withheld.
     static let recordedRoles: Set<String> = ["AXTextField", "AXComboBox", "AXSearchField"]
     /// Field names that mean the value is a secret, whatever the subrole says.
-    static let secretPattern = try! NSRegularExpression(
+    nonisolated static let secretPattern = try! NSRegularExpression(
         pattern: #"(?i)\b(pass(word|code|phrase)?|pwd|pin|otp|mfa|2fa|secret|token|api[ _-]?key|key|cvv|cvc|ssn|credential)s?\b"#)
 
-    static func looksSecret(_ s: String?) -> Bool {
+    nonisolated static func looksSecret(_ s: String?) -> Bool {
         guard let s, !s.isEmpty else { return false }
         return secretPattern.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
     }

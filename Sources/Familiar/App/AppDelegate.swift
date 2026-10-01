@@ -484,6 +484,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Quitting mid-recording leaves nothing behind: the unfinished recording and any draft still under review go.
     func applicationWillTerminate(_ notification: Notification) {
+        PageReader.restore()
         MainThreadDiagnostics.shared.stop()
         cardGeneration?.stop()
         origami.cancel()
