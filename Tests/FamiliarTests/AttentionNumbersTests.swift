@@ -185,8 +185,7 @@ struct AttentionNumbersTests {
         events.append(sorted(Self.at("2026-09-30", "20:00"), keys: (0..<15).map { "e\($0)" }))
         #expect(!measure(events, now: evening).day("2026-09-30").restChecked)
         #expect(measure(events, now: evening).line?.text == "Read 58 → showed 7 · you said yes to 0 · 51 in the rest")
-        #expect(measure(events, now: evening).week?.missed.verdict == .notMeasured
-                && measure(events, now: evening).week?.total.daysChecked == 0)
+        #expect(measure(events, now: evening).week?.total.daysChecked == 0)
         events.append(restViewed("2026-09-30", reachedEnd: true, at: Self.at("2026-09-30", "20:30")))
         #expect(measure(events, now: evening).line?.text == "Read 58 → showed 7 · you said yes to 0 · 0 missed")
 
@@ -228,23 +227,22 @@ struct AttentionNumbersTests {
         #expect(week?.total == .init(read: 290, shown: 38, yesTapped: 7, yesGuessed: 18, no: 3, missed: 0, cutOff: 0,
             tapped: 8, guessed: 20, strong: 1, explained: 1, daysSoFar: 7, daysRead: 7, daysChecked: 7, daysOpened: 5))
         #expect(week?.showed == .init(verdict: .pass, text: "Showed 13% of what was read", bar: "at most 20%"))
-        #expect(week?.missed == .init(verdict: .pass, text: "Missed 0 of 25 worth-it", bar: "under 1%"))
+        #expect(week?.missed == "Missed 0 of 25 worth-it")
         #expect(week?.opened == .init(verdict: .pass, text: "Opened on 5 days", bar: "5 of 7"))
         #expect(week?.overall == "PASS")
         #expect(week?.power == "0 of 25 can't rule out a true miss rate up to 12% (95%)")
         #expect(week?.labels == "8 tapped (1 strong, 1 explained) · 20 guessed · 0 cut off")
         #expect(week?.days.map { $0.firstOpen != nil } == [true, true, false, true, false, true, true])
 
-        // One miss in a normal week fails, whichever day it was tapped.
+        // A miss is counted, on the day its message was read, but it is not part of the pass bar.
         let missed = measure(fixtureWeek() + [miss("d1m38", at: Self.at("2026-09-30", "21:30"))], now: final).week
-        #expect(missed?.missed == .init(verdict: .fail, text: "Missed 1 of 26 worth-it", bar: "under 1%"))
-        #expect(missed?.overall == "FAIL" && missed?.power == nil && missed?.days[1].missed == 1)
+        #expect(missed?.missed == "Missed 1 of 26 worth-it")
+        #expect(missed?.overall == "PASS" && missed?.power == nil && missed?.days[1].missed == 1)
 
-        // A day whose rest nobody looked through leaves the bar pending.
+        // Neither is a day whose rest nobody looked through.
         let unchecked = measure(fixtureWeek().filter { !Self.isRestView($0, of: "2026-09-28") }, now: final).week
-        #expect(unchecked?.missed == .init(verdict: .pending("check the rest for Mon"),
-                                           text: "Missed 0 of 25 worth-it · check the rest for Mon", bar: "under 1%"))
-        #expect(unchecked?.overall == "Day 7 of 7" && unchecked?.total.daysChecked == 6)
+        #expect(unchecked?.missed == "Missed 0 of 25 worth-it")
+        #expect(unchecked?.overall == "PASS" && unchecked?.total.daysChecked == 6)
 
         // Four days opened fail on the last day.
         let fourDays: [String: AttentionOpenTrigger] = ["2026-09-24": .launcher, "2026-09-25": .launcher, "2026-09-27": .launcher, "2026-09-30": .menu]
@@ -263,19 +261,16 @@ struct AttentionNumbersTests {
         let openedEarly: [String: AttentionOpenTrigger] = ["2026-09-24": .launcher, "2026-09-25": .launcher, "2026-09-27": .launcher,
                                                            "2026-09-28": .menu, "2026-09-29": .menu]
         let beforeRead = measure(fixtureWeek(opens: openedEarly), now: Self.at("2026-09-30", "07:00")).week
-        #expect(beforeRead?.showed.verdict == .onTrack && beforeRead?.missed.verdict == .onTrack && beforeRead?.opened.verdict == .pass)
+        #expect(beforeRead?.showed.verdict == .onTrack && beforeRead?.opened.verdict == .pass)
         #expect(beforeRead?.overall == "Day 7 of 7")
         #expect(measure(fixtureWeek(opens: openedEarly), now: final).week?.overall == "PASS")
 
-        // Day 3 is on track, not a pass; Saturday's rest is looked through on Sunday, so it is still pending.
+        // Day 3 is on track, not a pass.
         let saturday = Self.at("2026-09-26", "22:00")
         let third = measure(fixtureWeek(), now: saturday).week
         #expect(third?.title == "Day 3 of 7 · started Thu Sep 24" && third?.overall == "Day 3 of 7")
         #expect(third?.showed.verdict == .onTrack && third?.opened.verdict == .onTrack)
-        #expect(third?.missed.verdict == .pending("check the rest for Sat"))
         #expect(third?.total.daysSoFar == 3 && third?.days[3].read == 0)   // days to come are empty
-        let checked = measure(fixtureWeek() + [restViewed("2026-09-26", reachedEnd: true, at: Self.at("2026-09-26", "21:00"))], now: saturday)
-        #expect(checked.week?.missed.verdict == .onTrack && checked.week?.overall == "Day 3 of 7")
 
         // Opening fails as soon as 5 days can no longer be reached: 0 opened with 5 days left is on track, with 4 it fails.
         #expect(measure(fixtureWeek(opens: [:]), now: saturday).week?.opened.verdict == .onTrack)
@@ -291,7 +286,7 @@ struct AttentionNumbersTests {
         // Nothing read and nothing worth it are not measured.
         let empty = measure([sorted(Self.at("2026-09-30"), keys: [])], now: final)
         #expect(empty.week?.showed == .init(verdict: .notMeasured, text: "Nothing read yet", bar: "at most 20%"))
-        #expect(empty.week?.missed == .init(verdict: .notMeasured, text: "Missed 0 of 0 worth-it", bar: "under 1%"))
+        #expect(empty.week?.missed == "Missed 0 of 0 worth-it")
         #expect(empty.week?.power == nil && empty.week?.overall == "Day 1 of 7")
         #expect(empty.line?.text == "Read 0 → showed 0 · you said yes to 0 · 0 missed")
         #expect(measure([], now: final).week == nil)

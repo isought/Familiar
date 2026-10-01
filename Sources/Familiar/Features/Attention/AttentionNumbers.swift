@@ -5,8 +5,10 @@ import Foundation
 /// order a miss is likeliest, and the week measured against the pass bar set before the test began. A message counts
 /// once, on the local day a card step first read it. Pure, so every number can be tested without a file.
 struct AttentionNumbers {
-    /// The pass bar: show at most 20% of what was read, miss under 1% of what was worth it, open on 5 of 7 days.
-    static let shownBar = 20, missBar = 1, openedBar = 5, weekDays = 7
+    /// The pass bar: show at most 20% of what was read, and open on 5 of 7 days. Misses are counted but are not part of
+    /// it: a week holds too few worth-it messages to measure a miss rate, and what is worth it differs from person to
+    /// person, so they are a long-term measure of how well Noteling learns what matters to you.
+    static let shownBar = 20, openedBar = 5, weekDays = 7
     /// A read whose window starts more than this after the previous read ended left mail unread.
     static let gapSlack: TimeInterval = 10 * 60
     /// A source not read for longer than this says so.
@@ -104,7 +106,8 @@ struct AttentionNumbers {
         var title: String
         var total: Total
         var showed: Bar
-        var missed: Bar
+        /// "Missed 1 of 26 worth-it": counted, not part of the pass bar.
+        var missed: String
         var opened: Bar
         /// "PASS", "FAIL", or where the test stands, such as "Day 6 of 7".
         var overall: String
@@ -244,32 +247,19 @@ struct AttentionNumbers {
         let showedText = total.read == 0 ? "Nothing read yet" : "Showed \(percent)% of what was read"
 
         let worthIt = total.yes + total.missed
-        let unchecked = days.filter { $0.day <= today && $0.wasRead && !$0.restChecked }.map { weekday($0.day) }
-        let missed: Verdict
-        if worthIt == 0 {
-            missed = .notMeasured
-        } else if total.missed > 0 && total.missed * 100 >= worthIt * Self.missBar {
-            missed = final ? .fail : .offTrack
-        } else if !unchecked.isEmpty {
-            missed = .pending("check the rest for " + unchecked.joined(separator: ", "))
-        } else {
-            missed = final ? .pass : .onTrack
-        }
-        var missedText = "Missed \(total.missed) of \(worthIt) worth-it"
-        if case .pending(let reason) = missed { missedText += " · " + reason }
 
         // Today still counts until it is opened; days to come can all be.
         let stillOpen = days.filter { $0.day >= today && $0.firstOpen == nil }.count
         let opened: Verdict = total.daysOpened >= Self.openedBar ? .pass : total.daysOpened + stillOpen < Self.openedBar ? .fail : .onTrack
 
-        let verdicts = [showed, missed, opened]
+        let verdicts = [showed, opened]
         let overall = verdicts.allSatisfy { $0 == .pass } ? "PASS" : verdicts.contains(.fail) ? "FAIL"
             : rolling ? "Last 7 days" : "Day \(number) of \(Self.weekDays)"
         return Week(days: days, dayNumber: number, startDay: start,
             title: rolling ? "Last 7 days" : "Day \(number) of \(Self.weekDays) · started \(format(start, "EEE MMM d"))",
             total: total,
             showed: Bar(verdict: showed, text: showedText, bar: "at most \(Self.shownBar)%"),
-            missed: Bar(verdict: missed, text: missedText, bar: "under \(Self.missBar)%"),
+            missed: "Missed \(total.missed) of \(worthIt) worth-it",
             opened: Bar(verdict: opened, text: "Opened on \(total.daysOpened) day\(total.daysOpened == 1 ? "" : "s")",
                         bar: "\(Self.openedBar) of \(Self.weekDays)"),
             overall: overall, gaps: gaps(after: noon(first).map { calendar.startOfDay(for: $0) } ?? now),
