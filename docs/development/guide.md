@@ -26,9 +26,11 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    browser is stuck to its page by its page key (so a record is the same page however it was reached, and a site that
    serves every page from one path keeps them apart), and to its control by the page's own id first, then its role and
    label, or a rectangle relative to the window for circled spots; in other apps, by app and window. Nothing is stuck
-   to a password field. When the page or window in front has notes, the bubble holds a small sticky with how many;
-   hovering lists them, and clicking shows them open on the page in an overlay that lets clicks through and goes away
-   at the next click, key or page change. A note whose control isn't on the page is left off rather than placed wrong.
+   to a password field. Nothing about notes stays on screen: arriving where there are notes, the bubble holds up a
+   sticky with how many for a moment (hover it to read them). Press ⌥ Option twice (or click that sticky) to show them
+   open on the page, in an overlay that lets clicks through; press it again, click, scroll, type or change page and
+   they go. Where there are none, a one-line hint says so. A note whose control isn't on screen is left off rather
+   than placed wrong, and the overlay says how many. The shortcut can be turned off in Settings.
 5. **Chat**: double-click the note and type, for questions that have no single thing to point at. A single click just pokes it. The note reacts as it goes:
    curious when you hover, thinking while it works, happy or sad when the answer lands.
    The chat is a pad of sticky notes: each question is a note with the answer written on it (inked in line by line as it

@@ -201,7 +201,32 @@ struct NotesStoreTests {
             StickyNote(id: "t", anchor: NoteAnchor(), kind: "tip", text: "Approval takes 2 days", by: "A", at: "", confirmed: ""),
             StickyNote(id: "w", anchor: NoteAnchor(), kind: "warning", text: "Don't pick Premium", by: "B", at: "", confirmed: ""),
         ]
-        #expect(NotesBadge.summary(notes) == "2 notes here:\n⚠︎ Don't pick Premium\n• Approval takes 2 days\nClick to show them on the page.")
+        #expect(NotesBadge.summary(notes) == "2 notes here:\n⚠︎ Don't pick Premium\n• Approval takes 2 days\nPress ⌥ Option twice, or click here, to show them on the page.")
+    }
+
+    @Test func optionPressedTwiceIsTheShortcut() {
+        /// Feeds a run of Option downs ("d"), ups ("u"), other keys ("k") and Option with ⌘ ("c") at the given times,
+        /// and says when the shortcut fired.
+        func fired(_ steps: [(String, TimeInterval)]) -> [TimeInterval] {
+            var tap = DoubleOptionTap(), out: [TimeInterval] = []
+            for (step, time) in steps {
+                switch step {
+                case "d": if tap.flags(.option, at: time) { out.append(time) }
+                case "u": if tap.flags([], at: time) { out.append(time) }
+                case "c": if tap.flags([.option, .command], at: time) { out.append(time) }
+                default: tap.key()
+                }
+            }
+            return out
+        }
+        #expect(fired([("d", 0), ("u", 0.08), ("d", 0.2), ("u", 0.27)]) == [0.27])            // down, up, twice, quickly
+        #expect(fired([("d", 0), ("u", 0.05), ("d", 0.6), ("u", 0.65)]).isEmpty)              // too slow between taps
+        #expect(fired([("d", 0), ("u", 0.6), ("d", 0.7), ("u", 0.75)]).isEmpty)               // held, not tapped
+        #expect(fired([("d", 0), ("u", 0.05), ("k", 0.07), ("d", 0.1), ("u", 0.15)]).isEmpty) // typing between
+        #expect(fired([("d", 0), ("c", 0.05), ("u", 0.1), ("d", 0.2), ("u", 0.25)]).isEmpty)  // ⌥⌘, not Option alone
+        // A third quick tap starts over rather than firing again.
+        #expect(fired([("d", 0), ("u", 0.05), ("d", 0.1), ("u", 0.15), ("d", 0.2), ("u", 0.25)]) == [0.15])
+        #expect(WandController.noNotes.hasPrefix("No notes here yet"))
     }
 
     // MARK: - Fixtures

@@ -17,6 +17,7 @@ struct Config: Codable {
     var screenshotMode: String = "auto"      // "auto": attach when the question sounds screen-related, else the model may look; "always"; "never"
     var screenshotReuseSeconds: Double = 0   // >0: reuse the last screenshot for follow-ups on the same screen within this window
     var hideFromScreenShare: Bool = false    // true = bubble invisible in screenshots, screen shares and recordings
+    var notesShortcut: Bool = true           // press Option twice to show or hide the notes on the screen in front
     var toolsDir: String = ""                // empty = ~/.noteling/tools
     var docsStuffLimitChars: Int = 24000
     var uvPath: String = ""                  // empty = bundled uv, then ~/.local/bin, homebrew
@@ -110,6 +111,7 @@ struct Config: Codable {
         screenshotMode = try c.decodeIfPresent(String.self, forKey: .screenshotMode) ?? (attachScreenshotOnText ? d.screenshotMode : "never")
         screenshotReuseSeconds = try c.decodeIfPresent(Double.self, forKey: .screenshotReuseSeconds) ?? d.screenshotReuseSeconds
         hideFromScreenShare = try c.decodeIfPresent(Bool.self, forKey: .hideFromScreenShare) ?? d.hideFromScreenShare
+        notesShortcut = try c.decodeIfPresent(Bool.self, forKey: .notesShortcut) ?? d.notesShortcut
         toolsDir = try c.decodeIfPresent(String.self, forKey: .toolsDir) ?? d.toolsDir
         docsStuffLimitChars = try c.decodeIfPresent(Int.self, forKey: .docsStuffLimitChars) ?? d.docsStuffLimitChars
         uvPath = try c.decodeIfPresent(String.self, forKey: .uvPath) ?? d.uvPath

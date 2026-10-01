@@ -268,6 +268,17 @@ func runRenderPen() {
         try? shownData.write(to: dir.appendingPathComponent("notes-shown.png")); print("wrote notes-shown.png")
     }
 
+    // ⌥ Option twice where there are no notes: a one-line hint, nothing else.
+    shown.removeFromSuperview()
+    let none = WandView(frame: NSRect(origin: .zero, size: size), controller: controller, screen: NSScreen.main ?? NSScreen.screens[0], passive: true)
+    container.addSubview(none)
+    none.showNotice(WandController.noNotes)
+    RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    container.cacheDisplay(in: container.bounds, to: rep)
+    if let noneData = rep.representation(using: .png, properties: [:]) {
+        try? noneData.write(to: dir.appendingPathComponent("notes-none.png")); print("wrote notes-none.png")
+    }
+
     // The bubble holding the badge for the notes on this page.
     let bubble = ZStack(alignment: .topTrailing) {
         MascotView(mood: .idle, size: 64, animated: false).frame(width: 64, height: 64).padding(8)

@@ -80,14 +80,32 @@ struct BubbleView: View {
             Button("Quit Noteling") { NSApp.terminate(nil) }
         }
         .help("Double-click: chat  ·  Hold: pick up the pen  ·  ⌃⌥Space: pen")
+        // A glance, not a badge: arriving where there are notes, the bubble holds up a sticky for a moment, then puts
+        // it away, so nothing stays on screen. ⌥ Option twice shows them.
         .overlay(alignment: .topTrailing) {
-            if !state.notesHere.isEmpty {
+            if glancing, !state.notesHere.isEmpty {
                 NotesBadge(notes: state.notesHere) { state.onShowNotes?() }.padding(.top, 2).padding(.trailing, 2)
+                    .transition(.scale(scale: 0.4, anchor: .bottomLeading).combined(with: .opacity))
             }
         }
+        .onChange(of: state.notesHere.map(\.id)) { _, ids in glance(ids.isEmpty) }
     }
 
     @State private var lastClick: Date?
+    @State private var glancing = false
+    @State private var glanceToken = 0
+
+    /// Holds up the sticky for a moment and puts it away again; a newer page's glance replaces an older one's.
+    private func glance(_ none: Bool) {
+        glanceToken += 1
+        guard !none else { withAnimation(.easeOut(duration: 0.15)) { glancing = false }; return }
+        let token = glanceToken
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { glancing = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            guard token == glanceToken else { return }
+            withAnimation(.easeOut(duration: 0.3)) { glancing = false }
+        }
+    }
 
     /// Single click can reopen the task screen; double click always opens chat for a new instruction.
     private func click() {
@@ -425,6 +443,6 @@ struct NotesBadge: View {
     static func summary(_ notes: [StickyNote]) -> String {
         let shown = notes.sorted { $0.isWarning && !$1.isWarning }.prefix(4).map { ($0.isWarning ? "⚠︎ " : "• ") + String($0.text.prefix(90)) }
         return (["\(notes.count) \(notes.count == 1 ? "note" : "notes") here:"] + shown + (notes.count > 4 ? ["…"] : [])
-            + ["Click to show them on the page."]).joined(separator: "\n")
+            + ["Press ⌥ Option twice, or click here, to show them on the page."]).joined(separator: "\n")
     }
 }

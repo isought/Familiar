@@ -74,7 +74,7 @@ Data already sent to your Claude connection is handled under that provider's ter
 ## Permissions
 
 - **Screen Recording** lets the app see your screen when you ask a question, when you record with Watch Me, and while it works on a task you gave it.
-- **Accessibility** lets it read which app, window and control you are using and record the steps you show it. Only when you turn on control does it also click and type for you.
+- **Accessibility** lets it read which app, window and control you are using and record the steps you show it. Only when you turn on control does it also click and type for you. It also lets Noteling notice ⌥ Option pressed twice, the shortcut that shows your notes: for that it reads only which modifier keys are held and that some other key was pressed, never which one. You can turn the shortcut off in Settings.
 - **Mouse and keyboard control** is off until you turn it on, in Settings or with the hand button on the chat pad.
 
 ## Changes and questions

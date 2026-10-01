@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let shell = ShellState()
     private let wand = WandController()
     private let notesStore = NotesStore()
+    private let notesShortcut = NotesShortcut()
     private let hideHint = HideHint()
     private let origami = OrigamiFlightController()
     private let settings = SettingsWindowController()
@@ -413,6 +414,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if self.wand.isShowingNotes { self.wand.hideNotes() } else { self.wand.showNotes() }
         }
         wand.hideFromScreenShare = config.hideFromScreenShare
+        notesShortcut.onPress = { [weak self] in
+            guard let self, !self.wand.isActive else { return }
+            if self.wand.isShowingNotes { self.wand.hideNotes() } else { self.wand.showNotes() }
+        }
+        if config.notesShortcut { notesShortcut.start() }
     }
 
     private func startWand() {
@@ -688,6 +694,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.control.hideFromScreenShare = self.config.hideFromScreenShare
             self.control.preciseClicks = self.config.backgroundPreciseClicks
             self.control.virtualDisplayEnabled = self.config.backgroundVirtualDisplay
+            self.wand.hideFromScreenShare = self.config.hideFromScreenShare
+            if self.config.notesShortcut { self.notesShortcut.start() } else { self.notesShortcut.stop() }
             self.morningTasks.wake()
             self.cardGeneration?.start()
             Log.info("settings saved (connection: \(self.config.connectionMode), ready: \(self.assistant.hasConnection), hotkey: \(self.config.hotkey))")

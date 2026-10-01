@@ -94,7 +94,6 @@ final class WandController {
         guard !isActive, !isShowingNotes else { return }
         scene = sceneProvider?()
         sceneNotes = notesProvider?(scene) ?? []
-        guard !sceneNotes.isEmpty else { return }
         scan = nil
         placed = []
         for screen in NSScreen.screens {
@@ -102,6 +101,12 @@ final class WandController {
             if hideFromScreenShare { p.sharingType = .none }
             p.orderFrontRegardless()
             shown.append(p)
+        }
+        guard !sceneNotes.isEmpty else {
+            // Nothing to show: say so briefly where the pointer is, then go.
+            shown.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.wandView?.showNotice(Self.noNotes)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.hideNotes() }
+            return
         }
         // A click, a key or a scroll anywhere puts them away: stickers can't follow a page that moves.
         dismissal = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]) { [weak self] _ in
@@ -153,6 +158,8 @@ final class WandController {
             refreshStickers()
         }
     }
+
+    static let noNotes = "No notes here yet. Pick up the pen and right-click a button to leave one."
 
     /// What the overlay says when some notes have nothing on screen to stick to.
     static func notice(unplaced count: Int) -> String? {
