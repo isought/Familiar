@@ -34,7 +34,7 @@ There is one report per stall episode, one sampler at a time, and a bounded samp
 timeout. Process suspension gaps restart the detector rather than reporting sleep
 as a UI freeze. Recovery is recorded when the heartbeat completes.
 
-Files live under `~/.noteling/diagnostics/main-thread/` (respecting `FAMILIAR_HOME`):
+Files live under `~/.noteling/diagnostics/main-thread/` (respecting `NOTELING_HOME`, or the older `FAMILIAR_HOME`):
 
 - `events.jsonl`: typed phases, counts, stall/recovery events, and report names.
 - `events.previous.jsonl`: one rotated 256 KB metadata log.
@@ -54,7 +54,7 @@ by its parent. Its passing result is not proof that the live freeze is fixed.
 
 After a debug build, `--probe-main-thread-diagnostics` deliberately blocks an
 isolated main thread, then verifies a stall, recovery, and real saved process sample.
-Run it with a temporary `FAMILIAR_HOME`, never the user's live home. The debug
+Run it with a temporary `NOTELING_HOME`, never the user's live home. The debug
 `--probe-chat-layout` also accepts `FAMILIAR_BUBBLE_LAYOUT_FIXTURE` and optionally
 `FAMILIAR_LAYOUT_ONSCREEN=1` for a normal-level, non-activating on-screen window.
 

@@ -49,7 +49,8 @@ are fictional, labeled, and loaded only on request. They use preparation-only ac
 The workspace is stored through `MorningRepository` in the local SQLite database
 `Config.dir/morning/morning.sqlite` (`~/.noteling/morning/morning.sqlite` normally).
 Existing `workspace.json` data is validated and migrated, keeping the original JSON
-unchanged. `FAMILIAR_HOME` redirects storage for tests and isolated runs. Transactions
+unchanged. `NOTELING_HOME` (or the older `FAMILIAR_HOME`) redirects storage for isolated
+runs; `scripts/test.sh` points it at a fresh temporary folder. Transactions
 commit card decisions, accepted work and generation receipts atomically; files use
 owner-only permissions. An unreadable or unsupported workspace is reported and
 blocked from replacement; it is not treated as an empty workspace.
@@ -105,9 +106,10 @@ not proof that the work has finished.
 
 ## Validation
 
-Run `FAMILIAR_HOME=<temporary-directory> bash scripts/test.sh` for deterministic
-storage and queue tests alongside the existing regression suite. Do not point
-tests at the user's normal Noteling data directory. Build with
+Run `bash scripts/test.sh` for deterministic storage and queue tests alongside the
+existing regression suite. Unless `NOTELING_HOME` is already set, it points
+`NOTELING_HOME` at a fresh temporary folder, so tests never touch the user's normal
+Noteling data directory. Build with
 `bash scripts/build.sh release` and inspect the native folder, editing, filing,
 and task-result surfaces. Live execution checks should use local sample
 preparation or an explicitly authorized target.

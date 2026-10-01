@@ -21,6 +21,32 @@ its action to Noteling. An accepted action becomes an immutable `MorningWorkItem
 snapshot and follows the existing `MorningTaskRunner` and shared executor path.
 See [task execution](task-execution.md).
 
+## Three-part cards and judging each item once
+
+A generated card has three parts. `CardGenerationSubmission` accepts exactly
+`title` (what it is), `meaning` (one sentence on what it means for the person) and 1
+to 3 `options`, best first, each with a title, an instruction and a `prepare` or
+`desktop` mode. The prompt asks for a title of at most 8 words, a meaning of at most
+25 words and option titles of 2 to 6 words; the hard limits are looser (100, 240 and
+60 characters), so a slightly long card is kept rather than failing the batch. The
+first option becomes the card's `action`, the rest its `alternatives`, and `meaning`
+is stored as its rationale. Hand-written notes and older cards without a rationale
+show their summary instead. The original item stays one tap away.
+
+The card step judges each item once. `MorningWorkspace.judgments` keeps a
+`CardJudgment` per observation key: a revision hash and when the item was last seen.
+For mail read through a script, the revision covers the subject, sender and received
+time; for other items, the observation's fingerprint (title, excerpt, link, state).
+Both add the job's meaning and reading rules. So reading, starring or labelling a
+message doesn't make it new, but changing the job's rules does. Only items without a
+current judgment at their revision go to the model; with none left, there is no model
+call. Judged items still refresh the facts on their existing cards, but cannot gain a
+new card. A judgment unseen for 30 days (`CardJudgment.lifetime`) no longer counts and
+is dropped the next time judgments are recorded. In a workspace saved before
+judgments existed, items from runs that already have a receipt count as judged. When
+some items were already judged, the status counts items sorted apart from cards
+changed, for example “Sorted 12 new items: 2 new cards · 30 already sorted.”
+
 ## Identity and continuing state
 
 The continuing identity is the normalized pair of source ID and item key, with one
@@ -94,7 +120,7 @@ normal queue; discussing or adjusting a proposal does not execute it.
 
 `MorningStore` owns validation and domain transactions through `MorningRepository`.
 The current `SQLiteMorningRepository` stores mutable morning state at
-`~/.noteling/morning/morning.sqlite` (under `FAMILIAR_HOME` when redirected). Workspace
+`~/.noteling/morning/morning.sqlite` (under `NOTELING_HOME` when redirected). Workspace
 metadata, card payloads and work-item payloads commit in one SQLite transaction.
 A unique tracking-key column enforces one card per source item. Published state and
 generation receipts change only after the transaction succeeds.
@@ -117,7 +143,8 @@ newer facts, explicit resolution/reopening, human edits and decisions, accepted
 snapshots, queued cancellation, failed-save retry, generation receipts, SQLite
 uniqueness and legacy migration. Generation tests use structured provider fixtures;
 they do not prove the model's editorial choices or a live email client's controls.
-Use isolated `FAMILIAR_HOME` directories for tests and fictional native renders.
+`scripts/test.sh` gives tests a fresh temporary `NOTELING_HOME` unless one is already
+set. Use a temporary `NOTELING_HOME` for fictional native renders too.
 
 The installed release was also checked against existing saved Gmail results: two
 cards were generated, a repeated generation request made no duplicates, and the

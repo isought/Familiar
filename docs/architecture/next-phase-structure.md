@@ -1,5 +1,9 @@
 # Noteling: code structure for the next phase
 
+> **Note, October 1, 2026:** this page is a historical record. The cleanup it describes was merged into main on September 27, 2026 (pull request #2).
+> The planned `FamiliarDay` and `FamiliarPaperUI` modules were never created. Morning cards live in `Sources/Familiar/Features/Morning`, beside `Features/Calendar` (sources, jobs and runs) and `Features/Attention`.
+> The rest of the page is unchanged.
+
 **Status:** Current-workflow ownership and source organization implemented on `codex/modular-cleanup`. Automated and packaging checks are recorded below; live native interaction verification remains a pre-merge review item. Future daily/integration designs remain deferred.
 
 **Basis:** Main checkpoint `9fdba88`, pushed before cleanup on September 26, 2026. It preserves the Claude CLI connection, background execution/ghost cursor/peek, and origami work. Its 84 tests in 13 suites passed. This is a source-and-test assessment, not fresh verification of live desktop interactions.

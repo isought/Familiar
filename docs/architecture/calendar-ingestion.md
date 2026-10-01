@@ -108,6 +108,8 @@ links, account switching, selection, mutation controls, arbitrary typing, keys a
 scripts. A mail source with explicit tracked follow-ups uses the bounded follow-up
 policy, which additionally permits opening matching tracked conversations and
 recognized All Mail/Sent navigation. It does not widen discovery to unrelated mail.
+These policies govern a model reading a window. A job that reads through a script has
+no model in the read and none of these tools; see [script-fed reading jobs](#script-fed-reading-jobs).
 
 Fresh observation is required before structured submission. Changing targets or
 navigating invalidates an earlier observation/submission. The local submission tool
@@ -115,6 +117,31 @@ validates source identity, requested day/time zone, event times and attendance,
 evidence, and coverage. Account/calendar/date evidence is reported with the result;
 the system cannot independently prove every semantic interpretation made from UI
 text or images. Model prose alone never becomes a successful collection.
+
+## Script-fed reading jobs
+
+A reading job can name a tools-folder script instead of a window
+(`LearnedReadingSource.script`, as `pack__script`). A pack offers a script for this by
+listing it under `sources:` in its SKILL.md; the bundled `imap-mail` pack offers
+`today`. Chat creates such a job with `create_source`, without a Watch Me
+demonstration. Manage sources and chat edit its name, meaning and reading rules; its
+account is the one connected in Settings.
+
+`CalendarCollectionRunner` runs the script through the pack's script runner, handing it
+only the secrets its pack lists under `requires:`. There is no window, no model and no
+computer control, so the control setting is not needed; a Claude connection and a free
+desktop task surface still are. `ScriptReading` turns the script's JSON into the run's
+`ReadingSnapshot` without interpretation: every item returned (at most 500), each with
+its `MailFacts`, plus `ScriptReadCounts` (arrived, returned, truncated, the time read
+from, and how many were cut off after the last read). A script `error` is a failed
+entry. Reading rules are not applied during the read; the card step applies them.
+
+`ScriptReadWindow` sets how far back a read goes: to the source's last read that a card
+step sorted, taken from the card step's receipts, plus an hour of overlap, at most 168
+hours. The first read uses the script's 24 hours. It passes `since_hours` and
+`last_read` only to a script that declares them. The mail script returns at most the
+newest 200 messages, opens the mailbox read-only and fetches with `BODY.PEEK`, so a
+read changes nothing in the mailbox.
 
 ## Data and briefing
 
@@ -167,10 +194,11 @@ future implementation phases using the same source/snapshot boundary.
 
 ## Verification
 
-Use `FAMILIAR_HOME=<temporary-directory> bash scripts/test.sh` for model, storage,
-briefing, teaching and execution regressions. Never point deterministic tests at
-the normal data directory. `--render-morning <directory>` renders source and
-briefing UI fixtures alongside the other native Morning Files surfaces.
+Use `bash scripts/test.sh` for model, storage, briefing, teaching and execution
+regressions. Unless `NOTELING_HOME` is already set, it points `NOTELING_HOME` at a
+fresh temporary folder, so deterministic tests never touch the normal data directory.
+`--render-morning <directory>` renders source and briefing UI fixtures alongside the
+other native Morning Files surfaces.
 
 Deterministic tests and fictional renders do not establish live Outlook/Teams/Slack
 compatibility. Validate a taught calendar on two different dates and compare the

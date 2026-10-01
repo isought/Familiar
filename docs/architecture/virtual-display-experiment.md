@@ -1,7 +1,11 @@
 # Virtual background display experiment
 
-The preserved baseline is `codex/background-task-screen` at `33dbd6c`.
-The experiment builds on that baseline in `codex/virtual-background-display`.
+Status: merged into main on September 27, 2026 (pull request #3), as the Settings
+option "Use a separate display for background tasks (experimental)", off by default.
+The code is in `Sources/Familiar/Native/Control/Background/VirtualDisplayWorkspace.swift`
+and the `FamiliarVirtualDisplayBridge` target. It was built on the
+`codex/virtual-background-display` branch from the baseline at `33dbd6c`. The
+verification record below is as written during that work.
 
 ## Question and decision
 

@@ -1,7 +1,10 @@
 # Offscreen input borrowing
 
-Branch: `codex/offscreen-input-borrow`, based on the preserved virtual-display
-version at `338c355` on `codex/virtual-background-display`.
+Status: merged into main on September 27, 2026 (pull request #3). The code is in
+`Sources/Familiar/Native/Control/Background/OffscreenInputBorrow.swift`, driven by
+`ComputerControl.swift`. It was built on the `codex/offscreen-input-borrow` branch, on
+top of the virtual-display version at `338c355`. The verification notes below are as
+recorded during that work.
 
 ## Question
 
