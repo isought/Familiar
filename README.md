@@ -69,7 +69,7 @@ When a job reads your mail through the mail pack, Noteling also runs a one-week 
 
 - Cards from that job have two thumbs: was this worth your notice? Tap a thumb again for “very”. What you already do with a card counts as a pale guess until you tap a thumb. To say why, choose **Let me explain…** in the card’s **⋯** menu.
 - A line in the folder sums up the latest read, such as “Read 42 → showed 5 · you said yes to 3 · 37 in the rest”. Tap it to see **the rest**: everything that was read and didn’t become a card. Mark anything you wanted to see with **Should have shown me**.
-- **This week** puts the days side by side and checks the week against a bar set in advance: show at most 20% of what was read, miss under 1% of what was worth showing, and open the folder on 5 of 7 days.
+- **This week** puts the days side by side and checks the week against a bar set in advance: show at most 20% of what was read, and open the folder on 5 of 7 days. Misses are counted too, but over time rather than in one week: a week holds too few messages that matter to measure them, and what matters is personal.
 
 The test’s record stays on your Mac.
 
