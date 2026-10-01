@@ -56,9 +56,11 @@ enum AX {
 final class ContextWatcher {
     private let queue = DispatchQueue(label: "familiar.watcher", qos: .utility)
     private var timer: DispatchSourceTimer?
-    /// Where the front browser window's address was last found: its page, or its address bar. The address itself is
-    /// read again on every tick, so a page that changes its address but not its title is never shown stale.
-    private var urlSource: (window: AXUIElement, element: AXUIElement, attribute: String)?
+    /// Where the front browser window's address was last found, for that window and title: its page, or its address
+    /// bar. The address itself is read again on every tick, so a page that changes its address but not its title is
+    /// never shown stale; a new title (another tab, another page) finds it again. `sample` runs on the watcher's queue
+    /// and on the main thread, so this is only touched under `lock`.
+    private var urlSource: (window: AXUIElement, title: String, element: AXUIElement, attribute: String, last: String?)?
 
     private let lock = NSLock()
     private var _current: ScreenContext?
@@ -126,7 +128,7 @@ final class ContextWatcher {
             AXUIElementSetMessagingTimeout(axApp, 0.5)
             if let win = AX.element(axApp, kAXFocusedWindowAttribute) {
                 title = AX.string(win, kAXTitleAttribute) ?? ""
-                if ContextWatcher.browserBundles.contains(bundleID) { url = currentURL(window: win) }
+                if ContextWatcher.browserBundles.contains(bundleID) { url = currentURL(window: win, title: title) }
             }
             if let el = AX.element(axApp, kAXFocusedUIElementAttribute) {
                 let role = AX.string(el, kAXRoleAttribute) ?? ""
@@ -145,12 +147,23 @@ final class ContextWatcher {
 
     /// The address the window shows now. Finding where it lives takes a search of the window, done again only when
     /// the window changes or the page it was found in goes away; reading it is one call.
-    private func currentURL(window: AXUIElement) -> String? {
+    private func currentURL(window: AXUIElement, title: String) -> String? {
         if let doc = AX.string(window, kAXDocumentAttribute), !doc.isEmpty { return doc }
-        if let source = urlSource, CFEqual(source.window, window),
-           let url = AX.string(source.element, source.attribute), !url.isEmpty { return url }
-        urlSource = Self.browserURLSource(window: window).map { (window, $0.element, $0.attribute) }
-        return urlSource.flatMap { AX.string($0.element, $0.attribute) }
+        lock.lock()
+        let cached = urlSource
+        lock.unlock()
+        var source = cached.flatMap { CFEqual($0.window, window) && $0.title == title ? $0 : nil }
+        if source == nil {
+            source = Self.browserURLSource(window: window).map { (window, title, $0.element, $0.attribute, nil) }
+        }
+        guard var found = source else { return nil }
+        // While someone types in the address bar its value is what they type, not where the page is.
+        let typing = found.attribute == kAXValueAttribute && AXPageNode(element: found.element).flag(kAXFocusedAttribute) == true
+        if !typing, let url = AX.string(found.element, found.attribute), !url.isEmpty { found.last = url }
+        lock.lock()
+        urlSource = found
+        lock.unlock()
+        return found.last
     }
 
     /// The address a browser window shows: its document, web area or address bar.

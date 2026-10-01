@@ -77,6 +77,90 @@ struct PageReaderTests {
         #expect(!text.contains("hunter2"))
     }
 
+    @Test func theWindowsTabsAreNamed() throws {
+        #expect(try #require(PageWalk.read(window: Self.window(), viewport: Self.viewport)).tabs == ["Onboarding", "Inbox (3)"])
+    }
+
+    @Test func aLinkInsideAHeadingIsStillRead() throws {
+        let heading = FakeNode("AXHeading", ["AXValue": 2], frame: CGRect(x: 0, y: 100, width: 300, height: 30), [
+            FakeNode("AXLink", ["AXURL": "https://desk.example.test/incident.do?sys_id=1"], frame: CGRect(x: 0, y: 100, width: 80, height: 30),
+                     [FakeNode("AXStaticText", ["AXValue": "INC001"])])])
+        let page = FakeNode("AXWebArea", ["AXURL": "https://desk.example.test/list"], frame: Self.viewport, [heading])
+        let elements = try #require(PageWalk.read(window: FakeNode("AXWindow", [:], frame: Self.viewport, [page]), viewport: Self.viewport)).elements
+        #expect(elements.map(\.kind) == ["heading", "link"])   // the link's text names both, and is not read as text
+        #expect(elements.map(\.label) == ["INC001", "INC001"] && elements[1].link == "https://desk.example.test/incident.do?sys_id=1")
+    }
+
+    @Test func thePageIsTheLargestWebPageNotDeveloperToolsOrASidePanel() throws {
+        let tools = FakeNode("AXWebArea", ["AXURL": "devtools://devtools/bundled/devtools_app.html"], frame: CGRect(x: 0, y: 0, width: 1_200, height: 900),
+                             [FakeNode("AXButton", ["AXTitle": "Elements"])])
+        let panel = FakeNode("AXWebArea", ["AXURL": "https://assistant.example.test/panel"], frame: CGRect(x: 900, y: 80, width: 300, height: 820),
+                             [FakeNode("AXButton", ["AXTitle": "Ask"])])
+        let page = FakeNode("AXWebArea", ["AXURL": "https://portal.example.test/"], frame: CGRect(x: 0, y: 80, width: 900, height: 820),
+                            [FakeNode("AXButton", ["AXTitle": "Request"], frame: CGRect(x: 10, y: 100, width: 80, height: 20))])
+        let read = try #require(PageWalk.read(window: FakeNode("AXWindow", [:], frame: Self.viewport, [tools, panel, page]), viewport: Self.viewport))
+        #expect(read.documents.first?.url == "https://portal.example.test/" && read.elements.map(\.label) == ["Request"])
+    }
+
+    @Test func whatIsScrolledUnderTheToolbarIsOffScreen() throws {
+        let page = FakeNode("AXWebArea", ["AXURL": "https://portal.example.test/"], frame: CGRect(x: 0, y: 80, width: 1_200, height: 820), [
+            FakeNode("AXButton", ["AXTitle": "Menu"], frame: CGRect(x: 10, y: 20, width: 80, height: 30)),
+            FakeNode("AXButton", ["AXTitle": "Save"], frame: CGRect(x: 10, y: 300, width: 80, height: 30))])
+        let read = try #require(PageWalk.read(window: FakeNode("AXWindow", [:], frame: Self.viewport, [page]), viewport: Self.viewport))
+        #expect(read.elements.map(\.visible) == [false, true])
+    }
+
+    @Test func aLongMenuStillLeavesTheFormsFrameFound() throws {
+        let menu = FakeNode("AXGroup", [:], (0..<50).map { FakeNode("AXLink", ["AXTitle": "Module \($0)"], frame: CGRect(x: 0, y: 100, width: 100, height: 10)) })
+        let form = FakeNode("AXWebArea", ["AXURL": "https://example.service-now.com/sc_cat_item.do?sys_id=abc123"],
+                            frame: CGRect(x: 200, y: 60, width: 1_000, height: 840), [FakeNode("AXButton", ["AXTitle": "Order now"])])
+        let top = FakeNode("AXWebArea", ["AXURL": "https://example.service-now.com/navpage.do"], frame: Self.viewport, [menu, form])
+        let read = try #require(PageWalk.read(window: FakeNode("AXWindow", [:], frame: Self.viewport, [top]), viewport: Self.viewport,
+                                              budget: .init(elements: 20)))
+        #expect(read.truncated && read.elements.count == 20)
+        #expect(read.documents.count == 2 && PageKey.of(read.documents)?.description == "example.service-now.com/sc_cat_item.do?sys_id=abc123")
+    }
+
+    // MARK: - Secrets
+
+    @Test func secretsStayOffThePage() throws {
+        func field(_ attributes: [String: Any]) -> FakeNode {
+            FakeNode("AXTextField", attributes.merging(["AXValue": "s3cr3t-value"]) { first, _ in first }, frame: CGRect(x: 0, y: 100, width: 100, height: 20))
+        }
+        let page = FakeNode("AXWebArea", ["AXURL": "https://example.test/"], frame: Self.viewport, [
+            FakeNode("AXStaticText", ["AXValue": "API key"], frame: CGRect(x: 0, y: 90, width: 100, height: 10)),
+            field([:]),                                                        // named only by the text beside it
+            field(["AXDOMIdentifier": "user_password"]),
+            field(["AXDOMIdentifier": "apiKeyInput", "AXTitle": "Field"]),
+            field(["AXTitle": "Verification code"]),
+            field(["AXTitle": "Card number"]),
+            FakeNode("AXTextField", ["AXTitle": "Notes", "AXValue": "use sk-abcdefghijklmnopqrstuv"], frame: CGRect(x: 0, y: 100, width: 100, height: 20)),
+            FakeNode("AXTextField", ["AXTitle": "Reference", "AXValue": "4111 1111 1111 1111"], frame: CGRect(x: 0, y: 100, width: 100, height: 20)),
+            FakeNode("AXTextField", ["AXTitle": "Order number", "AXValue": "1234 5678 9012 3456"], frame: CGRect(x: 0, y: 100, width: 100, height: 20)),
+            FakeNode("AXStaticText", ["AXValue": "Your key: ghp_abcdefghijklmnopqrstuvwxyz123456"], frame: CGRect(x: 0, y: 200, width: 100, height: 10)),
+        ])
+        let elements = try #require(PageWalk.read(window: FakeNode("AXWindow", [:], frame: Self.viewport, [page]), viewport: Self.viewport)).elements
+        #expect(elements.filter { $0.kind == "text field" }.map(\.value) == [nil, nil, nil, nil, nil, nil, nil, "1234 5678 9012 3456"])
+        #expect(elements.last?.label == "(hidden: looks like a secret)")
+    }
+
+    @Test func secretLooksAndCardNumbers() {
+        #expect(PageWalk.looksLikeSecretValue("AKIAABCDEFGHIJKLMNOP") && PageWalk.looksLikeSecretValue("-----BEGIN RSA PRIVATE KEY-----"))
+        #expect(PageWalk.looksLikeSecretValue("card 4111-1111-1111-1111 on file") && PageWalk.luhn("4111111111111111"))
+        #expect(!PageWalk.looksLikeSecretValue("Order 1234567890123456") && !PageWalk.looksLikeSecretValue("Call 555 0100"))
+        #expect(!PageWalk.looksLikeSecretValue("Request onboarding"))
+        #expect(ScreenText.safeValue("4410", subrole: nil, names: ["Cost center"]))
+        #expect(!ScreenText.safeValue("hunter2", subrole: "AXSecureTextField", names: ["Name"]))
+        #expect(!ScreenText.safeValue("abc", subrole: nil, names: ["", "One-time code"]))
+    }
+
+    @Test func addressesLoseTheirCredentials() {
+        #expect(PageWalk.safeAddress("https://example.test/reset?token=abc&lang=en#step2") == "https://example.test/reset?lang=en")
+        #expect(PageWalk.safeAddress("https://example.test/cb?code=xyz&state=1") == "https://example.test/cb")
+        #expect(PageWalk.safeAddress("https://bucket.example.test/f.pdf?X-Amz-Signature=s&X-Amz-Credential=c&v=2") == "https://bucket.example.test/f.pdf?v=2")
+        #expect(PageWalk.safeAddress("https://example.test/item?id=42") == "https://example.test/item?id=42")
+    }
+
     // MARK: - The page key
 
     @Test func aPageKeyIsItsHostAndPathOnly() {
@@ -105,6 +189,27 @@ struct PageReaderTests {
         #expect(PageKey.of("https://news.example.test/item?id=42")?.description == "news.example.test/item")
     }
 
+    @Test func aServiceNowRecordOnACompanysOwnDomainKeepsItsRecord() {
+        let id = "0123456789abcdef0123456789abcdef"
+        #expect(PageKey.of("https://servicedesk.example.test/incident.do?sys_id=\(id)&sysparm_view=ess")?.description
+                == "servicedesk.example.test/incident.do?sys_id=\(id)")
+        #expect(PageKey.of("https://help.example.test/esc?id=ticket&table=incident&sys_id=\(id)")?.description
+                == "help.example.test/esc?id=ticket&sys_id=\(id)&table=incident")
+        // Encoded twice, the wrapped address still lands on the record.
+        #expect(PageKey.of("https://example.service-now.com/nav_to.do?uri=%252Fincident.do%253Fsys_id%253Dabc")?.description
+                == "example.service-now.com/incident.do?sys_id=abc")
+    }
+
+    @Test func theSamePageWrittenTwoWaysHasOneKey() {
+        #expect(PageKey.of("https://example.test:443/docs/index.html") == PageKey.of("https://example.test/docs/"))
+        #expect(PageKey.of("http://example.test:80/") == PageKey.of("http://example.test/"))
+        #expect(PageKey.of("http://127.0.0.1:4310/")?.description == "127.0.0.1:4310/")
+        // A route after "#/" is a page of its own; a place in the page, or Gmail's #inbox, is not.
+        #expect(PageKey.of("https://app.example.test/#/settings/profile/?tab=2")?.description == "app.example.test/#/settings/profile")
+        #expect(PageKey.of("https://mail.example.test/mail/u/0/#inbox")?.description == "mail.example.test/mail/u/0")
+        #expect(PageKey.of("https://docs.example.test/guide#install") == PageKey.of("https://docs.example.test/guide"))
+    }
+
     @Test func theMainFrameNamesThePageButAnAdDoesNot() {
         let top = PageDocument(url: "https://example.service-now.com/navpage.do", frame: CGRect(x: 0, y: 0, width: 1_000, height: 800))
         let form = PageDocument(url: "https://example.service-now.com/sc_cat_item.do?sys_id=abc123", frame: CGRect(x: 200, y: 60, width: 800, height: 740))
@@ -125,6 +230,8 @@ struct PageReaderTests {
     static func window() -> FakeNode {
         let toolbar = FakeNode("AXToolbar", [:], [FakeNode("AXButton", ["AXDescription": "Back"]), FakeNode("AXButton", ["AXDescription": "New tab"]),
             FakeNode("AXTextField", ["AXDescription": "Address and search bar", "AXValue": "portal.example.test/catalog/onboarding"])])
+        let tabs = FakeNode("AXTabGroup", [:], [FakeNode("AXRadioButton", ["AXTitle": "Onboarding", "AXSubrole": "AXTabButton"]),
+                                                FakeNode("AXRadioButton", ["AXTitle": "Inbox (3)", "AXSubrole": "AXTabButton"])])
         let frame = FakeNode("AXWebArea", ["AXURL": "https://portal.example.test/catalog/onboarding/form"],
                              frame: CGRect(x: 0, y: 80, width: 1_200, height: 800), [
             FakeNode("AXGroup", [:], [FakeNode("AXButton", ["AXTitle": "Submit"], frame: CGRect(x: 40, y: 600, width: 90, height: 30)),
@@ -147,7 +254,7 @@ struct PageReaderTests {
             FakeNode("AXGroup", [:], [FakeNode("AXLink", ["AXTitle": "Terms of use", "AXURL": "https://portal.example.test/terms"],
                                                frame: CGRect(x: 40, y: 2_400, width: 100, height: 18))]),
         ])
-        return FakeNode("AXWindow", ["AXTitle": "Onboarding"], frame: viewport, [toolbar, page])
+        return FakeNode("AXWindow", ["AXTitle": "Onboarding"], frame: viewport, [tabs, toolbar, page])
     }
 }
 

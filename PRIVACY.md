@@ -41,7 +41,7 @@ The attention test measures whether cards show you what matters and leave the re
 
 - your question and the conversation so far;
 - a screenshot of your screen, or of the window a task is working in. This happens when a question is about the screen, and while a task runs;
-- the text and control names that macOS Accessibility exposes in that window;
+- the text and control names that macOS Accessibility exposes in that window. In a web browser that is the page rather than the browser around it, including parts scrolled out of view: its text, headings and controls, what is typed in its fields, the address each link points to, the addresses of frames inside the page, the titles of the window's tabs, and any text you have selected. A password field's value, the value of a field named like a secret, and text that looks like a key or a card number are left out, and addresses lose their fragments and any parameter that can carry a credential, such as a token or a code;
 - the current app, window title and web address, and up to eight you used recently;
 - notes left on the current screen, and the documents and script results of matching tool packs;
 - **Watch Me:**
@@ -60,7 +60,7 @@ The attention test measures whether cards show you what matters and leave the re
 
 - Watch Me recordings are deleted when you keep or discard the draft, when you clear the chat pad, or when you quit. Anything left behind by a crash is deleted after 7 days.
 - The card step's judgments stop counting after 30 days unseen and are then deleted. Lessons stay until you forget them, or until 300 newer ones replace them. Freeze diagnostics keep the five newest samples and the two newest step logs.
-- Everything else stays until you delete it. This includes the activity log, which records the apps, window titles and web addresses you use while the app runs, the actions the app takes and any errors, and each source run's result, including the reader's own explanation when a run saves nothing.
+- Everything else stays until you delete it. This includes the activity log, which records the apps, window titles and web addresses you use while the app runs (including each address a page moves to without changing its title), the actions the app takes and any errors, and each source run's result, including the reader's own explanation when a run saves nothing.
 
 ## Deleting your data
 

@@ -80,7 +80,8 @@ enum ScreenText {
     /// reads the page rather than the browser's tabs and toolbars, and anything else as before.
     static func readFrontmost() async -> ToolResult {
         await Task.detached(priority: .userInitiated) {
-            let text = PageReader.readFrontmost()?.text() ?? dumpFrontmostWindow()
+            let page = PageReader.readFrontmost().flatMap { $0.elements.isEmpty && $0.sheet == nil ? nil : $0 }
+            let text = page?.text() ?? dumpFrontmostWindow()
             return ToolResult.text(text.isEmpty ? "Nothing readable (is Accessibility permission granted?)" : text)
         }.value
     }
@@ -110,7 +111,10 @@ enum ScreenText {
             } else {
                 let title = AX.string(el, kAXTitleAttribute) ?? ""
                 let desc = AX.string(el, kAXDescriptionAttribute) ?? ""
-                let value = AX.string(el, kAXValueAttribute) ?? ""
+                var value = AX.string(el, kAXValueAttribute) ?? ""
+                if !value.isEmpty, !safeValue(value, subrole: AX.string(el, kAXSubroleAttribute), names: [title, desc, AX.string(el, kAXPlaceholderValueAttribute) ?? ""]) {
+                    value = "(hidden)"
+                }
                 let text = [title, desc, value].filter { !$0.isEmpty }.joined(separator: " | ")
                 if !text.isEmpty {
                     let short = role.replacingOccurrences(of: "AX", with: "")
@@ -123,5 +127,11 @@ enum ScreenText {
         }
         if visited >= maxNodes || out.count >= maxChars { out += "…(truncated)\n" }
         return out
+    }
+
+    /// Whether an element's value may be read out: not a password field's, one named like a secret, or a value that
+    /// looks like a key or a card number.
+    static func safeValue(_ value: String, subrole: String?, names: [String]) -> Bool {
+        subrole != "AXSecureTextField" && !names.contains(where: { WatchRecorder.looksSecret($0) }) && !PageWalk.looksLikeSecretValue(value)
     }
 }

@@ -103,7 +103,7 @@ final class WatchRecorder {
     static let recordedRoles: Set<String> = ["AXTextField", "AXComboBox", "AXSearchField"]
     /// Field names that mean the value is a secret, whatever the subrole says.
     nonisolated static let secretPattern = try! NSRegularExpression(
-        pattern: #"(?i)\b(pass(word|code|phrase)?|pwd|pin|otp|mfa|2fa|secret|token|api[ _-]?key|key|cvv|cvc|ssn|credential)s?\b"#)
+        pattern: #"(?i)\b(pass(word|code|phrase)?|pwd|pin|otp|mfa|2fa|secret|token|api[ _-]?key|key|cvv|cvc|ssn|credential|(security|verification|one[ -]?time|authenticat(ion|or)|recovery|backup) codes?|card ?numbers?|account ?numbers?|routing|iban|social security|(recovery|seed) phrases?)s?\b"#)
 
     nonisolated static func looksSecret(_ s: String?) -> Bool {
         guard let s, !s.isEmpty else { return false }

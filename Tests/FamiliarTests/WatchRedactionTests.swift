@@ -29,7 +29,8 @@ struct WatchRedactionTests {
         #expect(field(subrole: "AXSecureTextField") == .hidden(why: "password field"))
     }
 
-    @Test(arguments: ["Password", "Passcode", "API key", "One-time code (OTP)", "PIN", "CVV", "Recovery tokens", "Client secret", "SSN"])
+    @Test(arguments: ["Password", "Passcode", "API key", "One-time code (OTP)", "PIN", "CVV", "Recovery tokens", "Client secret", "SSN",
+                      "Verification code", "Card number", "Account number", "Routing number", "IBAN", "Social Security number", "Seed phrase"])
     func aFieldNamedLikeASecretIsHidden(name: String) {
         #expect(field(title: name) == .hidden(why: "password field"))
         #expect(field(description: name) == .hidden(why: "password field"))
