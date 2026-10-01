@@ -110,7 +110,14 @@ struct NoteAnchor: Codable, Equatable {
     }
 }
 
-/// One sticky note, kept in the pack's `notes.json`.
+/// A script from the tools folder that tests what a note claims, run as the person who reads the note: the note
+/// "you need role Y" with a script that reads your roles. Its fixed arguments go to the script as they are.
+struct NoteCheck: Codable, Equatable {
+    var script: String                    // the tool id, "pack__script"
+    var args: [String: String]? = nil
+}
+
+/// One sticky note, kept one file each in the notes store (once in a pack's `notes.json`).
 struct StickyNote: Codable, Identifiable, Equatable {
     var id: String
     var anchor: NoteAnchor
@@ -119,9 +126,40 @@ struct StickyNote: Codable, Identifiable, Equatable {
     var by: String
     var at: String            // yyyy-MM-dd
     var confirmed: String     // yyyy-MM-dd, last time someone said it still holds
+    var check: NoteCheck? = nil
 
     var isWarning: Bool { kind == "warning" }
     var byline: String { "\(by) · \(confirmed)" }
+
+    /// No one has said it still holds for this long: it may be out of date, and says so.
+    static let oldAfterDays = 90
+
+    /// Whole days since someone last said it holds, or nil when the date can't be read.
+    func daysSinceConfirmed(at now: Date = Date()) -> Int? {
+        guard let date = NoteStore.day.date(from: confirmed) else { return nil }
+        return max(0, Calendar(identifier: .gregorian).dateComponents([.day], from: date, to: now).day ?? 0)
+    }
+
+    func isOld(at now: Date = Date()) -> Bool { (daysSinceConfirmed(at: now) ?? 0) > Self.oldAfterDays }
+
+    /// "confirmed today", "confirmed 3 days ago", "confirmed 2 wk ago", "confirmed 8 mo ago".
+    func confirmedWords(at now: Date = Date()) -> String {
+        guard let days = daysSinceConfirmed(at: now) else { return "confirmed \(confirmed)" }
+        switch days {
+        case 0: return "confirmed today"
+        case 1: return "confirmed yesterday"
+        case ..<14: return "confirmed \(days) days ago"
+        case ..<60: return "confirmed \(days / 7) wk ago"
+        case ..<730: return "confirmed \(days / 30) mo ago"
+        default: return "confirmed \(days / 365) yr ago"
+        }
+    }
+
+    /// How the pad and the model see who said it: "PEOPLE SAY · Ana · confirmed 3 days ago", and, when old,
+    /// "· no one since in 8 months".
+    func peopleSay(at now: Date = Date()) -> String {
+        "PEOPLE SAY · \(by) · \(confirmedWords(at: now))" + (isOld(at: now) ? " · may be out of date" : "")
+    }
 }
 
 /// What the pen hands over when a note is written: enough to build a `StickyNote`, and the frame to stick it at.
@@ -131,6 +169,7 @@ struct NoteDraft {
     var kind: String
     var text: String
     var frame: NSRect          // where the sticker goes on screen, AppKit global coordinates
+    var check: NoteCheck? = nil
 }
 
 /// `notes.json` in a pack folder: `{"notes": [...]}`.
@@ -168,7 +207,7 @@ enum NoteStore {
         let when = day.string(from: date)
         return StickyNote(id: d.existingID ?? UUID().uuidString.lowercased(), anchor: d.anchor,
                           kind: d.kind == "warning" ? "warning" : "tip",
-                          text: d.text.trimmingCharacters(in: .whitespacesAndNewlines), by: by, at: when, confirmed: when)
+                          text: d.text.trimmingCharacters(in: .whitespacesAndNewlines), by: by, at: when, confirmed: when, check: d.check)
     }
 
     /// The scene half of an anchor: host and path for a page in a browser, bundle and window for anything else.

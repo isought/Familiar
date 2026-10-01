@@ -84,7 +84,7 @@ struct Note: Identifiable {
             case .assistant:
                 if let i = out.indices.last, !out[i].hasAnswer { out[i].answers.append(m) }
                 else { out.append(Note(id: m.id, heading: nil, answers: [m])) }
-            case .error, .note, .receipt:
+            case .error, .note, .receipt, .check:
                 if let i = out.indices.last { out[i].answers.append(m) }
                 else { out.append(Note(id: m.id, heading: nil, answers: [m])) }
             }
@@ -219,6 +219,14 @@ struct StickyNoteView: View {
             )
             .rotationEffect(.degrees(-0.8))
             .padding(.vertical, 3)
+        case .check:
+            // a note's check, in the script's own words: it holds, it doesn't, or what it found
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: m.holds == true ? "checkmark.seal.fill" : m.holds == false ? "xmark.seal.fill" : "info.circle")
+                    .font(.system(size: 11)).foregroundStyle(m.holds == false ? Pad.redInk : Pad.penInk).padding(.top, 2)
+                Text(m.text).font(.system(size: 12)).foregroundStyle(Pad.ink).textSelection(.enabled)
+            }
+            .padding(.leading, 9).padding(.vertical, 2)
         case .receipt:
             // the last frame of the window a background job worked in, clipped on like a photo, with the tally under it
             VStack(alignment: .leading, spacing: 4) {

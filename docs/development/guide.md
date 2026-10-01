@@ -30,7 +30,14 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    sticky with how many for a moment (hover it to read them). Press ⌥ Option twice (or click that sticky) to show them
    open on the page, in an overlay that lets clicks through; press it again, click, scroll, type or change page and
    they go. Where there are none, a one-line hint says so. A note whose control isn't on screen is left off rather
-   than placed wrong, and the overlay says how many. The shortcut can be turned off in Settings.
+   than placed wrong; up to three show down the window's right edge instead, saying what they are for. The shortcut
+   can be turned off in Settings. Pointing with the pen tells the notes on that control first (each as "PEOPLE SAY ·
+   who · confirmed when", flagged when no one has confirmed it in 90 days), then the page's notes for controls not on
+   screen, before the answer. A note can be linked to a script from the packs for its page ("Check with…" in the note
+   editor, for scripts that take no arguments); pointing at it runs the script as you, within 10 seconds, and shows its
+   own answer as a CHECKED line. The model is told notes are named people's claims with their age, to attribute and
+   not to state as fact. How notes get used is counted in `~/.noteling/usage/notes.jsonl`: counts, kinds and note ids,
+   never words or addresses.
 5. **Chat**: double-click the note and type, for questions that have no single thing to point at. A single click just pokes it. The note reacts as it goes:
    curious when you hover, thinking while it works, happy or sad when the answer lands.
    The chat is a pad of sticky notes: each question is a note with the answer written on it (inked in line by line as it

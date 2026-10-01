@@ -192,7 +192,7 @@ struct NotesStoreTests {
                                            note("below", label: "Archive", domID: "archive")], page: page, primaryMaxY: 1_000)
         // A made-up id and an id two controls share place nothing, and neither does a control below the fold.
         #expect(result.placed.isEmpty && result.missing.map(\.id) == ["generated", "twice", "below"])
-        #expect(WandController.notice(unplaced: 3)?.hasPrefix("3 notes here are for things not on screen") == true)
+        #expect(WandController.notice(unplaced: 3)?.hasPrefix("3 more notes here are for things not on screen") == true)
         #expect(WandController.notice(unplaced: 0) == nil)
     }
 

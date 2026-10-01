@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let wand = WandController()
     private let notesStore = NotesStore()
     private let notesShortcut = NotesShortcut()
+    private let notesUsage = NotesUsageLog()
     private let hideHint = HideHint()
     private let origami = OrigamiFlightController()
     private let settings = SettingsWindowController()
@@ -387,7 +388,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watcher.onChange = { [weak self] ctx in
             guard let self else { return }
             if self.wand.isShowingNotes { self.wand.hideNotes() }   // another page: its notes go with it
-            self.assistant.notesHere = self.registry.notes(for: ctx)
+            let here = self.registry.notes(for: ctx)
+            self.assistant.notesHere = here
+            if !here.isEmpty {
+                self.notesUsage.record("arrive", counts: ["notes": here.count, "warnings": here.filter(\.isWarning).count], notes: here.map(\.id))
+            }
             guard !self.assistant.watching else { return }   // the line reads "Watching…" while recording
             self.assistant.contextLine = ctx.summaryLine
         }
@@ -409,15 +414,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
             self.assistant.notesHere = self.registry.notes(for: self.watcher.current)
         }
-        assistant.onShowNotes = { [weak self] in
-            guard let self else { return }
-            if self.wand.isShowingNotes { self.wand.hideNotes() } else { self.wand.showNotes() }
+        assistant.notesUsage = notesUsage
+        assistant.onShowNotes = { [weak self] in self?.toggleNotes(via: "badge") }
+        wand.checksProvider = { [weak self] ctx in
+            // Scripts of the packs for this scene that need no arguments: what a note's claim can be tested with.
+            guard let self else { return [] }
+            return self.registry.select(for: ctx).active.flatMap { pack in
+                pack.scripts.filter { ($0.inputSchema["required"] as? [String] ?? []).isEmpty }.map { script in
+                    NoteEditor.CheckChoice(script: script.id, title: "\(script.id.components(separatedBy: "__").last ?? script.id) (\(pack.name))")
+                }
+            }
+        }
+        wand.onPlaced = { [weak self] placed, notOnScreen, shown in
+            self?.notesUsage.record("placed", counts: ["placed": placed, "notOnScreen": notOnScreen], tags: ["mode": shown ? "shown" : "pen"])
         }
         wand.hideFromScreenShare = config.hideFromScreenShare
-        notesShortcut.onPress = { [weak self] in
-            guard let self, !self.wand.isActive else { return }
-            if self.wand.isShowingNotes { self.wand.hideNotes() } else { self.wand.showNotes() }
-        }
+        notesShortcut.onPress = { [weak self] in self?.toggleNotes(via: "shortcut") }
         if config.notesShortcut { notesShortcut.start() }
     }
 
@@ -667,6 +679,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if watcher.isRunning { watcher.stop(); assistant.contextLine = "Watcher off" } else { watcher.start(interval: config.watcherIntervalSeconds) }
         config.watcherEnabled = watcher.isRunning
         config.save()
+    }
+
+    /// Shows the notes on the screen in front, or puts them away, and notes how it was asked for.
+    private func toggleNotes(via: String) {
+        guard !wand.isActive else { return }
+        if wand.isShowingNotes {
+            wand.hideNotes()
+            notesUsage.record("hide", tags: ["via": via])
+        } else {
+            notesUsage.record("show", counts: ["notes": assistant.notesHere.count], tags: ["via": via])
+            wand.showNotes()
+        }
     }
 
     @objc private func reloadTools() {

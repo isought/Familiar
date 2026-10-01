@@ -6,13 +6,14 @@ import Foundation
 import SwiftUI
 
 struct ChatMessage: Identifiable {
-    enum Role { case user, wand, assistant, error, draft, learned, note, receipt }   // draft/learned: a note Noteling starts itself (a watched workflow's title), before and after Keep; note: a sticky note someone left on the control; receipt: the last frame of a background job
+    enum Role { case user, wand, assistant, error, draft, learned, note, receipt, check }   // draft/learned: a note Noteling starts itself (a watched workflow's title), before and after Keep; note: a sticky note someone left on the control; receipt: the last frame of a background job
     let id = UUID()
     let role: Role
     let text: String
     var meta: String? = nil        // note: who left it and when
     var warning = false            // note: a warning rather than a tip
     var image: CGImage? = nil      // receipt: the target window when the job ended
+    var holds: Bool? = nil         // check: whether a note's check found its claim holds; nil when it only informs
 }
 
 @MainActor
@@ -37,6 +38,8 @@ final class Assistant: ObservableObject {
     var onCancelWand: (() -> Void)?       // the app drops an active pen before a recording starts
     var onNotesChanged: (() -> Void)?     // a note was kept or removed: the app recounts the badge
     var onShowNotes: (() -> Void)?        // the badge was clicked: the app shows the notes on the page
+    /// Where how notes get used is kept, on this Mac only.
+    var notesUsage: NotesUsageLog?
     var onOpenWatchDraft: ((_ title: String, _ markdown: String) -> Void)?
     var onSetControlLane: ((_ allow: Bool, _ background: Bool) -> Void)?   // the app persists both and reconfigures
     var cardConversation: CardConversation?
@@ -555,12 +558,34 @@ final class Assistant: ObservableObject {
         guard !awaitingPurpose, !awaitingContext else { status = "Finish or discard Watch Me before using the pen."; return }
         shell.expanded = true
         transcript.append(ChatMessage(role: .wand, text: target.shortLabel))
-        for n in target.notes { transcript.append(ChatMessage(role: .note, text: n.text, meta: n.byline, warning: n.isWarning)) }
+        // What people wrote comes first, at once and labelled: on this control, then for things not on screen.
+        for n in target.notes { transcript.append(ChatMessage(role: .note, text: n.text, meta: n.peopleSay(), warning: n.isWarning)) }
+        for n in target.notOnScreen.prefix(5) {
+            transcript.append(ChatMessage(role: .note, text: n.text, meta: "For \(n.anchor.controlSummary), not on your screen · " + n.peopleSay(),
+                                          warning: n.isWarning))
+        }
         let ctx = watcher.sample() ?? watcher.current
         chatBusy = true
         let generation = captureGeneration
+        let checked = (target.notes + target.notOnScreen.prefix(5)).filter { $0.check != nil }
+        notesUsage?.record("pick", counts: ["onTarget": target.notes.count, "notOnScreen": target.notOnScreen.count, "checks": checked.count],
+                           tags: ["kind": target.isRegion ? "circle" : "point"], notes: (target.notes + target.notOnScreen).map(\.id))
 
         Task {
+            // A note's check runs as you, before the answer, each within its time limit; its own words show as CHECKED.
+            var checks: [String: NoteCheckResult] = [:]
+            if !checked.isEmpty {
+                status = "Checking what the notes say…"
+                let checker = NoteChecker(registry: registry)
+                for note in checked {
+                    guard let check = note.check else { continue }
+                    let result = await checker.run(check, context: ctx)
+                    checks[note.id] = result
+                    transcript.append(ChatMessage(role: .check, text: result.line,
+                        holds: result.verdict == .holds ? true : result.verdict == .fails ? false : nil))
+                    notesUsage?.record("check", counts: ["ms": result.milliseconds], tags: ["script": check.script, "result": result.verdict.rawValue], notes: [note.id])
+                }
+            }
             status = "Capturing screen…"
             var content: [[String: Any]] = []
             do {
@@ -596,9 +621,10 @@ final class Assistant: ObservableObject {
                 Log.info("wand: capture failed: \(error.localizedDescription)")
             }
             guard generation == captureGeneration else { finishRequest(); return }
-            let elsewhere = registry.notes(for: ctx).filter { n in !target.notes.contains(n) }
+            let elsewhere = registry.notes(for: ctx).filter { n in !target.notes.contains(n) && !target.notOnScreen.contains(n) }
             let text = Prompt.context(ctx, recent: watcher.history) + packsSection(ctx, notes: false) + "\n"
-                + Prompt.wandInstruction(target: target, ctx: ctx) + Prompt.notes(onTarget: target.notes, elsewhere: elsewhere)
+                + Prompt.wandInstruction(target: target, ctx: ctx)
+                + Prompt.notes(onTarget: target.notes, notOnScreen: Array(target.notOnScreen.prefix(5)), elsewhere: elsewhere, checks: checks)
             content.append(["type": "text", "text": text])
             await send(content: content, ctx: ctx, title: target.shortLabel)
         }
@@ -613,6 +639,7 @@ final class Assistant: ObservableObject {
             do {
                 let place = try await notes.keep(note, appName: ctx?.appName)
                 status = "Note kept"
+                notesUsage?.record("note_kept", tags: ["kind": note.kind, "check": note.check == nil ? "no" : "yes"], notes: [note.id])
                 Log.info("notes: kept \(note.kind) on \(note.anchor.summary) in \(place)")
                 onNotesChanged?()
             } catch {
@@ -623,7 +650,12 @@ final class Assistant: ObservableObject {
     }
 
     func deleteNote(_ id: String) {
-        do { try notes.remove(id); status = "Note removed"; onNotesChanged?() }
+        do {
+            try notes.remove(id)
+            status = "Note removed"
+            notesUsage?.record("note_removed", notes: [id])
+            onNotesChanged?()
+        }
         catch { transcript.append(ChatMessage(role: .error, text: "Could not remove the note: \(error.localizedDescription)")) }
     }
 

@@ -12,6 +12,7 @@ struct WandTarget {
     var region: NSRect? = nil                 // its bounding box
     var regionElements: [AXScan.Item] = []    // labelled controls inside the region, top to bottom
     var notes: [StickyNote] = []              // notes stuck on the element, or inside the region
+    var notOnScreen: [StickyNote] = []        // the scene's notes for controls that aren't on screen, such as a missing button
 
     var isRegion: Bool { region != nil }
 
@@ -41,6 +42,11 @@ final class WandController {
     var author: () -> String = { NSFullUserName() }
     var onNoteSave: ((StickyNote) -> Void)?
     var onNoteDelete: ((String) -> Void)?
+    /// The scripts that could check a note on this scene: the tools folder's, for the packs that match it.
+    var checksProvider: ((ScreenContext?) -> [NoteEditor.CheckChoice]) = { _ in [] }
+    /// Told how many of the scene's notes were placed and how many have nothing on screen, and whether they are shown
+    /// without the pen, for the usage log.
+    var onPlaced: ((_ placed: Int, _ notOnScreen: Int, _ shown: Bool) -> Void)?
 
     struct PlacedNote { let note: StickyNote; let frame: NSRect }
 
@@ -56,8 +62,9 @@ final class WandController {
     private var localDismissal: Any?
     /// Kept out of screenshots and screen sharing, like the rest of Noteling, when the setting says so.
     var hideFromScreenShare = false
-    /// Notes that are on this page but whose control isn't on it now.
+    /// Notes that are on this page but whose control isn't on it now, and where they show instead: at the window's edge.
     private(set) var unplaced: [StickyNote] = []
+    private(set) var edges: [PlacedNote] = []
 
     var isActive: Bool { !panels.isEmpty }
     var isShowingNotes: Bool { !shown.isEmpty }
@@ -69,6 +76,8 @@ final class WandController {
         sceneNotes = notesProvider?(scene) ?? []
         scan = nil
         placed = []
+        edges = []
+        unplaced = []
         for screen in NSScreen.screens {
             let p = WandPanel(screen: screen, controller: self)
             if hideFromScreenShare { p.sharingType = .none }
@@ -96,9 +105,11 @@ final class WandController {
         sceneNotes = notesProvider?(scene) ?? []
         scan = nil
         placed = []
+        edges = []
+        unplaced = []
         for screen in NSScreen.screens {
             let p = WandPanel(screen: screen, controller: self, passive: true)
-            if hideFromScreenShare { p.sharingType = .none }
+            p.sharingType = .none   // notes, colleagues' names and checks: never in a screen share, whatever the bubble's setting
             p.orderFrontRegardless()
             shown.append(p)
         }
@@ -146,26 +157,44 @@ final class WandController {
                 self.placed = result.placed.filter { current.contains($0.note.id) && !savedMeanwhile.contains($0.note.id) }
                     + self.placed.filter { current.contains($0.note.id) }
                 self.unplaced = result.missing.filter { current.contains($0.id) }
+                let window = page.flatMap(\.windowFrame).map { NSRect(x: $0.minX, y: primaryMaxY - $0.maxY, width: $0.width, height: $0.height) }
+                self.edges = window.map { Self.atEdge(self.unplaced, of: $0) } ?? []
                 self.refreshStickers()
-                if self.isShowingNotes, let notice = Self.notice(unplaced: self.unplaced.count) {
+                if self.isShowingNotes, let notice = Self.notice(unplaced: self.unplaced.count - self.edges.count) {
                     self.shown.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.wandView?.showNotice(notice)
                 }
                 Log.info("notes: placed \(result.placed.count) of \(notes.count) on the page")
+                self.onPlaced?(self.placed.count, self.unplaced.count, self.isShowingNotes)
             }
         } else {
-            placed = Self.place(notes, scan: ensureScan())
+            let scan = ensureScan()
+            placed = Self.place(notes, scan: scan)
             unplaced = notes.filter { note in !placed.contains { $0.note.id == note.id } }
+            edges = scan.windowFrame.map { Self.atEdge(unplaced, of: $0) } ?? []
             refreshStickers()
+            onPlaced?(placed.count, unplaced.count, isShowingNotes)
         }
     }
 
     static let noNotes = "No notes here yet. Pick up the pen and right-click a button to leave one."
 
+    /// Notes for controls that aren't on screen (a button this person doesn't have, a field further down), shown down
+    /// the window's right edge instead of nowhere, at most three, each saying what it is for.
+    static let edgeLimit = 3
+    static func atEdge(_ notes: [StickyNote], of window: NSRect) -> [PlacedNote] {
+        notes.prefix(edgeLimit).enumerated().map { index, note in
+            var shown = note
+            shown.text = "Not on your screen: \(note.anchor.controlSummary). " + note.text
+            let spot = NSRect(x: window.maxX - 30, y: window.maxY - 120 - CGFloat(index) * 130, width: 1, height: 1)
+            return PlacedNote(note: shown, frame: spot)
+        }
+    }
+
     /// What the overlay says when some notes have nothing on screen to stick to.
     static func notice(unplaced count: Int) -> String? {
         guard count > 0 else { return nil }
-        return count == 1 ? "1 note here is for something not on screen right now. Hover the bubble’s sticky to read it."
-            : "\(count) notes here are for things not on screen right now. Hover the bubble’s sticky to read them."
+        return count == 1 ? "1 more note here is for something not on screen. Point the pen at the page to hear it."
+            : "\(count) more notes here are for things not on screen. Point the pen at the page to hear them."
     }
 
     /// Notes placed on a page's controls: by the page's own id, then by role and label, then by the spot kept for
@@ -202,6 +231,7 @@ final class WandController {
     func pick(at point: NSPoint) {
         var target = hitTest(at: point)
         target.notes = notes(on: target)
+        target.notOnScreen = unplaced.filter { !target.notes.contains($0) }
         deactivate()
         Log.info("wand: picked \(target.shortLabel) [\(target.element?.label ?? "no element")] in \(target.windowOwner ?? "?"), \(target.notes.count) note(s)")
         onPick?(target)
@@ -212,6 +242,7 @@ final class WandController {
         guard var target = regionTarget(stroke) else { return }
         target.regionElements = elements(in: target.region!)
         target.notes = notes(on: target)
+        target.notOnScreen = unplaced.filter { !target.notes.contains($0) }
         deactivate()
         Log.info("wand: circled \(Int(target.region!.width))x\(Int(target.region!.height)) with \(target.regionElements.count) control(s), \(target.notes.count) note(s)")
         onPick?(target)
@@ -264,15 +295,34 @@ final class WandController {
         return out
     }
 
-    /// Notes stuck on this target: by role and label for a control, by overlap for circled spots and regions.
+    /// Notes stuck on this target, by the same rule that places them on the page: the page's own id first, then role
+    /// and label, and for circled spots and regions, by overlap.
     func notes(on target: WandTarget) -> [StickyNote] {
         if let region = target.region { return placed.filter { $0.frame.intersects(region) }.map(\.note) }
         guard let e = target.element else { return [] }
-        var out = sceneNotes.filter { $0.anchor.matchesElement(role: e.role, label: e.anchorLabel) }
+        var out = sceneNotes.filter { Self.belongs($0, to: e) }
         if let f = e.frame {
-            for p in placed where p.note.anchor.isRegion && p.frame.intersects(f) && !out.contains(p.note) { out.append(p.note) }
+            for p in placed where !out.contains(p.note) && (p.note.anchor.isRegion ? p.frame.intersects(f) : Self.sameControl(p.frame, f)) {
+                out.append(p.note)
+            }
         }
         return out
+    }
+
+    /// A note is this control's when the page's own steady id names it (and the role agrees), else by role and label.
+    static func belongs(_ note: StickyNote, to element: AXElementInfo) -> Bool {
+        let anchor = note.anchor
+        if let id = anchor.domID, NoteAnchor.isSteadyID(id), let mine = element.domID {
+            return id == mine && (anchor.role == nil || anchor.role == element.role)
+        }
+        return anchor.matchesElement(role: element.role, label: element.anchorLabel)
+    }
+
+    /// Two frames are one control when they overlap almost entirely.
+    static func sameControl(_ a: NSRect, _ b: NSRect) -> Bool {
+        let overlap = a.intersection(b)
+        guard !overlap.isNull, a.width * a.height > 0, b.width * b.height > 0 else { return false }
+        return overlap.width * overlap.height >= 0.8 * min(a.width * a.height, b.width * b.height)
     }
 
     /// Where a note on this target would be anchored, or nil when there is nothing to stick it to.
@@ -317,7 +367,7 @@ final class WandController {
     }
 
     private func refreshStickers() {
-        for p in panels + shown { p.wandView?.showStickers(placed.filter { $0.frame.intersects(p.frame) }) }
+        for p in panels + shown { p.wandView?.showStickers((placed + edges).filter { $0.frame.intersects(p.frame) }) }
     }
 
     /// Throttled hit test for hover highlighting.
@@ -616,10 +666,10 @@ final class WandView: NSView {
 
     func present(anchor: NoteAnchor, at frame: NSRect, existing: StickyNote?) {
         editor?.removeFromSuperview()
-        let ed = NoteEditor(existing: existing, place: anchor.controlSummary)
+        let ed = NoteEditor(existing: existing, place: anchor.controlSummary, checks: controller.checksProvider(controller.scene))
         let o = StickerPaper.origin(for: ed.frame.size, control: local(frame), in: bounds)
         ed.frame = NSRect(origin: o, size: ed.frame.size)
-        ed.onCommit = { [weak self] text, kind in self?.finishEditor(text: text, kind: kind) }
+        ed.onCommit = { [weak self] text, kind, check in self?.finishEditor(text: text, kind: kind, check: check) }
         ed.onCancel = { [weak self] in self?.closeEditor() }
         ed.onDelete = { [weak self] in
             guard let self, let ex = self.editing?.existing else { return }
@@ -635,7 +685,7 @@ final class WandView: NSView {
         window?.makeFirstResponder(ed.textView)
     }
 
-    private func finishEditor(text: String, kind: String) {
+    private func finishEditor(text: String, kind: String, check: NoteCheck?) {
         guard let e = editing else { closeEditor(); return }
         var anchor = e.anchor
         if let existing = e.existing?.anchor {
@@ -643,7 +693,7 @@ final class WandView: NSView {
             anchor.page = existing.page; anchor.host = existing.host; anchor.path = existing.path
             anchor.bundle = existing.bundle; anchor.window = existing.window
         }
-        let draft = NoteDraft(existingID: e.existing?.id, anchor: anchor, kind: kind, text: text, frame: e.frame)
+        let draft = NoteDraft(existingID: e.existing?.id, anchor: anchor, kind: kind, text: text, frame: e.frame, check: check)
         let note = controller.save(draft)
         closeEditor()
         flash("Note kept on \(note.anchor.summary)")
@@ -756,19 +806,48 @@ final class NoteEditor: NSView, NSTextViewDelegate {
     private let placeLabel = NSTextField(labelWithString: "")
     private let placeholder = NSTextField(labelWithString: "What should the next person know?")
     private let hint = NSTextField(labelWithString: "⏎ keep · ⇧⏎ line · esc drop")
-    var onCommit: ((String, String) -> Void)?
+    private let checkMenu = NSPopUpButton(frame: .zero, pullsDown: false)
+    private var checks: [CheckChoice] = []
+    private var keptArgs: [String: String]?
+    var onCommit: ((String, String, NoteCheck?) -> Void)?
+
+    /// A script that can check a note: its tool id and how the menu names it.
+    struct CheckChoice: Equatable {
+        var script: String
+        var title: String
+    }
+
+    /// The editor's height: one more row when there are scripts to check the note with.
+    static func height(withChecks: Bool) -> CGFloat { size.height + (withChecks ? 26 : 0) }
+
+    /// Chooses a check by its place in the list, as the menu does.
+    func selectCheck(at index: Int) { checkMenu.selectItem(at: index + 1) }
+
+    /// What the check menu chose; nil for none.
+    var chosenCheck: NoteCheck? {
+        let index = checkMenu.indexOfSelectedItem - 1
+        guard checks.indices.contains(index) else { return nil }
+        return NoteCheck(script: checks[index].script, args: keptArgs)
+    }
     var onCancel: (() -> Void)?
     var onDelete: (() -> Void)?
 
-    init(existing: StickyNote?, place: String) {
-        super.init(frame: NSRect(origin: .zero, size: Self.size))
+    init(existing: StickyNote?, place: String, checks: [CheckChoice] = []) {
+        // A note linked to a script that isn't offered here keeps it as a choice, so editing the text never drops it.
+        var choices = checks
+        if let current = existing?.check, !choices.contains(where: { $0.script == current.script }) {
+            choices.append(CheckChoice(script: current.script, title: current.script.replacingOccurrences(of: "__", with: " · ")))
+        }
+        self.checks = choices
+        self.keptArgs = existing?.check?.args
+        super.init(frame: NSRect(origin: .zero, size: NSSize(width: Self.size.width, height: Self.height(withChecks: !choices.isEmpty))))
         wantsLayer = true
         layer?.backgroundColor = existing?.isWarning == true ? StickerPaper.warning : StickerPaper.tip
         layer?.cornerRadius = 3
         layer?.borderWidth = 0.5
         layer?.borderColor = StickerPaper.edge
         layer?.shadowOpacity = 0.35; layer?.shadowRadius = 5; layer?.shadowOffset = CGSize(width: 0, height: -3)
-        let w = Self.size.width, h = Self.size.height
+        let w = Self.size.width, h = frame.height, bottom: CGFloat = self.checks.isEmpty ? 0 : 26
 
         placeLabel.stringValue = (existing == nil ? "Note on " : "Your note on ") + place
         placeLabel.font = NSFont.systemFont(ofSize: 10.5, weight: .medium)
@@ -786,7 +865,7 @@ final class NoteEditor: NSView, NSTextViewDelegate {
             addSubview(b)
         }
 
-        scroll.frame = NSRect(x: 10, y: 36, width: w - 20, height: h - 62)
+        scroll.frame = NSRect(x: 10, y: 36 + bottom, width: w - 20, height: h - 62 - bottom)
         scroll.borderType = .noBorder
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = false
@@ -819,6 +898,20 @@ final class NoteEditor: NSView, NSTextViewDelegate {
         placeholder.isHidden = !(existing?.text ?? "").isEmpty
         addSubview(placeholder)
 
+        if !self.checks.isEmpty {
+            // Link the note to a script that tests it, run as whoever reads the note.
+            checkMenu.addItem(withTitle: "No check")
+            for choice in self.checks { checkMenu.addItem(withTitle: "Check with " + choice.title) }
+            if let current = existing?.check, let index = self.checks.firstIndex(where: { $0.script == current.script }) {
+                checkMenu.selectItem(at: index + 1)
+            }
+            checkMenu.controlSize = .small
+            checkMenu.font = NSFont.systemFont(ofSize: 11)
+            checkMenu.frame = NSRect(x: 8, y: 32, width: w - 16, height: 22)
+            checkMenu.toolTip = "When someone points at this with the pen, the script runs as them and its answer shows beside the note"
+            addSubview(checkMenu)
+        }
+
         warning.attributedTitle = NSAttributedString(string: "⚠︎ Warning", attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: StickerPaper.ink])
         warning.state = existing?.isWarning == true ? .on : .off
         warning.controlSize = .small
@@ -842,7 +935,7 @@ final class NoteEditor: NSView, NSTextViewDelegate {
 
     func commit() {
         let t = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty { onCancel?() } else { onCommit?(String(t.prefix(600)), warning.state == .on ? "warning" : "tip") }
+        if t.isEmpty { onCancel?() } else { onCommit?(String(t.prefix(600)), warning.state == .on ? "warning" : "tip", chosenCheck) }
     }
 
     @objc private func kindChanged() {

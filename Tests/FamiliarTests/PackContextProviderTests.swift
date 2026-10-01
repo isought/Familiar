@@ -24,7 +24,7 @@ struct PackContextProviderTests {
         #expect(context.sceneNotes.map(\.id) == ["on-scene"])
         #expect(context.promptSection.contains("Active tool pack: Expenses"))
         #expect(context.promptSection.contains("Shared tool pack: Shared"))
-        #expect(context.promptSection.contains("On button “Submit” on expenses.example.test: [warning] Check the total"))
+        #expect(context.promptSection.contains("On button “Submit” on expenses.example.test: [warning] Fixture's note: \"Check the total\""))
         #expect(!context.promptSection.contains("Unrelated note"))
         #expect(!context.promptSection.contains("Other private instructions"))
         #expect(context.promptSection.contains("Expenses needs FIXTURE_EXPENSE_KEY"))
