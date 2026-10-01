@@ -504,13 +504,19 @@ final class Assistant: ObservableObject {
 
         Task {
             var content: [[String: Any]] = []
-            let attach: Bool
-            if cardConversation?.card != nil { attach = false }
-            else {
-                switch config.screenshotMode {
-                case "always": attach = true
-                case "never": attach = false
-                default: attach = Self.soundsScreenRelated(q)
+            let evidence = cardConversation?.card != nil ? ScreenEvidence.none
+                : Self.evidence(for: q, mode: config.screenshotMode, bundleID: ctx?.bundleID)
+            var attach = evidence == .screenshot, page = ""
+            if evidence == .page, let bundle = ctx?.bundleID {
+                status = "Reading the page…"
+                let read = await Task.detached(priority: .userInitiated) { PageReader.read(bundleID: bundle) }.value
+                guard generation == captureGeneration else { finishRequest(); return }
+                if let read, !(read.elements.isEmpty && read.sheet == nil) {
+                    page = Self.pageSection(read)
+                    Log.info("ask: page read attached (\(read.elements.count) things, \(Int(read.elapsed * 1_000)) ms)")
+                } else {
+                    attach = true   // nothing readable, such as a PDF or a canvas: a picture instead
+                    Log.info("ask: page unreadable; screenshot instead")
                 }
             }
             Log.info("ask: screenshot \(attach ? "attached" : "skipped") (mode \(config.screenshotMode))")
@@ -531,7 +537,7 @@ final class Assistant: ObservableObject {
             guard generation == captureGeneration else { finishRequest(); return }
             let context = cardConversation?.card == nil
                 ? Prompt.context(ctx, recent: watcher.history) + packsSection(ctx) + (sourceConversation?.context ?? "") : ""
-            let text = context + "\n## Question\n\(q)\n"
+            let text = context + page + "\n## Question\n\(q)\n"
             content.append(["type": "text", "text": text])
             diagnoseChat(.contextReady)
             await send(content: content, ctx: ctx, title: q, messageID: m.id)
@@ -633,6 +639,40 @@ final class Assistant: ObservableObject {
         status = "Discussing this card"
         diagnoseChat(.chatPanelShown)
         return true
+    }
+
+    /// What a typed question takes from the screen: nothing, the page's text, or a picture. In a browser a question
+    /// about the screen gets the page itself, read through Accessibility, which is exact on small text, numbers and
+    /// links and sends no image; a picture only when the question is about how something looks. Other apps, and the
+    /// "always" setting, keep the picture; "never" takes nothing. The model can always ask for a picture with
+    /// look_at_screen, or for the page with read_screen.
+    enum ScreenEvidence: Equatable { case none, page, screenshot }
+
+    static func evidence(for question: String, mode: String, bundleID: String?) -> ScreenEvidence {
+        switch mode {
+        case "never": return .none
+        case "always": return .screenshot
+        default:
+            guard soundsScreenRelated(question) else { return .none }
+            if let bundleID, ContextWatcher.browserBundles.contains(bundleID), !soundsVisual(question) { return .page }
+            return .screenshot
+        }
+    }
+
+    /// The question is about how something looks, which only a picture shows.
+    static func soundsVisual(_ q: String) -> Bool {
+        let t = " " + q.lowercased().replacingOccurrences(of: "[^a-z0-9' ]", with: " ", options: .regularExpression) + " "
+        let cues = [" look at", " looks ", " look like", " looking ", " colour", " color", " chart", " graph", " plot ", " diagram",
+                    " image", " picture", " photo", " screenshot", " layout", " design", " font", " logo", " icon", " style",
+                    " aligned", " alignment", " overlap", " blurry", " visual", " appearance", " map "]
+        return cues.contains { t.contains($0) }
+    }
+
+    /// The page in front, as the question's context: what it says and what can be clicked, and how to see it instead.
+    static func pageSection(_ page: PageSnapshot) -> String {
+        "\n## The page in front (read through Accessibility, not a picture)\n"
+            + "If the question is about how something looks, call look_at_screen to see it.\n\n"
+            + page.text(limit: 12_000)
     }
 
     /// Cheap intent guess for typed questions: deictic words and UI nouns mean "about the screen".

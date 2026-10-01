@@ -40,7 +40,7 @@ The attention test measures whether cards show you what matters and leave the re
 **What a request can include.** Depending on what you are doing:
 
 - your question and the conversation so far;
-- a screenshot of your screen, or of the window a task is working in. This happens when a question is about the screen, and while a task runs;
+- a screenshot of your screen, or of the window a task is working in. This happens when a question is about the screen, and while a task runs. When a web browser is in front, a typed question about the screen sends the page's text and controls instead (described in the next item), and a screenshot only when the question is about how something looks or the page can't be read;
 - the text and control names that macOS Accessibility exposes in that window. In a web browser that is the page rather than the browser around it, including parts scrolled out of view: its text, headings and controls, what is typed in its fields, the address each link points to, the addresses of frames inside the page, the titles of the window's tabs, and any text you have selected. A password field's value, the value of a field named like a secret, and text that looks like a key or a card number are left out, and addresses lose their fragments and any parameter that can carry a credential, such as a token or a code;
 - the current app, window title and web address, and up to eight you used recently;
 - notes left on the current screen, and the documents and script results of matching tool packs;

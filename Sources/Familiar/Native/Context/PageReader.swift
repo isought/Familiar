@@ -367,6 +367,14 @@ enum PageReader {
         return read(app, budget: budget)
     }
 
+    /// The page in the browser the context watcher last saw in front, by its bundle id: what chat reads, since the
+    /// chat pad itself may be in front while someone types.
+    static func read(bundleID: String, budget: PageWalk.Budget = PageWalk.Budget()) -> PageSnapshot? {
+        guard ContextWatcher.browserBundles.contains(bundleID),
+              let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else { return nil }
+        return read(app, budget: budget)
+    }
+
     /// The page in the browser window nearest the front, whatever app is frontmost: for reading a page from Terminal.
     static func readFrontBrowser(budget: PageWalk.Budget = PageWalk.Budget()) -> PageSnapshot? {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
