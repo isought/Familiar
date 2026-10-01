@@ -10,7 +10,8 @@ The app stores its data in `~/.noteling`, or in `$NOTELING_HOME` if you set it. 
 |---|---|
 | Settings | `config.json` |
 | Pack secrets in developer builds (signed builds use the macOS Keychain instead) | `secrets.json` |
-| Tool packs, and the notes you leave on controls | `tools/` |
+| Tool packs | `tools/` |
+| The notes you leave on pages and controls, one file each: the note, who left it and when, and where it is stuck (the page's address as its key, the control's name and the page's own id for it) | `notes/` |
 | Sources you set up, run history and findings, including everything a script read returned | `calendar/`, `runs/` |
 | Cards, your decisions and context, Who's Who, queued work, what the card step has already judged, and the lessons you teach | `morning/` |
 | Watch Me recordings, only while a draft is being written | `recordings/` |

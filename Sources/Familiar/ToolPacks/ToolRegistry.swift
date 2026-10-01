@@ -118,8 +118,16 @@ final class ToolRegistry {
 
     // MARK: notes
 
-    /// Every note whose anchor is on the current scene, whichever pack keeps it.
+    /// Where notes are kept now; tool packs only hold notes from before it, until they are moved.
+    var notesStore: NotesStore?
+
+    /// Every note whose anchor is on the current scene: the store's, then any still kept in a pack.
     func notes(for ctx: ScreenContext?) -> [StickyNote] {
+        let stored = notesStore?.notes(for: ctx) ?? []
+        return stored + packNotes(for: ctx).filter { note in !stored.contains { $0.id == note.id } }
+    }
+
+    private func packNotes(for ctx: ScreenContext?) -> [StickyNote] {
         guard let ctx else { return [] }
         return packs.flatMap { $0.notes.filter { $0.anchor.matchesScene(ctx) } }
     }

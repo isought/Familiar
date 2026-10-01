@@ -50,24 +50,31 @@ final class WandController {
     private(set) var sceneNotes: [StickyNote] = []
     private(set) var placed: [PlacedNote] = []
     private var scan: AXScan.Result?
+    /// Panels showing notes only, after the badge was clicked, and what puts them away.
+    private var shown: [WandPanel] = []
+    private var dismissal: Any?
+    /// Notes that are on this page but whose control isn't on it now.
+    private(set) var unplaced: [StickyNote] = []
 
     var isActive: Bool { !panels.isEmpty }
+    var isShowingNotes: Bool { !shown.isEmpty }
 
     func activate() {
         guard !isActive else { return }
+        hideNotes()
         scene = sceneProvider?()
         sceneNotes = notesProvider?(scene) ?? []
         scan = nil
-        placed = sceneNotes.isEmpty ? [] : Self.place(sceneNotes, scan: ensureScan())
+        placed = []
         for screen in NSScreen.screens {
             let p = WandPanel(screen: screen, controller: self)
             p.orderFrontRegardless()
             panels.append(p)
-            p.wandView?.showStickers(placed.filter { $0.frame.intersects(screen.frame) })
         }
         panels.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.makeKey()
         WandCursor.cursor.push()
-        Log.info("wand: active, \(sceneNotes.count) note(s) on this scene, \(placed.count) placed")
+        placeStickers()
+        Log.info("wand: active, \(sceneNotes.count) note(s) on this scene")
     }
 
     func deactivate() {
@@ -75,6 +82,80 @@ final class WandController {
         NSCursor.pop()
         for p in panels { p.orderOut(nil) }
         panels.removeAll()
+    }
+
+    /// The notes on the page in front, shown where they are stuck without the pen: open, over the page, letting every
+    /// click through to it. The next click, key or change of page puts them away.
+    func showNotes() {
+        guard !isActive, !isShowingNotes else { return }
+        scene = sceneProvider?()
+        sceneNotes = notesProvider?(scene) ?? []
+        guard !sceneNotes.isEmpty else { return }
+        scan = nil
+        placed = []
+        for screen in NSScreen.screens {
+            let p = WandPanel(screen: screen, controller: self, passive: true)
+            p.orderFrontRegardless()
+            shown.append(p)
+        }
+        dismissal = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.hideNotes() }
+        }
+        placeStickers()
+        Log.info("notes: showing \(sceneNotes.count) note(s) on the page")
+    }
+
+    func hideNotes() {
+        guard isShowingNotes else { return }
+        if let dismissal { NSEvent.removeMonitor(dismissal) }
+        dismissal = nil
+        for p in shown { p.orderOut(nil) }
+        shown.removeAll()
+    }
+
+    /// Puts the scene's notes on their controls: on a web page from the page reader, off the main thread, by the
+    /// page's own id for a control first; in other apps from the window's Accessibility tree.
+    private func placeStickers() {
+        let notes = sceneNotes
+        guard !notes.isEmpty else { return }
+        if let bundle = scene?.bundleID, ContextWatcher.browserBundles.contains(bundle) {
+            let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
+            Task { [weak self] in
+                let page = await Task.detached(priority: .userInitiated) { PageReader.read(bundleID: bundle) }.value
+                guard let self, self.isActive || self.isShowingNotes else { return }
+                let result: (placed: [PlacedNote], missing: [StickyNote]) = page.map { Self.place(notes, page: $0, primaryMaxY: primaryMaxY) } ?? ([], notes)
+                self.placed = result.placed
+                self.unplaced = result.missing
+                self.refreshStickers()
+                Log.info("notes: placed \(result.placed.count) of \(notes.count) on the page")
+            }
+        } else {
+            placed = Self.place(notes, scan: ensureScan())
+            unplaced = notes.filter { note in !placed.contains { $0.note.id == note.id } }
+            refreshStickers()
+        }
+    }
+
+    /// Notes placed on a page's controls: by the page's own id, then by role and label, then by the spot kept for
+    /// controls without a name. A note whose control isn't on the page is left out rather than stuck somewhere wrong.
+    static func place(_ notes: [StickyNote], page: PageSnapshot, primaryMaxY: CGFloat) -> (placed: [PlacedNote], missing: [StickyNote]) {
+        func appKit(_ frame: CGRect) -> NSRect { NSRect(x: frame.minX, y: primaryMaxY - frame.maxY, width: frame.width, height: frame.height) }
+        var placed: [PlacedNote] = [], missing: [StickyNote] = []
+        for note in notes {
+            let anchor = note.anchor
+            var found: CGRect?
+            if let id = anchor.domID { found = page.elements.first { $0.domID == id }?.frame }
+            if found == nil, anchor.label != nil {
+                found = page.elements.first { anchor.matchesElement(role: $0.role, label: $0.label) }?.frame
+            }
+            if found == nil, let window = page.windowFrame, let rect = anchor.rect, rect.count == 4 {
+                found = CGRect(x: window.minX + window.width * rect[0], y: window.minY + window.height * rect[1],
+                               width: window.width * rect[2], height: window.height * rect[3])
+            }
+            if let found, found.width > 0 || found.height > 0 { placed.append(PlacedNote(note: note, frame: appKit(found))) }
+            else { missing.append(note) }
+        }
+        return (placed, missing)
     }
 
     func cancel() {
@@ -171,6 +252,7 @@ final class WandController {
         }
         guard let e = target.element, !e.isSecure else { return nil }
         a.role = e.role
+        if a.page != nil { a.domID = e.domID }
         if let label = e.anchorLabel { a.label = String(label.prefix(120)); return a }
         guard let f = e.frame, let wf = target.windowFrame else { return nil }
         a.rect = NoteAnchor.fractions(of: f, in: wf)
@@ -199,7 +281,7 @@ final class WandController {
     }
 
     private func refreshStickers() {
-        for p in panels { p.wandView?.showStickers(placed.filter { $0.frame.intersects(p.frame) }) }
+        for p in panels + shown { p.wandView?.showStickers(placed.filter { $0.frame.intersects(p.frame) }) }
     }
 
     /// Throttled hit test for hover highlighting.
@@ -219,20 +301,22 @@ final class WandController {
 }
 
 final class WandPanel: NSPanel {
-    init(screen: NSScreen, controller: WandController) {
+    init(screen: NSScreen, controller: WandController, passive: Bool = false) {
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        level = .screenSaver
+        level = passive ? .floating : .screenSaver
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
-        ignoresMouseEvents = false
+        ignoresMouseEvents = passive
         acceptsMouseMovedEvents = true
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
-        contentView = WandView(frame: NSRect(origin: .zero, size: screen.frame.size), controller: controller, screen: screen)
+        contentView = WandView(frame: NSRect(origin: .zero, size: screen.frame.size), controller: controller, screen: screen, passive: passive)
+        self.passive = passive
     }
-    override var canBecomeKey: Bool { true }
+    private var passive = false
+    override var canBecomeKey: Bool { !passive }
     override var canBecomeMain: Bool { false }
     var wandView: WandView? { contentView as? WandView }
 }
@@ -305,9 +389,13 @@ final class WandView: NSView {
         init(note: StickyNote, frame: NSRect) { self.note = note; self.frame = frame }
     }
 
-    init(frame: NSRect, controller: WandController, screen: NSScreen) {
+    /// Showing notes only: no border, no caption, every sticker open, and the mouse goes to the apps underneath.
+    let passive: Bool
+
+    init(frame: NSRect, controller: WandController, screen: NSScreen, passive: Bool = false) {
         self.controller = controller
         self.screen = screen
+        self.passive = passive
         super.init(frame: frame)
         wantsLayer = true
         buildLayers()
@@ -402,6 +490,7 @@ final class WandView: NSView {
     func showStickers(_ placed: [WandController.PlacedNote]) {
         stickers.forEach { $0.layer.removeFromSuperlayer() }
         stickers = placed.map { makeSticker($0.note, at: $0.frame) }
+        if passive { for s in stickers { s.expanded = true; layout(s) } }
     }
 
     private func makeSticker(_ note: StickyNote, at frame: NSRect) -> Sticker {
@@ -572,6 +661,7 @@ final class WandView: NSView {
     private func buildLayers() {
         guard let root = layer else { return }
         let scale = screen.backingScaleFactor
+        if passive { return }
         ShimmerBorder.install(on: root, bounds: bounds, dim: 0.10)
 
         highlight.fillColor = CGColor(gray: 1, alpha: 0.06)

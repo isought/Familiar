@@ -27,12 +27,16 @@ final class Assistant: ObservableObject {
     var watching: Bool { learning.watching }
     var pendingDraft: PackDraft? { learning.pendingDraft }
     @Published var backgroundControl = true   // mirror of config.controlInBackground for the pad's hand button
+    /// The notes on the page or window in front, for the bubble's badge. Set by the app on every scene change.
+    @Published var notesHere: [StickyNote] = []
 
     var config: Config
     let watcher: ContextWatcher
     let registry: ToolRegistry
     var onStartWand: (() -> Void)?
     var onCancelWand: (() -> Void)?       // the app drops an active pen before a recording starts
+    var onNotesChanged: (() -> Void)?     // a note was kept or removed: the app recounts the badge
+    var onShowNotes: (() -> Void)?        // the badge was clicked: the app shows the notes on the page
     var onOpenWatchDraft: ((_ title: String, _ markdown: String) -> Void)?
     var onSetControlLane: ((_ allow: Bool, _ background: Bool) -> Void)?   // the app persists both and reconfigures
     var cardConversation: CardConversation?
@@ -607,9 +611,10 @@ final class Assistant: ObservableObject {
         let ctx = watcher.current ?? watcher.sample()
         Task {
             do {
-                let pack = try await notes.save(note, appName: ctx?.appName)
-                status = "Note kept in \(pack.dirName)/\(NoteStore.fileName)"
-                Log.info("notes: kept \(note.kind) on \(note.anchor.summary) in \(pack.dirName)")
+                let place = try await notes.keep(note, appName: ctx?.appName)
+                status = "Note kept"
+                Log.info("notes: kept \(note.kind) on \(note.anchor.summary) in \(place)")
+                onNotesChanged?()
             } catch {
                 shell.expanded = true
                 transcript.append(ChatMessage(role: .error, text: "Could not keep the note: \(error.localizedDescription)"))
@@ -618,7 +623,7 @@ final class Assistant: ObservableObject {
     }
 
     func deleteNote(_ id: String) {
-        do { try notes.remove(id); status = "Note removed" }
+        do { try notes.remove(id); status = "Note removed"; onNotesChanged?() }
         catch { transcript.append(ChatMessage(role: .error, text: "Could not remove the note: \(error.localizedDescription)")) }
     }
 

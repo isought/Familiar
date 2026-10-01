@@ -46,6 +46,8 @@ struct PageSnapshot {
     var tabs: [String] = []
     /// A sheet open over the page, such as a file picker or a print dialog, as the window's text shows it.
     var sheet: String? = nil
+    /// The browser window, in Accessibility's top-left coordinates.
+    var windowFrame: CGRect? = nil
     /// A budget ran out before the whole page was read.
     var truncated: Bool
     var elapsed: TimeInterval
@@ -405,7 +407,8 @@ enum PageReader {
             .map { ScreenText.dumpWindow($0, appName: app.localizedName ?? bundle, maxNodes: 400, maxChars: 3_000) }
         return PageSnapshot(appName: app.localizedName ?? bundle, bundleID: bundle, windowTitle: AX.string(window, kAXTitleAttribute) ?? "",
                             documents: result.documents, elements: result.elements, selectedText: selectedText(axApp),
-                            tabs: result.tabs, sheet: sheet, truncated: result.truncated, elapsed: Date().timeIntervalSince(started))
+                            tabs: result.tabs, sheet: sheet, windowFrame: node.frame, truncated: result.truncated,
+                            elapsed: Date().timeIntervalSince(started))
     }
 
     /// The text selected in the focused element, unless that element could hold a secret or the text looks like one.

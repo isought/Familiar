@@ -2,12 +2,14 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-/// Where a note is stuck. A scene (a site's host and path, or an app's bundle id and window) plus a control on it
-/// (its Accessibility role and the label shown on screen). Spots without a label, and circled regions, keep a
-/// rectangle relative to the window instead.
+/// Where a note is stuck. A scene (a page, by its key; or, in notes from before page keys, a site's host and path; or
+/// an app's bundle id and window) plus a control on it (the page's own id for it, then its Accessibility role and the
+/// label shown on screen). Spots without a label, and circled regions, keep a rectangle relative to the window instead.
 struct NoteAnchor: Codable, Equatable {
     var host: String? = nil       // "127.0.0.1:4310" for a site (lowercase, with the port when there is one)
     var path: String? = nil       // URL path; nil or "/" means any page on the host
+    var page: PageKey? = nil      // the page, as PageKey names it: when set, the note is on this page only
+    var domID: String? = nil      // the page's own id for the control, found again before its role and label
     var bundle: String? = nil     // bundle id for a native app
     var window: String? = nil     // a window-title fragment for a native app (nil for browsers: page titles change)
     var role: String? = nil       // "AXButton"
@@ -18,7 +20,7 @@ struct NoteAnchor: Codable, Equatable {
 
     /// `button “Save page” on 127.0.0.1:4310`, or `a spot in “Untitled” (com.apple.TextEdit)`.
     var summary: String {
-        let place = host.map { $0 + (path.map { $0 == "/" ? "" : $0 } ?? "") } ?? window.map { "“\($0)”" } ?? bundle ?? "?"
+        let place = page?.description ?? host.map { $0 + (path.map { $0 == "/" ? "" : $0 } ?? "") } ?? window.map { "“\($0)”" } ?? bundle ?? "?"
         if let label { return "\(Self.roleWord(role)) “\(label)” on \(place)" }
         return "a circled spot on \(place)"
     }
@@ -58,7 +60,12 @@ struct NoteAnchor: Codable, Equatable {
         return c.path.isEmpty ? "/" : c.path
     }
 
-    func matchesScene(_ ctx: ScreenContext) -> Bool {
+    func matchesScene(_ ctx: ScreenContext) -> Bool { matchesScene(ctx, page: ctx.url.flatMap(PageKey.of)) }
+
+    /// On this scene: a note with a page key is on that page only, so a site that serves every page from one path
+    /// no longer shows every page's notes everywhere.
+    func matchesScene(_ ctx: ScreenContext, page current: PageKey?) -> Bool {
+        if let page { return page == current }
         if let host {
             guard Self.hostKey(ctx.url) == host.lowercased() else { return false }
             if let path, !path.isEmpty, path != "/" { return Self.pathKey(ctx.url) == path }
@@ -157,6 +164,7 @@ enum NoteStore {
         if let b = bundleID, ContextWatcher.browserBundles.contains(b), let host = NoteAnchor.hostKey(url) {
             a.host = host
             a.path = NoteAnchor.pathKey(url)
+            a.page = url.flatMap(PageKey.of)
         } else {
             a.bundle = bundleID
             let t = windowTitle?.trimmingCharacters(in: .whitespaces) ?? ""

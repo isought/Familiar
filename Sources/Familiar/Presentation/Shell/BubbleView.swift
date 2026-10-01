@@ -80,6 +80,11 @@ struct BubbleView: View {
             Button("Quit Noteling") { NSApp.terminate(nil) }
         }
         .help("Double-click: chat  ·  Hold: pick up the pen  ·  ⌃⌥Space: pen")
+        .overlay(alignment: .topTrailing) {
+            if !state.notesHere.isEmpty {
+                NotesBadge(notes: state.notesHere) { state.onShowNotes?() }.padding(.top, 2).padding(.trailing, 2)
+            }
+        }
     }
 
     @State private var lastClick: Date?
@@ -389,5 +394,37 @@ struct BubbleView: View {
         }
         .font(.caption2).foregroundStyle(Pad.deskInkSoft(dark))
         .padding(.leading, 14).padding(.trailing, 6).padding(.bottom, 6)
+    }
+}
+
+/// Notes on the page in front: a small sticky held by the bubble, with how many. Hovering lists them; clicking shows
+/// them on the page. It never covers the page by itself.
+struct NotesBadge: View {
+    let notes: [StickyNote]
+    let show: () -> Void
+
+    var body: some View {
+        let warning = notes.contains(where: \.isWarning)
+        Text("\(notes.count)")
+            .font(.system(size: 10, weight: .bold)).foregroundStyle(Color(nsColor: StickerPaper.ink))
+            .frame(width: 18, height: 18)
+            .background(RoundedRectangle(cornerRadius: 2.5).fill(Color(cgColor: warning ? StickerPaper.warning : StickerPaper.tip)))
+            .overlay(RoundedRectangle(cornerRadius: 2.5).strokeBorder(Color(cgColor: StickerPaper.edge), lineWidth: 0.7))
+            .rotationEffect(.degrees(7))
+            .shadow(color: .black.opacity(0.18), radius: 1.5, y: 1)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: show)
+            .help(Self.summary(notes))
+            .accessibilityElement()
+            .accessibilityLabel("\(notes.count) \(notes.count == 1 ? "note" : "notes") on this page")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { show() }
+    }
+
+    /// What hovering says: the first few notes, warnings first, and what a click does.
+    static func summary(_ notes: [StickyNote]) -> String {
+        let shown = notes.sorted { $0.isWarning && !$1.isWarning }.prefix(4).map { ($0.isWarning ? "⚠︎ " : "• ") + String($0.text.prefix(90)) }
+        return (["\(notes.count) \(notes.count == 1 ? "note" : "notes") here:"] + shown + (notes.count > 4 ? ["…"] : [])
+            + ["Click to show them on the page."]).joined(separator: "\n")
     }
 }

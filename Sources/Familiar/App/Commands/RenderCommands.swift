@@ -256,5 +256,27 @@ func runRenderPen() {
     guard let data = rep.representation(using: .png, properties: [:]) else { print("encode failed"); exit(1) }
     do { try data.write(to: dir.appendingPathComponent("pen.png")); print("wrote pen.png \(rep.pixelsWide)x\(rep.pixelsHigh)") }
     catch { print("write failed: \(error)"); exit(1) }
+
+    // The same page after the bubble's badge was clicked: the notes open where they are stuck, no border, no caption.
+    view.removeFromSuperview()
+    let shown = WandView(frame: NSRect(origin: .zero, size: size), controller: controller, screen: NSScreen.main ?? NSScreen.screens[0], passive: true)
+    container.addSubview(shown)
+    shown.showStickers([.init(note: n1, frame: controls[2].1), .init(note: n2, frame: controls[4].1)])
+    RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+    container.cacheDisplay(in: container.bounds, to: rep)
+    if let shownData = rep.representation(using: .png, properties: [:]) {
+        try? shownData.write(to: dir.appendingPathComponent("notes-shown.png")); print("wrote notes-shown.png")
+    }
+
+    // The bubble holding the badge for the notes on this page.
+    let bubble = ZStack(alignment: .topTrailing) {
+        MascotView(mood: .idle, size: 64, animated: false).frame(width: 64, height: 64).padding(8)
+        NotesBadge(notes: [n1, n2]) {}.padding(.top, 2).padding(.trailing, 2)
+    }.frame(width: 80, height: 80).background(Color(white: 0.96))
+    let renderer = ImageRenderer(content: bubble.scaleEffect(3).frame(width: 240, height: 240))
+    renderer.scale = 2
+    if let image = renderer.nsImage, let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+        try? png.write(to: dir.appendingPathComponent("notes-badge.png")); print("wrote notes-badge.png")
+    }
     exit(0)
 }

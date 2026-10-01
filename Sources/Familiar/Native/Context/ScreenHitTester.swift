@@ -9,6 +9,7 @@ struct AXElementInfo {
     var frame: NSRect?     // AppKit global coords
     var subrole: String? = nil       // AXSecureTextField marks a password field
     var placeholder: String? = nil
+    var domID: String? = nil         // a web page's own id for it (AXDOMIdentifier)
 
     /// e.g. `button “Submit”` or `text field “Cost Center” = “”`
     var label: String {
@@ -72,7 +73,8 @@ enum ScreenHitTester {
                                      description: AX.string(el, kAXDescriptionAttribute),
                                      frame: Self.axFrame(of: el, primaryMaxY: primaryMaxY),
                                      subrole: AX.string(el, kAXSubroleAttribute),
-                                     placeholder: AX.string(el, kAXPlaceholderValueAttribute))
+                                     placeholder: AX.string(el, kAXPlaceholderValueAttribute),
+                                     domID: AX.string(el, "AXDOMIdentifier").flatMap { $0.isEmpty ? nil : $0 })
                 if (info?.title ?? "").isEmpty, (info?.description ?? "").isEmpty,
                    let parent = AX.element(el, kAXParentAttribute), let pt = AX.string(parent, kAXTitleAttribute), !pt.isEmpty {
                     info?.description = pt

@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var assistant: Assistant!
     private let shell = ShellState()
     private let wand = WandController()
+    private let notesStore = NotesStore()
     private let hideHint = HideHint()
     private let origami = OrigamiFlightController()
     private let settings = SettingsWindowController()
@@ -57,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Log.info("signing: \(Signing.description); secrets: \(Secrets.store.rawValue)")
         runner = ScriptRunner(config: config)
         registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
+        notesStore.moveNotes(fromPacksIn: config.resolvedToolsDir)
+        registry.notesStore = notesStore
         assistant = Assistant(config: config, watcher: watcher, registry: registry, shell: shell, learning: learning, execution: execution, desktop: desktop)
         assistant.onStartWand = { [weak self] in self?.startWand() }
         assistant.onCancelWand = { [weak self] in if self?.wand.isActive == true { self?.wand.cancel() } }
@@ -228,6 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         requestPermissionsOnFirstRun()
         Task {
             await registry.reload()
+            assistant.notesHere = registry.notes(for: watcher.current)
             Secrets.migrateKeychainToFile(keys: (config.connectionMode == "api" ? ["ANTHROPIC_API_KEY"] : []) + registry.packs.flatMap(\.requires))
             if !assistant.hasConnection { assistant.reconfigure(config) }   // pick up a migrated key
             morningTasks.start()
@@ -377,7 +381,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupWatcher() {
         watcher.onChange = { [weak self] ctx in
-            guard let self, !self.assistant.watching else { return }   // the line reads "Watching…" while recording
+            guard let self else { return }
+            if self.wand.isShowingNotes { self.wand.hideNotes() }   // another page: its notes go with it
+            self.assistant.notesHere = self.registry.notes(for: ctx)
+            guard !self.assistant.watching else { return }   // the line reads "Watching…" while recording
             self.assistant.contextLine = ctx.summaryLine
         }
         if config.watcherEnabled { watcher.start(interval: config.watcherIntervalSeconds) } else { assistant.contextLine = "Watcher off" }
@@ -394,6 +401,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         wand.author = { [weak self] in self.map { NoteStore.author($0.config) } ?? NSFullUserName() }
         wand.onNoteSave = { [weak self] note in self?.assistant.saveNote(note) }
         wand.onNoteDelete = { [weak self] id in self?.assistant.deleteNote(id) }
+        assistant.onNotesChanged = { [weak self] in
+            guard let self else { return }
+            self.assistant.notesHere = self.registry.notes(for: self.watcher.current)
+        }
+        assistant.onShowNotes = { [weak self] in self?.wand.showNotes() }
     }
 
     private func startWand() {

@@ -21,9 +21,14 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    sticks the note to that area. Right-click an existing sticker to edit or remove it. Picking up the pen shows every note
    already left on the current screen as a small sticker on its control (hover to read the whole thing); a pick puts the
    notes on that control onto the pad first, and Claude gets them too ("Notes left on this control"). Typed questions see the
-   notes on the current screen as well. Notes live in the matching pack's `notes.json` (a pack is created for the site or app
-   if none matches), anchored by host+path or app+window, plus the control's role and label as shown, or a rectangle
-   relative to the window for circled spots. Nothing is stuck to a password field.
+   notes on the current screen as well. Notes live in `~/.noteling/notes/`, one JSON file each (notes kept in a pack's
+   `notes.json` by earlier versions are moved there once, and the file renamed `notes.json.moved`). A note made in a
+   browser is stuck to its page by its page key (so a record is the same page however it was reached, and a site that
+   serves every page from one path keeps them apart), and to its control by the page's own id first, then its role and
+   label, or a rectangle relative to the window for circled spots; in other apps, by app and window. Nothing is stuck
+   to a password field. When the page or window in front has notes, the bubble holds a small sticky with how many;
+   hovering lists them, and clicking shows them open on the page in an overlay that lets clicks through and goes away
+   at the next click, key or page change. A note whose control isn't on the page is left off rather than placed wrong.
 5. **Chat**: double-click the note and type, for questions that have no single thing to point at. A single click just pokes it. The note reacts as it goes:
    curious when you hover, thinking while it works, happy or sad when the answer lands.
    The chat is a pad of sticky notes: each question is a note with the answer written on it (inked in line by line as it
@@ -218,7 +223,6 @@ The menu bar menu shows permission status and opens the relevant System Settings
   expenses/
     SKILL.md            manifest: name, description, match rules, short overview
     docs/               any files, any structure (md/txt are stuffed or indexed)
-    notes.json          sticky notes left with the pen: {"notes": [{id, anchor, kind, text, by, at, confirmed}]}
     scripts/
       report_status.py  def run(report_id: str) -> dict   -> tool "expenses__report_status"
   shared/               a pack with no match rules is always active
