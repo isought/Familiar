@@ -79,6 +79,14 @@ struct NoteAnchor: Codable, Equatable {
         return false
     }
 
+    /// An id a page generates as it loads (ember412, :r5:, ext-gen12, mat-input-3, ui-id-4, long hex), which can name
+    /// another control on the next load, so a note is never stuck by one.
+    static func isSteadyID(_ id: String?) -> Bool {
+        guard let id, !id.isEmpty else { return false }
+        return id.range(of: #"\d{3,}|^:r|«r|^(ember|ext-|mat-|ui-id-|gwt-uid|react-|radix-|headlessui-)|[0-9a-f]{8,}|^[0-9]"#,
+                        options: [.regularExpression, .caseInsensitive]) == nil
+    }
+
     func matchesElement(role r: String?, label l: String?) -> Bool {
         guard let role, let label, let r, role == r, let want = Self.norm(label), let have = Self.norm(l) else { return false }
         return want == have
@@ -130,6 +138,11 @@ enum NoteStore {
     static let fileName = "notes.json"
     private struct File: Codable { var notes: [StickyNote] }
     static let day: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
+
+    /// The pack's notes, or an error when the file is there but can't be read, so nothing treats it as empty.
+    static func read(packDir: URL) throws -> [StickyNote] {
+        try JSONDecoder().decode(File.self, from: Data(contentsOf: packDir.appendingPathComponent(fileName))).notes
+    }
 
     static func load(packDir: URL) -> [StickyNote] {
         let url = packDir.appendingPathComponent(fileName)

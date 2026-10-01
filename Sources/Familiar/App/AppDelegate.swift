@@ -58,7 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Log.info("signing: \(Signing.description); secrets: \(Secrets.store.rawValue)")
         runner = ScriptRunner(config: config)
         registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
-        notesStore.moveNotes(fromPacksIn: config.resolvedToolsDir)
+        // A tools folder of one's own gives its notes up once; one outside Noteling's folder may be shared, so its
+        // notes are copied and the file stays for the others.
+        let ownTools = config.resolvedToolsDir.standardizedFileURL.path.hasPrefix(Config.dir.standardizedFileURL.path)
+        notesStore.moveNotes(fromPacksIn: config.resolvedToolsDir, rename: ownTools)
         registry.notesStore = notesStore
         assistant = Assistant(config: config, watcher: watcher, registry: registry, shell: shell, learning: learning, execution: execution, desktop: desktop)
         assistant.onStartWand = { [weak self] in self?.startWand() }
@@ -405,7 +408,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
             self.assistant.notesHere = self.registry.notes(for: self.watcher.current)
         }
-        assistant.onShowNotes = { [weak self] in self?.wand.showNotes() }
+        assistant.onShowNotes = { [weak self] in
+            guard let self else { return }
+            if self.wand.isShowingNotes { self.wand.hideNotes() } else { self.wand.showNotes() }
+        }
+        wand.hideFromScreenShare = config.hideFromScreenShare
     }
 
     private func startWand() {
@@ -656,7 +663,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         config.save()
     }
 
-    @objc private func reloadTools() { Task { await registry.reload() } }
+    @objc private func reloadTools() {
+        Task {
+            await registry.reload()
+            notesStore.reload()
+            assistant.notesHere = registry.notes(for: watcher.current)
+        }
+    }
 
     @objc private func openSettings() {
         origami.cancel()

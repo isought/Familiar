@@ -42,8 +42,55 @@ struct NotesStoreTests {
         #expect(store.moveNotes(fromPacksIn: fixture.tools) == 1)
         #expect(store.notes == [old])
         #expect(!FileManager.default.fileExists(atPath: pack.appendingPathComponent("notes.json").path))
-        #expect(FileManager.default.fileExists(atPath: pack.appendingPathComponent("notes.json.moved").path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: pack.path).contains { $0.hasPrefix("notes.json.moved-") })
         #expect(store.moveNotes(fromPacksIn: fixture.tools) == 0)   // never twice
+
+        // The file comes back, from a sync or a checkout: a note removed since stays removed, and is never read twice.
+        try store.remove(old.id)
+        try NoteStore.save([old], packDir: pack)
+        #expect(store.moveNotes(fromPacksIn: fixture.tools) == 0 && NotesStore(directory: fixture.notes).notes.isEmpty)
+    }
+
+    @Test func aPackFileThatCantBeReadIsLeftForLater() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let pack = fixture.tools.appendingPathComponent("portal")
+        try FileManager.default.createDirectory(at: pack, withIntermediateDirectories: true)
+        try "{\"notes\": [{\"id\": \"x\"}]}".write(to: pack.appendingPathComponent("notes.json"), atomically: true, encoding: .utf8)
+        let store = NotesStore(directory: fixture.notes)
+        #expect(store.moveNotes(fromPacksIn: fixture.tools) == 0)
+        #expect(FileManager.default.fileExists(atPath: pack.appendingPathComponent("notes.json").path))   // still there to fix
+    }
+
+    @Test func theNewerCopyWinsAndASharedFolderKeepsItsFile() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let store = NotesStore(directory: fixture.notes)
+        var mine = fixture.note("same", page: "https://portal.example.test/a", text: "Mine")
+        mine.confirmed = "2026-09-20"
+        try store.save(mine)
+        var older = mine; older.text = "Older"; older.confirmed = "2026-09-01"
+        var newer = mine; newer.text = "Newer"; newer.confirmed = "2026-09-30"
+        for (name, note) in [("a", older), ("b", newer)] {
+            let pack = fixture.tools.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: pack, withIntermediateDirectories: true)
+            try NoteStore.save([note], packDir: pack)
+        }
+        #expect(store.moveNotes(fromPacksIn: fixture.tools, rename: false) == 1)
+        #expect(store.notes.map(\.text) == ["Newer"])
+        #expect(FileManager.default.fileExists(atPath: fixture.tools.appendingPathComponent("b/notes.json").path))   // left for the others
+        #expect(store.moveNotes(fromPacksIn: fixture.tools, rename: false) == 0)   // and taking it in again changes nothing
+    }
+
+    @Test func noTwoIdsShareAFile() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let store = NotesStore(directory: fixture.notes)
+        for id in ["备注", "提示", "A.b", "ab", "0e9f-uuid"] { try store.save(fixture.note(id, page: "https://portal.example.test/", text: id)) }
+        #expect(Set(NotesStore(directory: fixture.notes).notes.map(\.id)) == ["备注", "提示", "A.b", "ab", "0e9f-uuid"])
+        try store.remove("备注")
+        #expect(Set(NotesStore(directory: fixture.notes).notes.map(\.id)) == ["提示", "A.b", "ab", "0e9f-uuid"])
+        #expect(NotesStore.file(for: "0e9f-uuid", in: fixture.notes).lastPathComponent == "0e9f-uuid.json")
     }
 
     @Test func thePenKeepsNotesInTheStoreAndTakesThemOutOfPacks() async throws {
@@ -120,6 +167,33 @@ struct NotesStoreTests {
         // AppKit's bottom-left coordinates: a control 200 points from the top of a 1000-point screen.
         #expect(result.placed[0].frame == NSRect(x: 100, y: 770, width: 150, height: 30))
         #expect(result.placed[2].frame == NSRect(x: 500, y: 560, width: 100, height: 40))
+    }
+
+    @Test func anIdThePageMadeUpNeverPlacesANote() {
+        #expect(NoteAnchor.isSteadyID("request-btn") && NoteAnchor.isSteadyID("submit"))
+        for generated in ["ember412", ":r5:", "ext-gen12", "mat-input-3", "ui-id-4", "a1b2c3d4e5f6", "123abc"] {
+            #expect(!NoteAnchor.isSteadyID(generated), "\(generated) looks made up")
+        }
+        func element(_ label: String, id: String, role: String = "AXButton", y: CGFloat, visible: Bool = true) -> PageElement {
+            PageElement(kind: "button", role: role, label: label, domID: id, frame: CGRect(x: 10, y: y, width: 80, height: 20),
+                        visible: visible, enabled: true, document: 0)
+        }
+        let page = PageSnapshot(appName: "Chrome", bundleID: "com.google.Chrome", windowTitle: "", documents: [],
+            elements: [element("Delete", id: "ember412", role: "AXLink", y: 100), element("Save", id: "save", y: 200),
+                       element("Save", id: "save", y: 300), element("Archive", id: "archive", y: 2_000, visible: false)],
+            selectedText: nil, truncated: false, elapsed: 0)
+        func note(_ id: String, label: String, domID: String) -> StickyNote {
+            var anchor = NoteAnchor(role: "AXButton", label: label)
+            anchor.domID = domID
+            return StickyNote(id: id, anchor: anchor, kind: "tip", text: id, by: "F", at: "", confirmed: "")
+        }
+        let result = WandController.place([note("generated", label: "Save changes", domID: "ember412"),
+                                           note("twice", label: "Save changes", domID: "save"),
+                                           note("below", label: "Archive", domID: "archive")], page: page, primaryMaxY: 1_000)
+        // A made-up id and an id two controls share place nothing, and neither does a control below the fold.
+        #expect(result.placed.isEmpty && result.missing.map(\.id) == ["generated", "twice", "below"])
+        #expect(WandController.notice(unplaced: 3)?.hasPrefix("3 notes here are for things not on screen") == true)
+        #expect(WandController.notice(unplaced: 0) == nil)
     }
 
     @Test func theBadgeSaysWhatIsHereWarningsFirst() {

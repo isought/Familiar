@@ -53,6 +53,9 @@ final class WandController {
     /// Panels showing notes only, after the badge was clicked, and what puts them away.
     private var shown: [WandPanel] = []
     private var dismissal: Any?
+    private var localDismissal: Any?
+    /// Kept out of screenshots and screen sharing, like the rest of Noteling, when the setting says so.
+    var hideFromScreenShare = false
     /// Notes that are on this page but whose control isn't on it now.
     private(set) var unplaced: [StickyNote] = []
 
@@ -68,6 +71,7 @@ final class WandController {
         placed = []
         for screen in NSScreen.screens {
             let p = WandPanel(screen: screen, controller: self)
+            if hideFromScreenShare { p.sharingType = .none }
             p.orderFrontRegardless()
             panels.append(p)
         }
@@ -95,11 +99,17 @@ final class WandController {
         placed = []
         for screen in NSScreen.screens {
             let p = WandPanel(screen: screen, controller: self, passive: true)
+            if hideFromScreenShare { p.sharingType = .none }
             p.orderFrontRegardless()
             shown.append(p)
         }
-        dismissal = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] _ in
+        // A click, a key or a scroll anywhere puts them away: stickers can't follow a page that moves.
+        dismissal = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]) { [weak self] _ in
             MainActor.assumeIsolated { self?.hideNotes() }
+        }
+        localDismissal = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .scrollWheel]) { [weak self] event in
+            MainActor.assumeIsolated { self?.hideNotes() }
+            return event
         }
         placeStickers()
         Log.info("notes: showing \(sceneNotes.count) note(s) on the page")
@@ -108,7 +118,9 @@ final class WandController {
     func hideNotes() {
         guard isShowingNotes else { return }
         if let dismissal { NSEvent.removeMonitor(dismissal) }
+        if let localDismissal { NSEvent.removeMonitor(localDismissal) }
         dismissal = nil
+        localDismissal = nil
         for p in shown { p.orderOut(nil) }
         shown.removeAll()
     }
@@ -124,9 +136,15 @@ final class WandController {
                 let page = await Task.detached(priority: .userInitiated) { PageReader.read(bundleID: bundle) }.value
                 guard let self, self.isActive || self.isShowingNotes else { return }
                 let result: (placed: [PlacedNote], missing: [StickyNote]) = page.map { Self.place(notes, page: $0, primaryMaxY: primaryMaxY) } ?? ([], notes)
-                self.placed = result.placed
-                self.unplaced = result.missing
+                // Notes saved while the page was read keep where they were put; ones removed meanwhile stay gone.
+                let current = Set(self.sceneNotes.map(\.id)), savedMeanwhile = Set(self.placed.map(\.note.id))
+                self.placed = result.placed.filter { current.contains($0.note.id) && !savedMeanwhile.contains($0.note.id) }
+                    + self.placed.filter { current.contains($0.note.id) }
+                self.unplaced = result.missing.filter { current.contains($0.id) }
                 self.refreshStickers()
+                if self.isShowingNotes, let notice = Self.notice(unplaced: self.unplaced.count) {
+                    self.shown.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.wandView?.showNotice(notice)
+                }
                 Log.info("notes: placed \(result.placed.count) of \(notes.count) on the page")
             }
         } else {
@@ -134,6 +152,13 @@ final class WandController {
             unplaced = notes.filter { note in !placed.contains { $0.note.id == note.id } }
             refreshStickers()
         }
+    }
+
+    /// What the overlay says when some notes have nothing on screen to stick to.
+    static func notice(unplaced count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count == 1 ? "1 note here is for something not on screen right now. Hover the bubble’s sticky to read it."
+            : "\(count) notes here are for things not on screen right now. Hover the bubble’s sticky to read them."
     }
 
     /// Notes placed on a page's controls: by the page's own id, then by role and label, then by the spot kept for
@@ -144,9 +169,13 @@ final class WandController {
         for note in notes {
             let anchor = note.anchor
             var found: CGRect?
-            if let id = anchor.domID { found = page.elements.first { $0.domID == id }?.frame }
+            // By the page's own id only when it is steady, names one control, and that control has the note's role.
+            if let id = anchor.domID, NoteAnchor.isSteadyID(id) {
+                let named = page.elements.filter { $0.domID == id }
+                if named.count == 1, anchor.role == nil || named[0].role == anchor.role, named[0].visible { found = named[0].frame }
+            }
             if found == nil, anchor.label != nil {
-                found = page.elements.first { anchor.matchesElement(role: $0.role, label: $0.label) }?.frame
+                found = page.elements.first { $0.visible && anchor.matchesElement(role: $0.role, label: $0.label) }?.frame
             }
             if found == nil, let window = page.windowFrame, let rect = anchor.rect, rect.count == 4 {
                 found = CGRect(x: window.minX + window.width * rect[0], y: window.minY + window.height * rect[1],
@@ -252,7 +281,7 @@ final class WandController {
         }
         guard let e = target.element, !e.isSecure else { return nil }
         a.role = e.role
-        if a.page != nil { a.domID = e.domID }
+        if a.page != nil, NoteAnchor.isSteadyID(e.domID) { a.domID = e.domID }
         if let label = e.anchorLabel { a.label = String(label.prefix(120)); return a }
         guard let f = e.frame, let wf = target.windowFrame else { return nil }
         a.rect = NoteAnchor.fractions(of: f, in: wf)
@@ -408,6 +437,7 @@ final class WandView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
+        guard !passive else { return }
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways, .cursorUpdate, .mouseEnteredAndExited], owner: self))
     }
 
@@ -486,6 +516,13 @@ final class WandView: NSView {
     }
 
     // MARK: stickers
+
+    /// Showing notes only: says, in a pill at the top, that some notes are for something not on screen now.
+    func showNotice(_ text: String) {
+        guard passive, let root = layer else { return }
+        let (pill, _) = ShimmerBorder.captionPill(bounds: bounds, scale: screen.backingScaleFactor, width: 620, text: text)
+        root.addSublayer(pill)
+    }
 
     func showStickers(_ placed: [WandController.PlacedNote]) {
         stickers.forEach { $0.layer.removeFromSuperlayer() }
@@ -593,7 +630,13 @@ final class WandView: NSView {
 
     private func finishEditor(text: String, kind: String) {
         guard let e = editing else { closeEditor(); return }
-        let draft = NoteDraft(existingID: e.existing?.id, anchor: e.anchor, kind: kind, text: text, frame: e.frame)
+        var anchor = e.anchor
+        if let existing = e.existing?.anchor {
+            // Editing a note keeps the page or site it was stuck to, so a note for a whole site doesn't shrink to one page.
+            anchor.page = existing.page; anchor.host = existing.host; anchor.path = existing.path
+            anchor.bundle = existing.bundle; anchor.window = existing.window
+        }
+        let draft = NoteDraft(existingID: e.existing?.id, anchor: anchor, kind: kind, text: text, frame: e.frame)
         let note = controller.save(draft)
         closeEditor()
         flash("Note kept on \(note.anchor.summary)")

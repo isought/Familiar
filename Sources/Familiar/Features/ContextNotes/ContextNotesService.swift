@@ -16,7 +16,11 @@ final class ContextNotesService {
     func keep(_ note: StickyNote, appName: String?) async throws -> String {
         guard let store = registry.notesStore else { return try await save(note, appName: appName).dirName }
         try store.save(note)
-        if registry.pack(holding: note.id) != nil { try registry.removeNote(id: note.id) }
+        // The note is kept; an old copy left in a pack is only shadowed by it, so failing to take it out is not an error.
+        if registry.pack(holding: note.id) != nil {
+            do { try registry.removeNote(id: note.id) }
+            catch { Log.info("notes: kept \(note.id), but its old copy stays in its pack: \(error.localizedDescription)") }
+        }
         return store.directory.lastPathComponent
     }
 
