@@ -190,8 +190,8 @@ struct NotesStoreTests {
         let result = WandController.place([note("generated", label: "Save changes", domID: "ember412"),
                                            note("twice", label: "Save changes", domID: "save"),
                                            note("below", label: "Archive", domID: "archive")], page: page, primaryMaxY: 1_000)
-        // A made-up id and an id two controls share place nothing, and neither does a control below the fold.
-        #expect(result.placed.isEmpty && result.missing.map(\.id) == ["generated", "twice", "below"])
+        // A made-up id and an id two controls share place nothing; a control below the fold is "further down".
+        #expect(result.placed.isEmpty && result.missing.map(\.id) == ["generated", "twice"] && result.below.map(\.id) == ["below"])
         #expect(WandController.notice(unplaced: 3)?.hasPrefix("3 more notes here are for things not on screen") == true)
         #expect(WandController.notice(unplaced: 0) == nil)
     }

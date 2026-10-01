@@ -8,26 +8,32 @@ struct NoteCheckResult: Equatable {
     var verdict: Verdict
     var detail: String
     var milliseconds: Int = 0
+    /// What the script returned when it didn't say in words, for the model only: the pad never shows raw data.
+    var raw: String? = nil
 
     /// What a check script returned: a JSON object with `holds` (true or false) and `detail` (or `summary` or
-    /// `message`), or any other text, kept as information. Long text is clipped.
+    /// `message`), or plain words. Anything else ran, but didn't say whether the note holds.
     static func parse(_ output: String, script: String) -> NoteCheckResult {
         let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let data = text.data(using: .utf8), var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            // The script runner hands back {"result": …, "stdout": …}: the check's own answer is the result.
-            if let result = object["result"] {
-                if let inner = result as? [String: Any] { object = inner }
-                else if let words = result as? String { return NoteCheckResult(script: script, verdict: .info, detail: clip(words)) }
-                else if let holds = result as? Bool { return NoteCheckResult(script: script, verdict: holds ? .holds : .fails, detail: holds ? "Holds." : "Doesn't hold.") }
-            }
-            if let error = object["error"] as? String { return NoteCheckResult(script: script, verdict: .unavailable, detail: clip(error)) }
+        var value: Any? = (text.data(using: .utf8)).flatMap { try? JSONSerialization.jsonObject(with: $0, options: [.fragmentsAllowed]) }
+        // The script runner hands back {"result": …, "stdout": …}: the check's own answer is the result.
+        if let wrapper = value as? [String: Any], wrapper.keys.contains("result") { value = wrapper["result"] }
+        if let flag = boolean(value) { return NoteCheckResult(script: script, verdict: flag ? .holds : .fails, detail: flag ? "Holds." : "Doesn't hold.") }
+        if let words = value as? String, !words.isEmpty { return NoteCheckResult(script: script, verdict: .info, detail: clip(words)) }
+        if let object = value as? [String: Any] {
+            if let error = object["error"] as? String { return NoteCheckResult(script: script, verdict: .unavailable, detail: clip(firstLine(error))) }
             let detail = (object["detail"] ?? object["summary"] ?? object["message"]) as? String
-            if let holds = object["holds"] as? Bool {
+            if let holds = boolean(object["holds"]) {
                 return NoteCheckResult(script: script, verdict: holds ? .holds : .fails, detail: clip(detail ?? (holds ? "Holds." : "Doesn't hold.")))
             }
             if let detail { return NoteCheckResult(script: script, verdict: .info, detail: clip(detail)) }
         }
-        return NoteCheckResult(script: script, verdict: .info, detail: text.isEmpty ? "The check returned nothing." : clip(text))
+        if value == nil, !text.isEmpty, (text.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0, options: [.fragmentsAllowed]) }) == nil {
+            return NoteCheckResult(script: script, verdict: .info, detail: clip(text))
+        }
+        let data = value.flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.fragmentsAllowed, .sortedKeys]) }
+        return NoteCheckResult(script: script, verdict: .info, detail: "Ran, but didn't say whether this holds.",
+                               raw: data.map { String(String(decoding: $0, as: UTF8.self).prefix(1_500)) })
     }
 
     /// The pad's line: "CHECKED · roles · as you: You don't have role Y."
@@ -39,53 +45,61 @@ struct NoteCheckResult: Equatable {
         }
     }
 
-    private static func clip(_ text: String) -> String {
+    /// A real JSON true or false; never the number 0 or 1.
+    static func boolean(_ value: Any?) -> Bool? {
+        guard let value, CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID() else { return nil }
+        return value as? Bool
+    }
+
+    static func firstLine(_ text: String) -> String {
+        String(text.split(whereSeparator: \.isNewline).first ?? "")
+    }
+
+    static func clip(_ text: String) -> String {
         let flat = text.split(whereSeparator: \.isNewline).joined(separator: " ")
         return flat.count > 300 ? String(flat.prefix(300)) + "…" : flat
     }
 }
 
-/// Runs the checks notes are linked to, with the person's own secrets, each within a time limit, so a slow or broken
-/// script never holds up the notes.
+/// Runs the checks notes are linked to, with the person's own secrets, each stopped at its time limit, so a slow or
+/// broken script never holds up the notes. A check runs only a script from a pack for the page in front, with only
+/// the arguments the script declares, so a note can't make the pen run some other script.
 @MainActor
 struct NoteChecker {
     let registry: ToolRegistry
     var timeout: TimeInterval = 10
 
     func run(_ check: NoteCheck, context: ScreenContext?) async -> NoteCheckResult {
-        guard let (pack, script) = registry.packs.lazy.flatMap({ pack in pack.scripts.map { (pack, $0) } }).first(where: { $0.1.id == check.script }) else {
-            return NoteCheckResult(script: check.script, verdict: .unavailable, detail: "This check isn't in your tools folder.")
-        }
-        if let missing = registry.missingRequirements(for: [pack]).first?.keys, !missing.isEmpty {
-            return NoteCheckResult(script: check.script, verdict: .unavailable, detail: "It needs \(missing.joined(separator: ", ")) in Settings.")
-        }
-        let runner = registry.runner, started = Date(), limit = timeout
-        let args: [String: Any] = (check.args ?? [:]).mapValues { $0 }
-        let outcome: Result<String, Error> = await withTaskGroup(of: Result<String, Error>?.self) { group in
-            group.addTask { @MainActor in
-                do { return .success(try await runner.run(script, args: args, context: context, secrets: pack.requires)) }
-                catch { return .failure(error) }
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first ?? .failure(CheckTimedOut())
-        }
-        var result: NoteCheckResult
-        switch outcome {
-        case .success(let output): result = NoteCheckResult.parse(output, script: check.script)
-        case .failure(let error as CheckTimedOut): result = NoteCheckResult(script: check.script, verdict: .unavailable, detail: error.message(limit))
-        case .failure(let error): result = NoteCheckResult(script: check.script, verdict: .unavailable, detail: error.localizedDescription)
-        }
+        let started = Date()
+        var result = await outcome(check, context: context)
         result.milliseconds = Int(Date().timeIntervalSince(started) * 1_000)
         return result
     }
 
-    private struct CheckTimedOut: Error {
-        func message(_ limit: TimeInterval) -> String { "It took longer than \(Int(limit)) seconds." }
+    private func outcome(_ check: NoteCheck, context: ScreenContext?) async -> NoteCheckResult {
+        func unavailable(_ why: String) -> NoteCheckResult { NoteCheckResult(script: check.script, verdict: .unavailable, detail: why) }
+        guard let (pack, script) = registry.packs.lazy.flatMap({ pack in pack.scripts.map { (pack, $0) } }).first(where: { $0.1.id == check.script }) else {
+            return unavailable("This check isn't in your tools folder.")
+        }
+        if let context, !registry.select(for: context).active.contains(where: { $0.dir == pack.dir }) {
+            return unavailable("This check isn't for this page.")
+        }
+        if let missing = registry.missingRequirements(for: [pack]).first?.keys, !missing.isEmpty {
+            return unavailable("It needs \(missing.joined(separator: ", ")) in Settings.")
+        }
+        let declared = Set((script.inputSchema["properties"] as? [String: Any] ?? [:]).keys)
+        let args: [String: Any] = (check.args ?? [:]).filter { declared.contains($0.key) }.mapValues { $0 }
+        do {
+            let output = try await registry.runner.run(script, args: args, context: context, secrets: pack.requires,
+                                                       timeout: timeout, stopsWithCaller: true)
+            return NoteCheckResult.parse(output, script: check.script)
+        } catch let error as ScriptRunnerError where error.timedOut {
+            return unavailable("It took longer than \(Int(timeout)) seconds.")
+        } catch is CancellationError {
+            return unavailable("Stopped.")
+        } catch {
+            return unavailable(NoteCheckResult.clip(NoteCheckResult.firstLine(error.localizedDescription)))
+        }
     }
 }
 

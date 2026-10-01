@@ -554,38 +554,33 @@ final class Assistant: ObservableObject {
     /// Wand pick: full screenshot with a ring at the click (or the ink stroke, for a circled region), plus a zoomed crop,
     /// then a short identify-and-offer reply. Notes stuck on the target go on the pad first, and into the prompt.
     func wandPick(_ target: WandTarget) {
-        guard !busy else { return }
+        guard !busy else { status = "Still answering the last one."; return }
         guard !awaitingPurpose, !awaitingContext else { status = "Finish or discard Watch Me before using the pen."; return }
         shell.expanded = true
         transcript.append(ChatMessage(role: .wand, text: target.shortLabel))
         // What people wrote comes first, at once and labelled: on this control, then for things not on screen.
-        for n in target.notes { transcript.append(ChatMessage(role: .note, text: n.text, meta: n.peopleSay(), warning: n.isWarning)) }
-        for n in target.notOnScreen.prefix(5) {
-            transcript.append(ChatMessage(role: .note, text: n.text, meta: "For \(n.anchor.controlSummary), not on your screen · " + n.peopleSay(),
+        let off = Array(target.notOnScreen.prefix(5))
+        var rows: [String: UUID] = [:]
+        for n in target.notes {
+            let row = ChatMessage(role: .note, text: n.text, meta: n.peopleSay(), warning: n.isWarning)
+            rows[n.id] = row.id
+            transcript.append(row)
+        }
+        for n in off {
+            let place = target.furtherDown.contains(n.id) ? "further down the page" : "not on your screen"
+            transcript.append(ChatMessage(role: .note, text: n.text, meta: "For \(n.anchor.controlSummary), \(place) · " + n.peopleSay(),
                                           warning: n.isWarning))
         }
         let ctx = watcher.sample() ?? watcher.current
         chatBusy = true
         let generation = captureGeneration
-        let checked = (target.notes + target.notOnScreen.prefix(5)).filter { $0.check != nil }
+        // Only the notes on what was pointed at run their checks; a note elsewhere is checked when its sticker is picked.
+        let checked = target.notes.filter { $0.check != nil }
         notesUsage?.record("pick", counts: ["onTarget": target.notes.count, "notOnScreen": target.notOnScreen.count, "checks": checked.count],
-                           tags: ["kind": target.isRegion ? "circle" : "point"], notes: (target.notes + target.notOnScreen).map(\.id))
+                           tags: ["kind": target.isRegion ? "circle" : target.named != nil ? "sticker" : "point"],
+                           notes: (target.notes + off).map(\.id))
 
         Task {
-            // A note's check runs as you, before the answer, each within its time limit; its own words show as CHECKED.
-            var checks: [String: NoteCheckResult] = [:]
-            if !checked.isEmpty {
-                status = "Checking what the notes say…"
-                let checker = NoteChecker(registry: registry)
-                for note in checked {
-                    guard let check = note.check else { continue }
-                    let result = await checker.run(check, context: ctx)
-                    checks[note.id] = result
-                    transcript.append(ChatMessage(role: .check, text: result.line,
-                        holds: result.verdict == .holds ? true : result.verdict == .fails ? false : nil))
-                    notesUsage?.record("check", counts: ["ms": result.milliseconds], tags: ["script": check.script, "result": result.verdict.rawValue], notes: [note.id])
-                }
-            }
             status = "Capturing screen…"
             var content: [[String: Any]] = []
             do {
@@ -621,10 +616,37 @@ final class Assistant: ObservableObject {
                 Log.info("wand: capture failed: \(error.localizedDescription)")
             }
             guard generation == captureGeneration else { finishRequest(); return }
-            let elsewhere = registry.notes(for: ctx).filter { n in !target.notes.contains(n) && !target.notOnScreen.contains(n) }
+
+            // The checks run as you, all at once, each stopped at its time limit; each answer goes right under its note.
+            var checks: [String: NoteCheckResult] = [:]
+            if !checked.isEmpty {
+                status = "Checking what the notes say…"
+                let checker = NoteChecker(registry: registry)
+                let results = await withTaskGroup(of: (String, NoteCheckResult)?.self) { group in
+                    for note in checked {
+                        guard let check = note.check else { continue }
+                        group.addTask { @MainActor in (note.id, await checker.run(check, context: ctx)) }
+                    }
+                    var out: [(String, NoteCheckResult)] = []
+                    for await result in group { if let result { out.append(result) } }
+                    return out
+                }
+                guard generation == captureGeneration else { status = ""; finishRequest(); return }
+                for note in checked {
+                    guard let result = results.first(where: { $0.0 == note.id })?.1 else { continue }
+                    checks[note.id] = result
+                    let row = ChatMessage(role: .check, text: result.line, holds: result.verdict == .holds ? true : result.verdict == .fails ? false : nil)
+                    if let id = rows[note.id], let index = transcript.firstIndex(where: { $0.id == id }) { transcript.insert(row, at: index + 1) }
+                    else { transcript.append(row) }
+                    notesUsage?.record("check", counts: ["ms": result.milliseconds], tags: ["script": result.script, "result": result.verdict.rawValue],
+                                       notes: [note.id])
+                }
+            }
+            let sent = Set((target.notes + off).map(\.id))
+            let elsewhere = registry.notes(for: ctx).filter { !sent.contains($0.id) }
             let text = Prompt.context(ctx, recent: watcher.history) + packsSection(ctx, notes: false) + "\n"
                 + Prompt.wandInstruction(target: target, ctx: ctx)
-                + Prompt.notes(onTarget: target.notes, notOnScreen: Array(target.notOnScreen.prefix(5)), elsewhere: elsewhere, checks: checks)
+                + Prompt.notes(onTarget: target.notes, notOnScreen: off, furtherDown: target.furtherDown, elsewhere: elsewhere, checks: checks)
             content.append(["type": "text", "text": text])
             await send(content: content, ctx: ctx, title: target.shortLabel)
         }

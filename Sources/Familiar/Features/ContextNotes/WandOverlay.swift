@@ -13,10 +13,13 @@ struct WandTarget {
     var regionElements: [AXScan.Item] = []    // labelled controls inside the region, top to bottom
     var notes: [StickyNote] = []              // notes stuck on the element, or inside the region
     var notOnScreen: [StickyNote] = []        // the scene's notes for controls that aren't on screen, such as a missing button
+    var furtherDown: Set<String> = []         // of those, the ones whose control is on the page, just scrolled out of view
+    var named: String? = nil                  // what was picked when it was a sticker, not a control
 
     var isRegion: Bool { region != nil }
 
     var shortLabel: String {
+        if let named { return named }
         if isRegion {
             let names = regionElements.compactMap(\.label).prefix(2).map { "“\($0.prefix(28))”" }
             if names.isEmpty { return "what you circled" }
@@ -65,6 +68,8 @@ final class WandController {
     /// Notes that are on this page but whose control isn't on it now, and where they show instead: at the window's edge.
     private(set) var unplaced: [StickyNote] = []
     private(set) var edges: [PlacedNote] = []
+    /// Of the unplaced, the notes whose control is on the page but scrolled out of view.
+    private(set) var below: Set<String> = []
 
     var isActive: Bool { !panels.isEmpty }
     var isShowingNotes: Bool { !shown.isEmpty }
@@ -78,6 +83,7 @@ final class WandController {
         placed = []
         edges = []
         unplaced = []
+        below = []
         for screen in NSScreen.screens {
             let p = WandPanel(screen: screen, controller: self)
             if hideFromScreenShare { p.sharingType = .none }
@@ -107,6 +113,7 @@ final class WandController {
         placed = []
         edges = []
         unplaced = []
+        below = []
         for screen in NSScreen.screens {
             let p = WandPanel(screen: screen, controller: self, passive: true)
             p.sharingType = .none   // notes, colleagues' names and checks: never in a screen share, whatever the bubble's setting
@@ -151,14 +158,16 @@ final class WandController {
             Task { [weak self] in
                 let page = await Task.detached(priority: .userInitiated) { PageReader.read(bundleID: bundle) }.value
                 guard let self, self.isActive || self.isShowingNotes else { return }
-                let result: (placed: [PlacedNote], missing: [StickyNote]) = page.map { Self.place(notes, page: $0, primaryMaxY: primaryMaxY) } ?? ([], notes)
+                let result: (placed: [PlacedNote], missing: [StickyNote], below: [StickyNote]) =
+                    page.map { Self.place(notes, page: $0, primaryMaxY: primaryMaxY) } ?? ([], notes, [])
                 // Notes saved while the page was read keep where they were put; ones removed meanwhile stay gone.
                 let current = Set(self.sceneNotes.map(\.id)), savedMeanwhile = Set(self.placed.map(\.note.id))
                 self.placed = result.placed.filter { current.contains($0.note.id) && !savedMeanwhile.contains($0.note.id) }
                     + self.placed.filter { current.contains($0.note.id) }
-                self.unplaced = result.missing.filter { current.contains($0.id) }
+                self.unplaced = (result.missing + result.below).filter { current.contains($0.id) }
+                self.below = Set(result.below.map(\.id))
                 let window = page.flatMap(\.windowFrame).map { NSRect(x: $0.minX, y: primaryMaxY - $0.maxY, width: $0.width, height: $0.height) }
-                self.edges = window.map { Self.atEdge(self.unplaced, of: $0) } ?? []
+                self.edges = window.map { Self.atEdge(self.unplaced, of: $0, below: self.below) } ?? []
                 self.refreshStickers()
                 if self.isShowingNotes, let notice = Self.notice(unplaced: self.unplaced.count - self.edges.count) {
                     self.shown.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.wandView?.showNotice(notice)
@@ -170,7 +179,7 @@ final class WandController {
             let scan = ensureScan()
             placed = Self.place(notes, scan: scan)
             unplaced = notes.filter { note in !placed.contains { $0.note.id == note.id } }
-            edges = scan.windowFrame.map { Self.atEdge(unplaced, of: $0) } ?? []
+            edges = scan.windowFrame.map { Self.atEdge(unplaced, of: $0, below: below) } ?? []
             refreshStickers()
             onPlaced?(placed.count, unplaced.count, isShowingNotes)
         }
@@ -181,13 +190,23 @@ final class WandController {
     /// Notes for controls that aren't on screen (a button this person doesn't have, a field further down), shown down
     /// the window's right edge instead of nowhere, at most three, each saying what it is for.
     static let edgeLimit = 3
-    static func atEdge(_ notes: [StickyNote], of window: NSRect) -> [PlacedNote] {
-        notes.prefix(edgeLimit).enumerated().map { index, note in
+    static func atEdge(_ notes: [StickyNote], of window: NSRect, below: Set<String> = []) -> [PlacedNote] {
+        var out: [PlacedNote] = []
+        var top = window.maxY - 60
+        let x = max(window.minX + 6, window.maxX - 280 - 8)
+        for note in notes.prefix(edgeLimit) {
             var shown = note
-            shown.text = "Not on your screen: \(note.anchor.controlSummary). " + note.text
-            let spot = NSRect(x: window.maxX - 30, y: window.maxY - 120 - CGFloat(index) * 130, width: 1, height: 1)
-            return PlacedNote(note: shown, frame: spot)
+            shown.text = (below.contains(note.id) ? "Further down the page: " : "Not on your screen: ") + "\(note.anchor.controlSummary). " + note.text
+            // As tall as the open sticker will be, so stickers stack without overlapping and stay inside the window.
+            let body = (shown.isWarning ? "⚠︎ " : "") + shown.text
+            let height = StickerPaper.measure(body, font: StickerPaper.font(13.5, bold: true), color: StickerPaper.ink, width: 260, maxLines: 14).1 + 34
+            guard top - height >= window.minY + 6 else { break }
+            let sticker = NSRect(x: x, y: top - height, width: 280, height: height)
+            // StickerPaper.origin puts a sticker's corner 26 left of and 10 below its control's top right.
+            out.append(PlacedNote(note: shown, frame: NSRect(x: sticker.minX + 25, y: sticker.minY + 9, width: 1, height: 1)))
+            top = sticker.minY - 8
         }
+        return out
     }
 
     /// What the overlay says when some notes have nothing on screen to stick to.
@@ -199,9 +218,10 @@ final class WandController {
 
     /// Notes placed on a page's controls: by the page's own id, then by role and label, then by the spot kept for
     /// controls without a name. A note whose control isn't on the page is left out rather than stuck somewhere wrong.
-    static func place(_ notes: [StickyNote], page: PageSnapshot, primaryMaxY: CGFloat) -> (placed: [PlacedNote], missing: [StickyNote]) {
+    static func place(_ notes: [StickyNote], page: PageSnapshot, primaryMaxY: CGFloat)
+        -> (placed: [PlacedNote], missing: [StickyNote], below: [StickyNote]) {
         func appKit(_ frame: CGRect) -> NSRect { NSRect(x: frame.minX, y: primaryMaxY - frame.maxY, width: frame.width, height: frame.height) }
-        var placed: [PlacedNote] = [], missing: [StickyNote] = []
+        var placed: [PlacedNote] = [], missing: [StickyNote] = [], below: [StickyNote] = []
         for note in notes {
             let anchor = note.anchor
             var found: CGRect?
@@ -218,9 +238,13 @@ final class WandController {
                                width: window.width * rect[2], height: window.height * rect[3])
             }
             if let found, found.width > 0 || found.height > 0 { placed.append(PlacedNote(note: note, frame: appKit(found))) }
+            else if page.elements.contains(where: { !$0.visible && (anchor.label != nil && anchor.matchesElement(role: $0.role, label: $0.label)
+                                                                      || (anchor.domID != nil && $0.domID == anchor.domID)) }) {
+                below.append(note)   // its control is on the page, scrolled out of view
+            }
             else { missing.append(note) }
         }
-        return (placed, missing)
+        return (placed, missing, below)
     }
 
     func cancel() {
@@ -231,7 +255,9 @@ final class WandController {
     func pick(at point: NSPoint) {
         var target = hitTest(at: point)
         target.notes = notes(on: target)
-        target.notOnScreen = unplaced.filter { !target.notes.contains($0) }
+        let on = Set(target.notes.map(\.id))
+        target.notOnScreen = unplaced.filter { !on.contains($0.id) }
+        target.furtherDown = below.subtracting(on)
         deactivate()
         Log.info("wand: picked \(target.shortLabel) [\(target.element?.label ?? "no element")] in \(target.windowOwner ?? "?"), \(target.notes.count) note(s)")
         onPick?(target)
@@ -242,7 +268,9 @@ final class WandController {
         guard var target = regionTarget(stroke) else { return }
         target.regionElements = elements(in: target.region!)
         target.notes = notes(on: target)
-        target.notOnScreen = unplaced.filter { !target.notes.contains($0) }
+        let on = Set(target.notes.map(\.id))
+        target.notOnScreen = unplaced.filter { !on.contains($0.id) }
+        target.furtherDown = below.subtracting(on)
         deactivate()
         Log.info("wand: circled \(Int(target.region!.width))x\(Int(target.region!.height)) with \(target.regionElements.count) control(s), \(target.notes.count) note(s)")
         onPick?(target)
@@ -302,12 +330,34 @@ final class WandController {
         guard let e = target.element else { return [] }
         var out = sceneNotes.filter { Self.belongs($0, to: e) }
         if let f = e.frame {
-            for p in placed where !out.contains(p.note) && (p.note.anchor.isRegion ? p.frame.intersects(f) : Self.sameControl(p.frame, f)) {
+            for p in placed where !out.contains(p.note) && (p.note.anchor.isRegion ? p.frame.intersects(f) : Self.inside(f, noted: p.frame)) {
                 out.append(p.note)
             }
         }
         return out
     }
+
+    /// The note this control has of its own, for editing: only by the page's id or its role and label, never by
+    /// overlap, so right-clicking near or around a noted control starts a new note instead of moving someone's.
+    func ownNote(on target: WandTarget) -> StickyNote? {
+        guard target.region == nil, let e = target.element else { return nil }
+        return sceneNotes.first { Self.belongs($0, to: e) }
+    }
+
+    /// A sticker picked with the pen: that note alone, as if its control had been pointed at, so a note whose control
+    /// isn't on screen can still be asked about, and its check run.
+    func pick(note id: String, at point: NSPoint) {
+        guard let note = sceneNotes.first(where: { $0.id == id }) else { return }
+        var target = WandTarget(screenPoint: point, element: nil, windowOwner: scene?.appName, windowTitle: scene?.windowTitle,
+                                ownerBundleID: scene?.bundleID)
+        target.notes = [note]
+        target.named = "the note on \(note.anchor.controlSummary)"
+        deactivate()
+        Log.info("wand: picked a note on \(note.anchor.controlSummary)")
+        onPick?(target)
+    }
+
+    func note(id: String) -> StickyNote? { sceneNotes.first { $0.id == id } }
 
     /// A note is this control's when the page's own steady id names it (and the role agrees), else by role and label.
     static func belongs(_ note: StickyNote, to element: AXElementInfo) -> Bool {
@@ -318,11 +368,13 @@ final class WandController {
         return anchor.matchesElement(role: element.role, label: element.anchorLabel)
     }
 
-    /// Two frames are one control when they overlap almost entirely.
-    static func sameControl(_ a: NSRect, _ b: NSRect) -> Bool {
-        let overlap = a.intersection(b)
-        guard !overlap.isNull, a.width * a.height > 0, b.width * b.height > 0 else { return false }
-        return overlap.width * overlap.height >= 0.8 * min(a.width * a.height, b.width * b.height)
+    /// What was pointed at sits inside the noted control (its text, its icon), and isn't a container holding it: one
+    /// way only, and the noted control at most 25 times its size.
+    static func inside(_ target: NSRect, noted: NSRect) -> Bool {
+        let overlap = target.intersection(noted)
+        let targetArea = target.width * target.height, notedArea = noted.width * noted.height
+        guard !overlap.isNull, targetArea > 0, notedArea > 0, notedArea <= targetArea * 25 else { return false }
+        return overlap.width * overlap.height >= 0.8 * targetArea
     }
 
     /// Where a note on this target would be anchored, or nil when there is nothing to stick it to.
@@ -353,6 +405,8 @@ final class WandController {
         sceneNotes.removeAll { $0.id == note.id }
         sceneNotes.append(note)
         placed.removeAll { $0.note.id == note.id }
+        unplaced.removeAll { $0.id == note.id }
+        edges.removeAll { $0.note.id == note.id }
         placed.append(PlacedNote(note: note, frame: draft.frame))
         refreshStickers()
         onNoteSave?(note)
@@ -362,6 +416,8 @@ final class WandController {
     func delete(_ id: String) {
         sceneNotes.removeAll { $0.id == id }
         placed.removeAll { $0.note.id == id }
+        unplaced.removeAll { $0.id == id }
+        edges.removeAll { $0.note.id == id }
         refreshStickers()
         onNoteDelete?(id)
     }
@@ -554,11 +610,28 @@ final class WandView: NSView {
         let pts = stroke
         stroke = []
         let dragged = Self.span(pts) > Self.dragThreshold
+        // A sticker clicked is that note: right-click edits it, a click asks about it.
+        if !dragged, let id = sticker(at: start), let original = controller.note(id: id) {
+            clearInk()
+            if strokeIsNote {
+                let frame = stickers.first { $0.note.id == id }.map { $0.frame } ?? NSRect(x: start.x - 8, y: start.y - 8, width: 16, height: 16)
+                present(anchor: original.anchor, at: frame, existing: original)
+            } else {
+                controller.pick(note: id, at: start)
+            }
+            return
+        }
         if strokeIsNote {
             if dragged { openEditor(region: pts) } else { openEditor(at: start) }
         } else {
             if dragged { controller.pickRegion(stroke: pts) } else { clearInk(); controller.pick(at: start) }
         }
+    }
+
+    /// The note under a point, by the topmost sticker drawn there.
+    func sticker(at global: NSPoint) -> String? {
+        let p = local(global)
+        return stickers.filter { $0.layer.frame.contains(p) }.max { $0.layer.zPosition < $1.layer.zPosition }?.note.id
     }
 
     static func span(_ pts: [NSPoint]) -> CGFloat {
@@ -647,7 +720,7 @@ final class WandView: NSView {
         guard let anchor = controller.anchor(for: target) else {
             flash(target.element?.isSecure == true ? "No notes on password fields" : "Nothing here to stick a note on"); return
         }
-        let existing = controller.notes(on: target).first
+        let existing = controller.ownNote(on: target)
         let frame = target.element?.frame ?? NSRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16)
         updateHighlight(target)
         present(anchor: anchor, at: frame, existing: existing)
@@ -808,7 +881,7 @@ final class NoteEditor: NSView, NSTextViewDelegate {
     private let hint = NSTextField(labelWithString: "⏎ keep · ⇧⏎ line · esc drop")
     private let checkMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     private var checks: [CheckChoice] = []
-    private var keptArgs: [String: String]?
+    private var kept: NoteCheck?
     var onCommit: ((String, String, NoteCheck?) -> Void)?
 
     /// A script that can check a note: its tool id and how the menu names it.
@@ -827,7 +900,9 @@ final class NoteEditor: NSView, NSTextViewDelegate {
     var chosenCheck: NoteCheck? {
         let index = checkMenu.indexOfSelectedItem - 1
         guard checks.indices.contains(index) else { return nil }
-        return NoteCheck(script: checks[index].script, args: keptArgs)
+        // Arguments belong to the script they were written for; another script starts without them.
+        let script = checks[index].script
+        return NoteCheck(script: script, args: script == kept?.script ? kept?.args : nil)
     }
     var onCancel: (() -> Void)?
     var onDelete: (() -> Void)?
@@ -839,7 +914,7 @@ final class NoteEditor: NSView, NSTextViewDelegate {
             choices.append(CheckChoice(script: current.script, title: current.script.replacingOccurrences(of: "__", with: " · ")))
         }
         self.checks = choices
-        self.keptArgs = existing?.check?.args
+        self.kept = existing?.check
         super.init(frame: NSRect(origin: .zero, size: NSSize(width: Self.size.width, height: Self.height(withChecks: !choices.isEmpty))))
         wantsLayer = true
         layer?.backgroundColor = existing?.isWarning == true ? StickerPaper.warning : StickerPaper.tip

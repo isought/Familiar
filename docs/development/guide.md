@@ -34,8 +34,10 @@ mouse, and it uses the company's own notes and scripts for the tool you are in.
    can be turned off in Settings. Pointing with the pen tells the notes on that control first (each as "PEOPLE SAY ·
    who · confirmed when", flagged when no one has confirmed it in 90 days), then the page's notes for controls not on
    screen, before the answer. A note can be linked to a script from the packs for its page ("Check with…" in the note
-   editor, for scripts that take no arguments); pointing at it runs the script as you, within 10 seconds, and shows its
-   own answer as a CHECKED line. The model is told notes are named people's claims with their age, to attribute and
+   editor, for scripts that take no arguments); pointing at it, or clicking its sticker, runs the script as you, stopped
+   at 10 seconds, and shows its own answer as a CHECKED line under the note. A check runs only a script from a pack for
+   that page, with only the arguments the script declares. Clicking a sticker with the pen asks about that note;
+   right-clicking it edits it. The model is told notes are named people's claims with their age, to attribute and
    not to state as fact. How notes get used is counted in `~/.noteling/usage/notes.jsonl`: counts, kinds and note ids,
    never words or addresses.
 5. **Chat**: double-click the note and type, for questions that have no single thing to point at. A single click just pokes it. The note reacts as it goes:

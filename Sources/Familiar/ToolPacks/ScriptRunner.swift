@@ -9,6 +9,8 @@ struct ScriptSchema {
 
 struct ScriptRunnerError: LocalizedError {
     let message: String
+    /// The script ran past its time limit and was stopped.
+    var timedOut = false
     var errorDescription: String? { message }
 }
 
@@ -60,8 +62,10 @@ final class ScriptRunner {
 
     var extraEnv: [String: String] = [:]   // non-secret config env
 
-    func run(_ tool: ScriptTool, args: [String: Any], context: ScreenContext?, secrets: [String] = []) async throws -> String {
-        let json = try await execute(tool, args: args, context: context, secrets: secrets)
+    /// `timeout` stops the script once it has run that long; `stopsWithCaller` stops it when the calling task is cancelled.
+    func run(_ tool: ScriptTool, args: [String: Any], context: ScreenContext?, secrets: [String] = [],
+             timeout: TimeInterval = 90, stopsWithCaller: Bool = false) async throws -> String {
+        let json = try await execute(tool, args: args, context: context, secrets: secrets, timeout: timeout, stopsWithCaller: stopsWithCaller)
         var out: [String: Any] = ["result": json["result"] ?? NSNull()]
         if let so = json["stdout"] { out["stdout"] = so }
         let data = try JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys])
@@ -75,7 +79,7 @@ final class ScriptRunner {
     }
 
     private func execute(_ tool: ScriptTool, args: [String: Any], context: ScreenContext?, secrets: [String],
-                         stopsWithCaller: Bool = false) async throws -> [String: Any] {
+                         timeout: TimeInterval = 90, stopsWithCaller: Bool = false) async throws -> [String: Any] {
         guard let (exe, cmdArgs) = command(helper: "run_tool.py", script: tool.path, deps: tool.dependencies) else {
             throw ScriptRunnerError(message: "no Python runtime")
         }
@@ -90,10 +94,10 @@ final class ScriptRunner {
             env["FAMILIAR_CONTEXT"] = s   // earlier name, kept for existing packs
         }
         let started = Date()
-        let r = try await Subprocess.run(exe, cmdArgs, stdin: stdin, cwd: tool.path.deletingLastPathComponent(), env: env, timeout: 90,
+        let r = try await Subprocess.run(exe, cmdArgs, stdin: stdin, cwd: tool.path.deletingLastPathComponent(), env: env, timeout: timeout,
                                          stopsWithCaller: stopsWithCaller)
         Log.info("script \(tool.id) exited \(r.code) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s\(r.timedOut ? " (timed out)" : "")")
-        if r.timedOut { throw ScriptRunnerError(message: "\(tool.fileName) timed out after 90s") }
+        if r.timedOut { throw ScriptRunnerError(message: "\(tool.fileName) timed out after \(Int(timeout))s", timedOut: true) }
         guard let json = Self.lastJSONLine(r.stdout) else {
             throw ScriptRunnerError(message: "\(tool.fileName) produced no result. stderr: \(r.stderr.suffix(500))")
         }

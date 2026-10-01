@@ -47,6 +47,11 @@ struct NoteChecksTests {
         #expect(parse(["message": "Role requests take about 2 days."]).verdict == .info)
         #expect(parse(["error": "Not signed in."]).verdict == .unavailable)
         #expect(parse("Plain words").detail == "Plain words" && parse(true).verdict == .holds)
+        // A number is not a verdict, and data without words never reaches the pad, only the model.
+        let number = parse(1)
+        #expect(number.verdict == .info && number.detail == "Ran, but didn't say whether this holds." && number.raw == "1")
+        #expect(parse(["holds": 1]).verdict == .info && parse(["roles": ["admin"]]).raw == #"{"roles":["admin"]}"#)
+        #expect(NoteCheckResult.parse("Traceback: boom", script: "x__y").detail == "Traceback: boom")
         #expect(parse(String(repeating: "a", count: 500)).detail.count == 301)
         #expect(parse(["holds": false, "detail": "You don't have role Y."]).line == "CHECKED · my_roles · as you: You don't have role Y.")
         #expect(NoteCheckResult(script: "x__roles", verdict: .unavailable, detail: "It needs TOKEN in Settings.").line
@@ -76,10 +81,22 @@ struct NoteChecksTests {
         try #require(registry.script(named: "servicenow__my_roles") != nil)
 
         let checker = NoteChecker(registry: registry, timeout: 1.5)
-        let roles = await checker.run(NoteCheck(script: "servicenow__my_roles"), context: nil)
+        // Arguments the script doesn't declare are dropped, not passed on.
+        let roles = await checker.run(NoteCheck(script: "servicenow__my_roles", args: ["url": "https://elsewhere.example.test"]), context: nil)
         #expect(roles.verdict == .fails && roles.detail == "You don't have role Y.")
+        // The limit stops the script itself: the answer comes at the limit, not when the script would have finished.
+        let started = Date()
         let slow = await checker.run(NoteCheck(script: "servicenow__slow"), context: nil)
         #expect(slow.verdict == .unavailable && slow.detail == "It took longer than 1 seconds.")
+        #expect(Date().timeIntervalSince(started) < 4.5)
+        // A check from a pack that isn't for this page doesn't run there.
+        let elsewhere = ScreenContext(appName: "Chrome", bundleID: "com.google.Chrome", windowTitle: "Mail", url: "https://mail.example.test/",
+                                      focused: nil, timestamp: Date())
+        let wrongPage = await checker.run(NoteCheck(script: "servicenow__my_roles"), context: elsewhere)
+        #expect(wrongPage.verdict == .unavailable && wrongPage.detail == "This check isn't for this page.")
+        let page = ScreenContext(appName: "Chrome", bundleID: "com.google.Chrome", windowTitle: "Item",
+                                 url: "https://example.service-now.com/sc_cat_item.do?sys_id=abc", focused: nil, timestamp: Date())
+        #expect(await checker.run(NoteCheck(script: "servicenow__my_roles"), context: page).verdict == .fails)
         let missing = await checker.run(NoteCheck(script: "nowhere__check"), context: nil)
         #expect(missing.verdict == .unavailable && missing.detail == "This check isn't in your tools folder.")
     }
@@ -97,17 +114,27 @@ struct NoteChecksTests {
         var generated = NoteAnchor(role: "AXButton", label: "Ask for access")
         generated.domID = "ember412"
         #expect(WandController.belongs(note("c", anchor: generated), to: element))   // a made-up id falls back to the label
-        #expect(WandController.sameControl(NSRect(x: 0, y: 0, width: 100, height: 20), NSRect(x: 2, y: 1, width: 98, height: 19)))
-        #expect(!WandController.sameControl(NSRect(x: 0, y: 0, width: 100, height: 20), NSRect(x: 0, y: 30, width: 100, height: 20)))
+        // What was pointed at must sit inside the noted control: its text yes, a container around it no.
+        let button = NSRect(x: 100, y: 100, width: 120, height: 30)
+        #expect(WandController.inside(NSRect(x: 110, y: 105, width: 80, height: 20), noted: button))
+        #expect(!WandController.inside(NSRect(x: 0, y: 0, width: 1_000, height: 800), noted: button))
+        #expect(!WandController.inside(NSRect(x: 0, y: 30, width: 100, height: 20), noted: button))
+        #expect(!WandController.inside(NSRect(x: 101, y: 101, width: 2, height: 2), noted: button))   // too small: a pixel
     }
 
     @Test func notesForMissingControlsShowAtTheWindowsEdge() {
         let window = NSRect(x: 100, y: 100, width: 1_200, height: 800)
         let missing = (0..<5).map { note("m\($0)") }
-        let edges = WandController.atEdge(missing, of: window)
+        let edges = WandController.atEdge(missing, of: window, below: ["m1"])
         #expect(edges.count == WandController.edgeLimit)
         #expect(edges[0].note.text == "Not on your screen: button “Request onboarding”. Request role Y first")
-        #expect(edges.allSatisfy { window.contains($0.frame.origin) } && edges[0].frame.minY > edges[1].frame.minY)
+        #expect(edges[1].note.text.hasPrefix("Further down the page: "))
+        // Each sticker sits inside the window, one under the other, never overlapping.
+        let tops = edges.map(\.frame.maxY)
+        #expect(edges.allSatisfy { window.contains($0.frame.origin) } && tops == tops.sorted(by: >))
+        #expect(zip(tops, tops.dropFirst()).allSatisfy { $0 - $1 >= 40 })
+        // A short window holds fewer, and the notice counts the rest.
+        #expect(WandController.atEdge(missing, of: NSRect(x: 0, y: 0, width: 800, height: 220)).count == 1)
         #expect(WandController.notice(unplaced: 2)?.hasPrefix("2 more notes here are for things not on screen") == true)
     }
 
@@ -120,6 +147,9 @@ struct NoteChecksTests {
                                 checks: ["a": NoteCheckResult(script: "servicenow__my_roles", verdict: .fails, detail: "You don't have role Y.")], now: Self.now)
         #expect(text.contains("## Notes left on this control\n- Ana's note: \"Request role Y first\" (confirmed 3 days ago)\n  CHECKED · my_roles · as you: You don't have role Y.\n"))
         #expect(text.contains("## Notes on this page for controls not on the user's screen\n- For button “Request onboarding”: [warning] Ana's note: \"Use item Z\" (confirmed 8 mo ago, may be out of date)\n"))
+        let below = Prompt.notes(onTarget: [], notOnScreen: [old], furtherDown: ["b"], elsewhere: [],
+                                 checks: ["b": NoteCheckResult(script: "x__y", verdict: .info, detail: "Ran, but didn't say whether this holds.", raw: "{\"n\":1}")], now: Self.now)
+        #expect(below.contains("For button “Request onboarding” (further down the page): ") && below.contains("(the check returned: {\"n\":1})"))
         #expect(!Prompt.system.contains("usually right") && Prompt.system.contains("Attribute them"))
     }
 
@@ -139,6 +169,10 @@ struct NoteChecksTests {
         let kept = note("k", check: NoteCheck(script: "other__check", args: ["role": "Y"]))
         let reopened = NoteEditor(existing: kept, place: "x", checks: [])
         #expect(reopened.chosenCheck == NoteCheck(script: "other__check", args: ["role": "Y"]))
+        // Switching to another script leaves the old arguments behind.
+        let switched = NoteEditor(existing: kept, place: "x", checks: choices)
+        switched.selectCheck(at: 0)
+        #expect(switched.chosenCheck == NoteCheck(script: "servicenow__my_roles"))
         #expect(NoteEditor(existing: nil, place: "x").frame.height == NoteEditor.size.height)
     }
 

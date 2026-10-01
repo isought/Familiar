@@ -263,12 +263,15 @@ enum Prompt {
 
     /// Notes people stuck on controls: the ones on what was picked, then the rest of the scene.
     /// The notes a request carries, each as its author's claim with its age, and any check run on it.
-    static func notes(onTarget: [StickyNote], notOnScreen: [StickyNote] = [], elsewhere: [StickyNote],
+    static func notes(onTarget: [StickyNote], notOnScreen: [StickyNote] = [], furtherDown: Set<String> = [], elsewhere: [StickyNote],
                       checks: [String: NoteCheckResult] = [:], now: Date = Date()) -> String {
         func line(_ n: StickyNote, prefix: String = "") -> String {
             var s = "- \(prefix)\(n.isWarning ? "[warning] " : "")\(n.by)'s note: \"\(n.text)\" (\(n.confirmedWords(at: now))"
             s += n.isOld(at: now) ? ", may be out of date)\n" : ")\n"
-            if let check = checks[n.id] { s += "  \(check.line)\n" }
+            if let check = checks[n.id] {
+                s += "  \(check.line)\n"
+                if let raw = check.raw { s += "  (the check returned: \(raw))\n" }
+            }
             return s
         }
         var s = ""
@@ -278,7 +281,9 @@ enum Prompt {
         }
         if !notOnScreen.isEmpty {
             s += "\n## Notes on this page for controls not on the user's screen\n"
-            for n in notOnScreen { s += line(n, prefix: "For \(n.anchor.controlSummary): ") }
+            for n in notOnScreen {
+                s += line(n, prefix: "For \(n.anchor.controlSummary)\(furtherDown.contains(n.id) ? " (further down the page)" : ""): ")
+            }
         }
         if !elsewhere.isEmpty {
             s += "\n## Notes left elsewhere on this screen\n"
