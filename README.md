@@ -85,7 +85,7 @@ Each of these is kept as a lesson. When Noteling next sorts what a job read, it 
 
 ## Keep an eye on items
 
-When your team’s tools can check items on a site, ask in chat: “watch these items for me: 1, 2, 3”. Noteling checks each one right away and tells you what it shows and what will count as right. Then it checks again every 15 minutes and sends a Mac notification when an item isn’t as it should be right now, when it’s back, or when it can’t be checked. Click the notification to see why and what you can do. To change what counts as right, just say so, such as “the price should be 12.33”. **Watch List…** in the menu bar shows every item, with **Check now**, **Pause** and **Stop watching**.
+When your team’s tools can check items on a site, ask in chat: “watch these items for me: 1, 2, 3”. Noteling checks each one right away and tells you what it shows and what will count as right. Then it checks again every 15 minutes and sends a Mac notification when an item isn’t as it should be right now, when it’s back, or when it can’t be checked, with the check’s own reason when it gives one. Click the notification to see why and what you can do. To change what counts as right, just say so, such as “the price should be 12.33”. **Watch List…** in the menu bar shows every item, with **Check now**, **Pause**, **Show in Finder** and **Stop watching**. Each watch is a small folder you can open, edit and pass to a teammate: change its `watch.json` and Noteling picks it up within a minute. Stopping a watch moves its folder to the Trash, so you can put it back.
 
 ## Your information, your control
 

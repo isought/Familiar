@@ -326,22 +326,73 @@ current by itself, without git (`Sources/Familiar/ToolPacks/LinkedTools.swift`).
 Say "watch these items for me: 1, 2, 3" in chat and Noteling checks each item on a schedule, sending a Mac notification
 when one is not as it should be **right now**. A watch is about now, not history: there is no change timeline, and an
 earlier check is never evidence of a cause. What the person was last told is kept only so the same alert isn't
-repeated. The site-specific part is a pack script, named in SKILL.md with `watch: <script>`; everything else is generic.
+repeated. The site-specific part is a check script: the pack's, named in SKILL.md with `watch: <script>`, or the
+watch's own `check.py`. Everything else is generic.
+
+**One folder per watch.** Each watch is a folder in `~/.noteling/watches/`, named after the watch (lowercase letters,
+digits and dashes, made unique), so people can read it, edit it and hand it to a teammate the way they do a tool pack:
+- `watch.json` says what to watch. Noteling writes it, and people may edit it:
+  ```json
+  {
+    "id": "6F1C2A3B-4D5E-4F60-8A7B-9C0D1E2F3A4B",
+    "name": "Sale items",
+    "check": "shop__watch_item",
+    "items": [
+      "123",
+      {"key": "https://shop.example.com/item/456", "expect": {"price": 19.99}}
+    ],
+    "fields": ["price", "badges"],
+    "expect": {"badges": ["Deal"]},
+    "args": {"zip": "10001"},
+    "every_minutes": 15,
+    "paused": false,
+    "created_at": "2026-10-03T14:00:00Z",
+    "requires": ["SHOP_TOKEN"]
+  }
+  ```
+  Only `items` is required: each is an id or page address, or an object with a `key` and its own `expect`, which goes
+  over the watch's. A missing `name` is the folder's, a missing `check` the only pack check there is, and a missing `id`
+  is made (and written down) the first time Noteling reads the file. `fields` and `args` are optional, `every_minutes`
+  is held to 5–240, and keys Noteling doesn't use are kept when it writes the file.
+- `latest.json` says what the last run found, and only Noteling writes it: for each item, by its key, its title and
+  address, what counts as right, what its first check that worked found (`captured`), its latest `state`, `facts` and
+  `why`, when it was checked, its status and differences (or why it couldn't be checked), failures in a row, and what
+  the person was last told. Keeping the two files apart means a person editing one never collides with Noteling writing
+  the other.
+- `check.py`, when there is one, is the watch's own check (see below).
+
+Noteling looks at the folder again at every tick and before each run (and before the chat answers about watches): a
+`watch.json` with a new modification date is read again, so items added or removed, `expect`, `fields`, `paused` and
+`every_minutes` take effect at once. Items no check has looked at yet are checked right away, and what counts as right
+is worked out again from what each item's first check found, so a value taken out of `expect` goes back to it. A
+`watch.json` that can't be read is never written over or deleted: the watch keeps its last good definition, the window
+and the chat show "Can't read watch.json: <reason>", and the log says so once, until the file is fixed. A folder someone
+puts there is watched (a copy of another watch's folder becomes a watch of its own), a renamed folder is the same
+watch, and a folder that is deleted stops its watch. Noteling watches up to 20 folders, oldest first. **Stop watching**,
+in the window or with `stop_watch`, moves the folder to the macOS Trash, so it can be put back; the window's **Show in
+Finder** opens it. On first launch with this version, an earlier single `watch-list.json` is moved into folders, with
+what each item's checks found and what the person was last told, and renamed `watch-list.json.moved-<time>`.
 
 **The check script.** Its `run(item: str, ...)` checks one item:
 - `item` is the item exactly as the person gave it: an id or a page address. Extra arguments they gave when creating
   the watch (a zip code, say) are passed only if `run` declares them, as the declared type. `watch_items` refuses an
   argument the script doesn't take and asks for one it requires.
-- It returns an object with `title` (string), an optional `url` (the page to open), `state` and optional `facts`.
-  `state` holds flat fields, each a string, number, bool, null or list of strings: the things worth watching, e.g.
-  `{"seller": "Acme", "price": 12.33, "strikethrough": 13.95, "badges": ["Deal"], "in_stock": true}`. Report every field
-  every time, with null when it has no value: a field missing from the first check that works isn't watched. Up to 40
-  fields count, and a value that isn't flat is compared as its JSON text. `facts` is anything else that helps explain
-  the item; up to 8,000 characters are kept.
+- It returns an object with `title` (string), an optional `url` (the page to open), `state`, optional `facts` and an
+  optional `why`. `state` holds flat fields, each a string, number, bool, null or list of strings: the things worth
+  watching, e.g. `{"seller": "Acme", "price": 12.33, "strikethrough": 13.95, "badges": ["Deal"], "in_stock": true}`.
+  Report every field every time, with null when it has no value: a field missing from the first check that works isn't
+  watched. Up to 40 fields count, and a value that isn't flat is compared as its JSON text. `facts` is anything else that
+  helps explain the item; up to 8,000 characters are kept.
+- `why` is the check's own reason, in its own words: a short string, or a list of them (up to five, each up to 300
+  characters), e.g. "The page shows $24.99, but the price of record is $19.99 (set 10:32 AM). The page hasn't caught
+  up." It shows in the notification after the difference lines (the first reason, in at most two lines, cut at a word),
+  under the differences in the window's row, in the chat tools' results and in the explanation, as "What the check
+  said". The model never writes it, and a check that couldn't check shows none, not an earlier one's.
 - An `error` key, an exception, no `state` object, or running past 60 seconds means "couldn't check". The reason shown
   is the first line of the error, without the script's file name or the Python error type.
-- It runs through the bundled uv like any pack script, with the pack's `requires:` secrets and `NOTELING_CONTEXT` set
-  to the item's page (app "Watch list", the item's address when known), and it stops when its watch is stopped.
+- It runs through the bundled uv like any pack script, with the Mac's proxy and certificates, the pack's `requires:`
+  secrets and `NOTELING_CONTEXT` set to the item's page (app "Watch list", the item's address when known), and it stops
+  when its watch is stopped.
 
 ```python
 def run(item: str, zip: str = "") -> dict:
@@ -354,48 +405,77 @@ def run(item: str, zip: str = "") -> dict:
     page = read_item(item, zip)   # the pack's own code
     return {"title": page["name"], "url": page["url"],
             "state": {"price": page["price"], "badges": page["badges"], "in_stock": page["in_stock"]},
-            "facts": {"offers": page["offers"]}}
+            "facts": {"offers": page["offers"]},
+            "why": page.get("reason")}   # optional, in the check's own words
 ```
 
-**What counts as right.** An item's first check that works sets it: every field in `state`, or only the `fields` the
-person named, then any `expect` values they gave (which can add fields). An item whose first check fails gets it from
-its first later success. `change_watch` with `expect` changes it for every item and compares again with the last check.
-Numbers are equal within 0.005; text is trimmed, then exact; lists of strings are sets (order doesn't matter, and an
-empty list is none); null is a value of its own ("none"). A number or yes/no given as text ("12.33", "$12.33", "yes")
-counts as that number or answer. A field the check doesn't report is shown as not reported and never alerted on. A
-field the person named that no item reports is called out in the `watch_items` result, with the fields the check does
+**A watch's own check.** A `check.py` in the watch's folder is used instead of the pack's script, with the same
+contract. By default a watch uses the pack's check; its own is for what the pack's doesn't do, such as one call for a
+whole list. It gets only the secrets its `watch.json` lists under `requires`, by the names packs use (so they are
+entered in Settings for the pack that declares them), never Noteling's own token for the team's tools. It runs through
+the same script runner as pack scripts, in its folder, with `NOTELING_TOOL_DIR` set to that folder.
+
+**List checks.** A check whose `run()` declares a parameter named `items` is called once per run with all the watch's
+item keys, in order, plus the extra arguments it declares, instead of once per item. A watch with a list check holds up
+to 200 items; one checked one item at a time holds 50 (items past the 50th are "couldn't check" and say so). It returns
+either a list of per-item results in the same order, or an object of per-item results keyed by item; each follows the
+contract above, `error` included:
+
+```python
+def run(items: list, zip: str = "") -> dict:
+    found = read_items(items, zip)   # one call for all of them
+    return {key: {"title": found[key]["name"], "state": {"price": found[key]["price"]}}
+            for key in items if key in found}
+```
+
+An item the object has no result for is "couldn't check" ("The check returned nothing for this item.", naming keys it
+returned that are no item); a list of another length can't be matched to the items, so every item is "couldn't check".
+A run that fails (an `error` for the whole run, an exception) or takes longer than its time limit, a minute plus a
+second per item and at most 10 minutes, is "couldn't check" for every item with the run's reason, which makes one
+notification. A list run counts as one of the two checks that run at a time.
+
+**What counts as right.** An item's first check that works captures everything it reported. What counts as right is
+that (only the `fields` named, if any), then the watch's `expect`, then the item's own (which can add fields), worked
+out again whenever `watch.json` or the chat changes them. An item whose first check fails gets it from its first later
+success. Numbers are equal within 0.005; text is trimmed, then exact; lists of strings are sets (order doesn't matter,
+and an empty list is none); null is a value of its own ("none"). A number or yes/no given as text ("12.33", "$12.33",
+"yes") counts as that number or answer. A field the check doesn't report is shown as not reported and never alerted on.
+A field the person named that no item reports is called out in the `watch_items` result, with the fields the check does
 report, so a wrong name never just stays green.
 
 **When it notifies.** Never on an item's first check, since the chat shows it, and never for a result the chat waited
-for. Otherwise it notifies when an item goes from as expected to not as expected, when it is not as expected in another
-way than last told, when it is back to as expected ("Back to what you expected"), and when it couldn't be checked twice
-in a row ("Couldn't check: <reason>", once until a check works again). Three or more items of one watch that couldn't
-be checked for the same reason in one run make one notification ("Couldn't check 12 items: <reason>"). The title is the
-item's title, the subtitle the watch's name, and the body plain words, one line per difference, e.g. "Price: 13.95 —
-expected 12.33". Clicking it opens the chat on why the item is red or grey, or else the Watch List. Notifications use
-UserNotifications and work only from the `.app` bundle; elsewhere (`swift run`, tests) alerts go to the log. macOS asks
-for permission when the first watch is created; without it everything else works and the chat says they are off.
+for or for what counts as right changed in the chat. Otherwise it notifies when an item goes from as expected to not as
+expected, when it is not as expected in another way than last told, when it is back to as expected ("Back to what you
+expected"), and when it couldn't be checked twice in a row ("Couldn't check: <reason>", once until a check works
+again). After a hand edit to what counts as right, the next check tells them. Three or more items of one watch that
+couldn't be checked for the same reason in one run make one notification ("Couldn't check 12 items: <reason>"). The
+title is the item's title, the subtitle the watch's name, and the body plain words: one line per difference, e.g.
+"Price: 24.99 — expected 19.99", then the check's `why`. Clicking it opens the chat on why the item is red or grey, or
+else the Watch List. Notifications use UserNotifications and work only from the `.app` bundle; elsewhere (`swift run`,
+tests) alerts go to the log. macOS asks for permission when the first watch is created; without it everything else
+works and the chat says they are off.
 
 **Schedule.** Every 15 minutes by default (5 to 240). The runner ticks every 30 seconds, and 10 seconds after the Mac
-wakes. It starts the watches that are due, runs at most two item checks at a time across all watches, and never runs
-one watch twice at once. It starts once the packs have loaded.
+wakes. It starts the watches that are due, runs at most two checks at a time across all watches, and never runs one
+watch twice at once. It starts once the packs have loaded.
 
 **Chat tools** (`WatchListConversation`, in every general chat turn):
 - `watch_items` {items, name?, every_minutes?, fields?, expect?, args?, check?} creates a watch and checks every item at
-  once. It waits up to 90 seconds, then returns per item its title, status, what it shows now and what counts as right.
-  `check` picks a pack when several have a `watch:` script; with none, the chat says to link the team's tools in Settings.
-- `list_watches`, `check_watch_now` {watch?}, `change_watch` {watch, add_items?, remove_items?, every_minutes?, expect?,
-  paused?} and `stop_watch` {watch}. A change leaves a receipt on the pad and an Open Watch List tab.
+  once. It waits up to 90 seconds, then returns per item its title, status, what it shows now, what counts as right and
+  the check's `why`, and the watch's folder. `check` picks a pack when several have a `watch:` script; with none, the
+  chat says to link the team's tools in Settings.
+- `list_watches` (also naming folders it can't watch), `check_watch_now` {watch?}, `change_watch` {watch, add_items?,
+  remove_items?, every_minutes?, expect?, paused?} and `stop_watch` {watch}. A change leaves a receipt on the pad and an
+  Open Watch List tab; a watch whose `watch.json` can't be read says so, and isn't changed until it's fixed.
 
-**Why?** `Assistant.explainWatched` sends what counts as right, what the latest check shows and when, and its facts.
-The request is about the item's page (a synthetic context: app "Watch list", the item's address), so that page's pack
-and its scripts are available, and it never takes control. The answer comes as **Why**, **What you can do** and, only
-when something couldn't be confirmed, **Couldn't check**.
+**Why?** `Assistant.explainWatched` sends what counts as right, what the latest check shows and when, what the check
+said, and its facts. The request is about the item's page (a synthetic context: app "Watch list", the item's address),
+so that page's pack and its scripts are available, and it never takes control. The answer comes as **Why**, **What you
+can do** and, only when something couldn't be confirmed, **Couldn't check**.
 
-**Files.** `~/.noteling/watch-list.json` is owner-only and written whole. It holds each watch's name, check, items,
-extra arguments, fields, expectations and schedule, and for each item its title and address, what counts as right, the
-latest check's state and facts, when it ran, its status, failures in a row and what the person was last told. The code
-is in `Sources/Familiar/Features/WatchList/`; the menu bar's **Watch List…** opens its window.
+**Files.** `~/.noteling/watches/<name>/watch.json` and `latest.json` (the folder 0700, the files 0600, each written whole
+and moved into place), and an optional `check.py`. The code is in `Sources/Familiar/Features/WatchList/`
+(`WatchListFiles` for the two files); the menu bar's **Watch List…** opens its window.
 
 ## Config (`~/.noteling/config.json`)
 | key | default | meaning |
