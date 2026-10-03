@@ -32,6 +32,9 @@ final class NotesStore: ObservableObject {
         return notes.filter { $0.anchor.matchesScene(ctx, page: page) }
     }
 
+    /// Whether a copy of this note kept in a pack is out of date: the store has its own, or removed it.
+    func supersedes(_ id: String) -> Bool { removed.contains(id) || notes.contains { $0.id == id } }
+
     func save(_ note: StickyNote) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let encoder = JSONEncoder()

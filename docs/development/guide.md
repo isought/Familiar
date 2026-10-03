@@ -283,6 +283,45 @@ token: in Waxwing open **Account and access → Create agent token (Read)**, the
 collection, model revision, record or work report; `search`, `library` and `attention` cover the rest.
 The docs were generated from the app's repo and use its real button labels.
 
+### Team tools from GitHub (linked tools)
+Someone who supports a group can keep its tool packs in one GitHub repository (github.com or GitHub Enterprise), shaped
+like the tools folder: each top-level folder is a pack (`<pack>/SKILL.md`, `docs/**`, `scripts/*.py`). Each person links
+it once in **Settings → Team tools from GitHub** with the repository's address and a token, and Noteling keeps a copy
+current by itself, without git (`Sources/Familiar/ToolPacks/LinkedTools.swift`).
+- **Settings.** The address goes to `toolsRepo` in config.json, as the plain web address: an SSH address
+  (`git@github.example.com:acme/tools.git`), `.git`, a browser address such as `/tree/main`, and any name and password
+  in it are reduced to `https://github.example.com/acme/tools`. `toolsRepoBranch` (default `main`) is set in config.json
+  only. The token is the secret `NOTELING_TOOLS_REPO_TOKEN` (Keychain in signed builds, `secrets.json` in dev builds);
+  it is never written to config.json or the log, and a pack can't get it through `requires:`. A public repository
+  needs no token. The API is `https://api.github.com` for github.com, `https://api.<host>` for `*.ghe.com`, and
+  `https://<host>/api/v3` for a GitHub Enterprise Server.
+- **Checks.** At launch (after the first tools load), every 10 minutes, on **Update now**, and right after Settings saves
+  a changed address, token or branch, Noteling asks `GET /repos/{owner}/{repo}/commits/{branch}` with
+  `Accept: application/vnd.github.sha`: the commit id, as plain text. Only when it differs from the installed one does it
+  download `GET /repos/{owner}/{repo}/tarball/{sha}`, which GitHub redirects to its download host. The token goes on
+  a redirect only to the repository's host and its subdomains. One check runs at a time. Requests use the Mac's proxy
+  settings and trusted certificates, with no cache.
+- **Install.** The archive is unpacked with `/usr/bin/tar` into `~/.noteling/.linked-tools-incoming` (bsdtar refuses
+  `..` paths and writing through links; no `-P`), must hold exactly one top folder (`owner-repo-sha/`), loses any
+  symbolic link that leads outside it, and is swapped in for `~/.noteling/linked-tools/` with a single
+  `renamex_np(RENAME_SWAP)`. If anything fails, the copy that worked stays as it was. `~/.noteling/linked-tools.json`
+  (owner-only) records `url`, `branch`, `sha`, `updatedAt`, `lastCheckedAt` and `lastError`; `linked-tools/` is
+  owner-only too. Clearing the address and saving removes both.
+- **Status.** Settings shows `acme/tools · abc1234 · updated 3 min ago`, or what went wrong in plain words while the old
+  copy keeps working (`Couldn't update. … Using the copy from 10:42.`). The menu's Tools line says how many packs came
+  from the link, or that team tools were not updated.
+- **Precedence.** `ToolRegistry` loads your own folder first, then `linkedRoot`. A pack of your own with the same folder
+  name wins, and the log says `tools: your own <pack> is used instead of the linked one`; Settings lists them too. This
+  is how to try a fix before pushing it: copy the pack into your own tools folder, change it, **Reload**, push, then
+  delete your copy. The examples Noteling puts in a new tools folder count as your own (`expenses`, `hr-portal`,
+  `imap-mail`, `it-access`, `shared`, `waxwing`), so give team packs names of their own.
+- **Read only.** Nothing writes into `linked-tools/`: each update replaces it. Notes the pen leaves go to the notes store;
+  a team pack's `notes.json` is taken into it after each update and never renamed, and a team note you edit or remove
+  is changed only in your notes. A Watch Me draft or a new pack for a note whose folder name only the team has goes to
+  `<name>-mine` in your own folder, so it doesn't hide theirs. `read_file` and `grep` read a pack's files from
+  the folder its pack is loaded from, and never outside it. Scripts run as they do from your own folder;
+  `NOTELING_TOOL_DIR` points into the copy, which each update replaces, so a script should keep state elsewhere.
+
 ## Config (`~/.noteling/config.json`)
 | key | default | meaning |
 |---|---|---|

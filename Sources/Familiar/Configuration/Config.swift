@@ -19,6 +19,8 @@ struct Config: Codable {
     var hideFromScreenShare: Bool = false    // true = bubble invisible in screenshots, screen shares and recordings
     var notesShortcut: Bool = true           // press Option twice to show or hide the notes on the screen in front
     var toolsDir: String = ""                // empty = ~/.noteling/tools
+    var toolsRepo: String = ""               // the team's tools repository on GitHub; empty = not linked (its token is kept with the secrets)
+    var toolsRepoBranch: String = "main"     // the branch of it Noteling keeps a copy of
     var docsStuffLimitChars: Int = 24000
     var uvPath: String = ""                  // empty = bundled uv, then ~/.local/bin, homebrew
     var wandHoldSeconds: Double = 0.8        // hold the bubble this long to charge the wand
@@ -113,6 +115,8 @@ struct Config: Codable {
         hideFromScreenShare = try c.decodeIfPresent(Bool.self, forKey: .hideFromScreenShare) ?? d.hideFromScreenShare
         notesShortcut = try c.decodeIfPresent(Bool.self, forKey: .notesShortcut) ?? d.notesShortcut
         toolsDir = try c.decodeIfPresent(String.self, forKey: .toolsDir) ?? d.toolsDir
+        toolsRepo = try c.decodeIfPresent(String.self, forKey: .toolsRepo) ?? d.toolsRepo
+        toolsRepoBranch = try c.decodeIfPresent(String.self, forKey: .toolsRepoBranch) ?? d.toolsRepoBranch
         docsStuffLimitChars = try c.decodeIfPresent(Int.self, forKey: .docsStuffLimitChars) ?? d.docsStuffLimitChars
         uvPath = try c.decodeIfPresent(String.self, forKey: .uvPath) ?? d.uvPath
         wandHoldSeconds = try c.decodeIfPresent(Double.self, forKey: .wandHoldSeconds) ?? d.wandHoldSeconds

@@ -32,6 +32,8 @@ final class SettingsModel: ObservableObject {
     @Published var backgroundPreciseClicks = false
     @Published var mascotStyle = "innocent"
     @Published var packSecrets: [PackSecret] = []
+    @Published var toolsRepo = ""
+    @Published var toolsRepoToken = ""
     @Published var message = ""
 
     struct PackSecret: Identifiable {
@@ -41,8 +43,17 @@ final class SettingsModel: ObservableObject {
     }
 
     var toolsDir = ""
+    var toolsRepoBranch = "main"
+    private var savedToolsRepo = ""
+    private var savedToolsRepoToken = ""
     private var loadedConfig = Config()
     private var apiKeyLoaded = false
+
+    /// The team-tools address or token differ from what is saved.
+    var toolsRepoChanged: Bool {
+        toolsRepo.trimmingCharacters(in: .whitespacesAndNewlines) != savedToolsRepo
+            || toolsRepoToken.trimmingCharacters(in: .whitespacesAndNewlines) != savedToolsRepoToken
+    }
 
     private func loadAPIKeyIfNeeded() {
         guard !apiKeyLoaded else { return }
@@ -75,6 +86,11 @@ final class SettingsModel: ObservableObject {
         backgroundPreciseClicks = config.backgroundPreciseClicks
         mascotStyle = config.mascotStyle
         toolsDir = config.resolvedToolsDir.path
+        toolsRepo = config.toolsRepo
+        toolsRepoBranch = LinkedToolsUpdater.branch(config)
+        toolsRepoToken = Secrets.get(LinkedTools.tokenKey) ?? ""
+        savedToolsRepo = toolsRepo.trimmingCharacters(in: .whitespacesAndNewlines)
+        savedToolsRepoToken = toolsRepoToken
         var byKey: [String: [String]] = [:]
         for p in packs { for k in p.requires { byKey[k, default: []].append(p.name) } }
         packSecrets = byKey.keys.sorted().map { key in
@@ -134,6 +150,14 @@ final class SettingsModel: ObservableObject {
         c.backgroundPreciseClicks = backgroundPreciseClicks
         c.mascotStyle = mascotStyle
         for s in packSecrets where !Secrets.set(s.id, s.value) { message = "Could not save \(s.id) to the Keychain." }
+        c.toolsRepo = RepoAddress.cleaned(toolsRepo)   // the plain address: credentials pasted into it are never kept
+        toolsRepo = c.toolsRepo
+        savedToolsRepo = c.toolsRepo
+        if Secrets.set(LinkedTools.tokenKey, toolsRepoToken) {
+            savedToolsRepoToken = toolsRepoToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            message = "Could not save the team tools token to the Keychain."
+        }
         do {
             if startAtLogin, SMAppService.mainApp.status != .enabled { try SMAppService.mainApp.register() }
             if !startAtLogin, SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() }
@@ -148,6 +172,7 @@ final class SettingsModel: ObservableObject {
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
+    var linkedTools: LinkedToolsUpdater?
     let onSave: () -> Void
     let onOpenTools: () -> Void
     let onReloadTools: () -> Void
@@ -187,6 +212,13 @@ struct SettingsView: View {
                     }
                     TextField("Gateway base URL (optional)", text: $model.apiBaseURL, prompt: Text("https://api.anthropic.com"))
                 }
+            }
+            Section("Team tools from GitHub") {
+                TextField("Repository", text: $model.toolsRepo, prompt: Text(RepoAddress.example))
+                SecureField("Token", text: $model.toolsRepoToken)
+                if let linkedTools { LinkedToolsRow(updater: linkedTools, model: model, onSave: onSave) }
+                Text("Noteling keeps a copy of this repository's \(model.toolsRepoBranch) branch and checks for changes every 10 minutes. A tool in your own folder with the same name wins.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Tool packs") {
                 if model.packSecrets.isEmpty {
@@ -258,18 +290,52 @@ struct SettingsView: View {
     }
 }
 
+/// The linked copy's status, kept current while Settings is open, which team packs your own folder overrides, and
+/// Update now. Unsaved changes to the address or token are saved first; saving them checks right away.
+private struct LinkedToolsRow: View {
+    @ObservedObject var updater: LinkedToolsUpdater
+    @ObservedObject var model: SettingsModel
+    let onSave: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                VStack(alignment: .leading, spacing: 2) {
+                    let line = updater.checking ? "Checking for changes…" : updater.status(now: context.date)
+                    if !line.isEmpty {
+                        Text(line).font(.caption).foregroundStyle(updater.record?.lastError == nil || updater.checking ? Color.secondary : Color.orange)
+                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    }
+                    let own = updater.overriddenPacks()
+                    if !own.isEmpty {
+                        Text("\(own.joined(separator: ", ")): your own folder's \(own.count == 1 ? "copy is" : "copies are") used, not the team's.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            Spacer()
+            Button(model.toolsRepoChanged ? "Save and update" : "Update now") {
+                if model.toolsRepoChanged { onSave() } else { Task { await updater.check() } }
+            }
+            .disabled(updater.checking || (model.toolsRepo.isEmpty && !model.toolsRepoChanged))
+        }
+    }
+}
+
 @MainActor
 final class SettingsWindowController {
     private var window: NSWindow?
     let model = SettingsModel()
 
-    func show(config: Config, packs: [ToolPack], onSave: @escaping () -> Void, onOpenTools: @escaping () -> Void, onReloadTools: @escaping () -> Void) {
+    func show(config: Config, packs: [ToolPack], linkedTools: LinkedToolsUpdater? = nil, onSave: @escaping () -> Void,
+              onOpenTools: @escaping () -> Void, onReloadTools: @escaping () -> Void) {
         model.load(config: config, packs: packs)
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 720), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             w.title = "Noteling Settings"
             w.isReleasedWhenClosed = false
-            w.contentView = NSHostingView(rootView: SettingsView(model: model, onSave: onSave, onOpenTools: onOpenTools, onReloadTools: onReloadTools))
+            w.contentView = NSHostingView(rootView: SettingsView(model: model, linkedTools: linkedTools, onSave: onSave,
+                                                                 onOpenTools: onOpenTools, onReloadTools: onReloadTools))
             w.center()
             window = w
         }

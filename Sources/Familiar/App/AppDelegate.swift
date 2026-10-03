@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let watcher = ContextWatcher()
     private var runner: ScriptRunner!
     private var registry: ToolRegistry!
+    private lazy var linkedTools = LinkedToolsUpdater(config: { [weak self] in self?.config ?? Config() })
     private var assistant: Assistant!
     private let shell = ShellState()
     private let wand = WandController()
@@ -61,10 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Log.info("signing: \(Signing.description); secrets: \(Secrets.store.rawValue)")
         runner = ScriptRunner(config: config)
         registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
+        registry.linkedRoot = LinkedTools.root(for: config)   // the team's tools, once Settings links a repository
+        linkedTools.onToolsChanged = { [weak self] in await self?.linkedToolsChanged() }
         // A tools folder of one's own gives its notes up once; one outside Noteling's folder may be shared, so its
         // notes are copied and the file stays for the others.
         let ownTools = config.resolvedToolsDir.standardizedFileURL.path.hasPrefix(Config.dir.standardizedFileURL.path)
         notesStore.moveNotes(fromPacksIn: config.resolvedToolsDir, rename: ownTools)
+        if let linked = registry.linkedRoot { notesStore.moveNotes(fromPacksIn: linked, rename: false) }   // the team's notes
         registry.notesStore = notesStore
         briefs = PageBriefs(registry: registry)
         assistant = Assistant(config: config, watcher: watcher, registry: registry, shell: shell, learning: learning, execution: execution, desktop: desktop)
@@ -241,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             runner.networkEnv = await ScriptNetwork.current()   // before the first script: the Mac's proxy and certificates
             await registry.reload()
             assistant.notesHere = registry.notes(for: watcher.current)
+            linkedTools.start()   // checks the linked repository now, then every 10 minutes
             Secrets.migrateKeychainToFile(keys: (config.connectionMode == "api" ? ["ANTHROPIC_API_KEY"] : []) + registry.packs.flatMap(\.requires))
             if !assistant.hasConnection { assistant.reconfigure(config) }   // pick up a migrated key
             morningTasks.start()
@@ -488,7 +493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let scripts = registry.packs.reduce(0) { $0 + $1.scripts.count }
         let missing = registry.missingRequirements(for: registry.packs)
         toolsMenuItem.title = missing.isEmpty
-            ? "Tools: \(registry.packs.count) packs, \(scripts) scripts — Reload"
+            ? "Tools: \(registry.packs.count) packs, \(scripts) scripts\(linkedTools.menuNote(linkedPacks: registry.packs.filter(\.linked).count)) — Reload"
             : "Tools: \(missing.map { "\($0.pack.name) needs \($0.keys.joined(separator: ", "))" }.joined(separator: "; ")) — open Settings"
         screenPermItem.title = "Screen Recording: " + (Permissions.screenRecordingGranted ? "granted ✓" : "not granted — click to fix")
         axPermItem.title = "Accessibility: " + (Permissions.accessibilityGranted ? "granted ✓" : "not granted — click to fix")
@@ -706,11 +711,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// A new copy of the team's tools, or none: reload, and take in the notes kept in it (its files are never renamed).
+    private func linkedToolsChanged() async {
+        registry.linkedRoot = LinkedTools.root(for: config)
+        await registry.reload()
+        if let linked = registry.linkedRoot { notesStore.moveNotes(fromPacksIn: linked, rename: false) }
+        notesStore.reload()
+        assistant.notesHere = registry.notes(for: watcher.current)
+    }
+
     @objc private func openSettings() {
         origami.cancel()
-        settings.show(config: config, packs: registry.packs, onSave: { [weak self] in
+        settings.show(config: config, packs: registry.packs, linkedTools: linkedTools, onSave: { [weak self] in
             guard let self else { return }
             self.config = self.settings.model.save(into: self.config)
+            self.linkedTools.settingsSaved()   // a changed address, branch or token is checked right away
             self.assistant.reconfigure(self.config)
             self.runner.extraEnv = self.config.env
             self.setupHotKey()

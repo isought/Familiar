@@ -21,6 +21,7 @@ func runHeadlessAsk() async {
     }
     let runner = ScriptRunner(config: config)
     let registry = ToolRegistry(root: config.resolvedToolsDir, runner: runner)
+    registry.linkedRoot = LinkedTools.root(for: config)
     await registry.reload()
     let title = args.firstIndex(of: "--title").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? (url.contains("4310") ? "Waxwing" : "New Report - Concur")
     var ctx = ScreenContext(appName: "Google Chrome", bundleID: "com.google.Chrome", windowTitle: title, url: url, focused: nil, timestamp: Date())
