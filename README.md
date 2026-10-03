@@ -79,6 +79,10 @@ What matters to you isn’t what matters to someone else, so Noteling learns it 
 
 Each of these is kept as a lesson. When Noteling next sorts what a job read, it sends that job’s 40 newest lessons (each one’s subject or title, sender, what you said and your words) to your Claude connection beside its rules, so a message like one you marked becomes a card, and one like a thumbs-down doesn’t. Lessons apply to mail that arrives later; teaching doesn’t sort what was already sorted again. **What you’ve taught** lists every lesson, and **Forget** removes one.
 
+## Keep an eye on items
+
+When your team’s tools can check items on a site, ask in chat: “watch these items for me: 1, 2, 3”. Noteling checks each one right away and tells you what it shows and what will count as right. Then it checks again every 15 minutes and sends a Mac notification when an item isn’t as it should be right now, when it’s back, or when it can’t be checked. Click the notification to see why and what you can do. To change what counts as right, just say so, such as “the price should be 12.33”. **Watch List…** in the menu bar shows every item, with **Check now**, **Pause** and **Stop watching**.
+
 ## Your information, your control
 
 Your saved sources, cards, and run history are stored on your Mac, and Noteling sends nothing to its developer. AI features send what a request needs to your configured Claude connection. Depending on the request, that can include screenshots, text from the window you’re using, the apps and web addresses you used recently, what Noteling reads from your sources, and the lessons you teach, in your own words. **Watch Me** records only the demonstration you start. The [privacy notice](PRIVACY.md) lists exactly what is stored, what is sent, and how to delete it.

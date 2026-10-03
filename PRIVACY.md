@@ -58,6 +58,16 @@ The attention test measures whether cards show you what matters and leave the re
 
 **The mail pack.** The built-in `imap-mail` pack reads a mailbox over IMAP. It needs two secrets that you enter in Settings: `MAIL_ADDRESS` and `MAIL_APP_PASSWORD`, an app password rather than your normal one. Signed builds keep them in the macOS Keychain; developer builds keep them in `secrets.json`. Noteling hands a secret only to the scripts of packs that name it, and among the built-in packs only this one names these. The script connects only to the IMAP server for your address, over an encrypted connection: your provider's server (for example Gmail's or iCloud's), or one you set yourself with `MAIL_IMAP_HOST`. It opens the mailbox read-only and fetches messages with `BODY.PEEK`, so it never marks anything read, moves or deletes it. For each message it returns, it downloads the first 16 KB (the headers and the start of the text) and keeps only the facts listed under Script reads above. What a job reads reaches your Claude connection only through the card step, and through chat when chat looks the job up. In chat, Claude can also run the script itself when you ask about your mail; what it returns is then part of that conversation.
 
+## Watch lists
+
+**What is stored.** When you ask Noteling to watch items, it keeps your watch list in `watch-list.json` in its folder, which only your macOS user account can read. For each watch, the file holds its name, the items as you gave them (ids or page addresses), how often to check, and any details you gave for the check, such as a zip code. For each item, it holds what counts as right and what the latest check found: the item's title and address, the values the check reported, any other facts it returned (up to 8,000 characters), when it ran, and what Noteling last told you about the item. There is no history: each check replaces the one before. Stopping a watch deletes it from the file, and deleting the file deletes them all.
+
+**Checks run on a schedule.** While Noteling is running, it runs your tool-pack checks on a schedule, every 15 minutes unless you choose otherwise, on your Mac and with the secrets those packs need. Like any pack script, a check can contact the service it was written for. Checking doesn't send anything to Claude.
+
+**Notifications go through macOS.** An alert shows the item's title, the watch's name and what isn't as expected. macOS keeps it in Notification Center, and shows it on your lock screen if your notification settings allow that. You can turn Noteling's notifications off in System Settings → Notifications.
+
+**What goes to Claude.** When you create, list, check or change a watch in chat, what the checks found becomes part of that conversation. When you ask why an item isn't as expected, from a notification or the Watch List, the request includes the item's address and title, what counts as right, what the latest check found and when, its facts, and the tool pack for that page.
+
 ## How long it is kept
 
 - Watch Me recordings are deleted when you keep or discard the draft, when you clear the chat pad, or when you quit. Anything left behind by a crash is deleted after 7 days.
