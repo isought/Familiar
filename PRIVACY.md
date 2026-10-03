@@ -16,6 +16,7 @@ The app stores its data in `~/.noteling`, or in `$NOTELING_HOME` if you set it. 
 | Cards, your decisions and context, Who's Who, queued work, what the card step has already judged, and the lessons you teach | `morning/` |
 | Watch Me recordings, only while a draft is being written | `recordings/` |
 | The attention test: each message a mail job read through a script (its subject, sender and address, a short preview and its link) and whether it became a card, and the names of mail jobs that read from the screen beside it; your thumbs, explanations and “Matters to me” marks; what you do with your cards; and when you open the pack | `attention/` |
+| The certificates this Mac trusts for everyone, copied from the system keychains so tool-pack scripts can use them behind a company proxy | `run/certificates.pem` |
 | Activity log | `noteling.log` |
 | Freeze diagnostics: the steps chat goes through, and a record of each time the app stopped responding | `diagnostics/main-thread/` |
 | How you use notes: arriving where there are notes, showing them, pointing at things with the pen, checks run and what they found, notes kept or removed. Counts, kinds and note ids only, never a note's words, a page's address or anything on screen | `usage/` |

@@ -269,6 +269,11 @@ PEP 723 header and are installed by the bundled `uv` on first use:
 Scripts receive `NOTELING_CONTEXT` (JSON of app/window/url) and `NOTELING_TOOL_DIR` in the environment (also as `FAMILIAR_CONTEXT` and `FAMILIAR_TOOL_DIR`, for packs written before the rename), plus the
 config's `env` map and, for each name the pack lists under `requires:` in its front matter, the secret of that name from
 the Keychain (entered in Settings). The menu bar shows which packs are missing a secret.
+Behind a company proxy, scripts and uv also get the Mac's network settings (`ScriptNetwork`): `HTTP(S)_PROXY` and
+`NO_PROXY` from System Settings' fixed proxies, or from its proxy auto-config file resolved once at launch for an
+internet address; `SSL_CERT_FILE` (and `REQUESTS_CA_BUNDLE`) pointing at `~/.noteling/run/certificates.pem`, the
+certificates this Mac trusts for everyone, including one a company installs for its proxy; and `UV_NATIVE_TLS=1`.
+The config's `env` map wins over all of them, for example to send internal hosts direct with `NO_PROXY`.
 Docs under the stuff limit are pasted into the prompt; larger ones are listed and read on demand.
 
 ### The Waxwing pack (current target)

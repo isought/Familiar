@@ -50,7 +50,7 @@ final class ScriptRunner {
         guard let (exe, args) = command(helper: "introspect.py", script: script, deps: []) else {
             throw ScriptRunnerError(message: "no Python runtime")
         }
-        let r = try await Subprocess.run(exe, args, timeout: 120)
+        let r = try await Subprocess.run(exe, args, env: networkEnv, timeout: 120)
         guard let json = Self.lastJSONLine(r.stdout) else {
             throw ScriptRunnerError(message: "introspect failed for \(script.lastPathComponent): \(r.stderr.suffix(300))")
         }
@@ -61,6 +61,8 @@ final class ScriptRunner {
     }
 
     var extraEnv: [String: String] = [:]   // non-secret config env
+    /// The Mac's proxy and trusted certificates for scripts and uv (`ScriptNetwork`); Settings' `env` wins over it.
+    var networkEnv: [String: String] = [:]
 
     /// `timeout` stops the script once it has run that long; `stopsWithCaller` stops it when the calling task is cancelled.
     func run(_ tool: ScriptTool, args: [String: Any], context: ScreenContext?, secrets: [String] = [],
@@ -84,7 +86,7 @@ final class ScriptRunner {
             throw ScriptRunnerError(message: "no Python runtime")
         }
         let stdin = try JSONSerialization.data(withJSONObject: args)
-        var env = extraEnv
+        var env = networkEnv.merging(extraEnv) { _, configured in configured }
         let toolDir = tool.path.deletingLastPathComponent().deletingLastPathComponent().path
         env["NOTELING_TOOL_DIR"] = toolDir
         env["FAMILIAR_TOOL_DIR"] = toolDir   // earlier name, kept for existing packs

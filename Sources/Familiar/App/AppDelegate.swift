@@ -238,6 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupWand()
         requestPermissionsOnFirstRun()
         Task {
+            runner.networkEnv = await ScriptNetwork.current()   // before the first script: the Mac's proxy and certificates
             await registry.reload()
             assistant.notesHere = registry.notes(for: watcher.current)
             Secrets.migrateKeychainToFile(keys: (config.connectionMode == "api" ? ["ANTHROPIC_API_KEY"] : []) + registry.packs.flatMap(\.requires))
