@@ -73,9 +73,11 @@ final class ScriptRunner {
         return s.count > 20_000 ? String(s.prefix(20_000)) + "\n…(truncated)" : s
     }
 
-    /// The script's own result, for code that uses it directly (a saved job reading its source), with no size cap.
-    func result(_ tool: ScriptTool, args: [String: Any] = [:], secrets: [String] = []) async throws -> Any {
-        try await execute(tool, args: args, context: nil, secrets: secrets, stopsWithCaller: true)["result"] ?? NSNull()
+    /// The script's own result, for code that uses it directly (a saved job reading its source, a watch list's check),
+    /// with no size cap. It stops with its caller, and at `timeout`.
+    func result(_ tool: ScriptTool, args: [String: Any] = [:], context: ScreenContext? = nil, secrets: [String] = [],
+                timeout: TimeInterval = 90) async throws -> Any {
+        try await execute(tool, args: args, context: context, secrets: secrets, timeout: timeout, stopsWithCaller: true)["result"] ?? NSNull()
     }
 
     private func execute(_ tool: ScriptTool, args: [String: Any], context: ScreenContext?, secrets: [String],
