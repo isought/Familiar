@@ -27,6 +27,13 @@ final class WatchListFeature {
         window = WatchListWindowController(store: store, runner: runner, notifier: notifier)
     }
 
+    /// Starts the schedule. With watches kept from before, macOS is asked again for notifications, which only prompts
+    /// someone who never answered.
+    func start() {
+        if !store.watches.isEmpty { notifier.requestPermission() }
+        runner.start()
+    }
+
     func stop() {
         runner.stop()
         window.close()

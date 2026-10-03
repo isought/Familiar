@@ -52,7 +52,7 @@ enum WatchListValue: Equatable {
         }
     }
 
-    /// In plain words, as a row or an alert shows it: 12.33, yes, Deal, Overall pick, none.
+    /// In plain words, as a row or an alert shows it: 12.33, yes, Deal, New, none.
     var words: String {
         switch self {
         case .text(let text):
@@ -211,9 +211,9 @@ struct WatchListItem: Equatable, Identifiable {
         return key.lowercased().hasPrefix("http://") || key.lowercased().hasPrefix("https://") ? key : nil
     }
 
-    /// Fields that count but that the last check didn't report: shown, never alerted on.
+    /// Fields that count but that the latest check didn't report: shown, never alerted on. Nothing when it failed.
     var unreported: [String] {
-        guard let expected, let state else { return [] }
+        guard let expected, let state, status?.isVerdict == true else { return [] }
         return expected.keys.filter { state[$0] == nil }.sorted()
     }
 
@@ -223,6 +223,11 @@ struct WatchListItem: Equatable, Identifiable {
         case .notAsExpected?, .couldNotCheck?: return true
         default: return false
         }
+    }
+
+    var isRed: Bool {
+        if case .notAsExpected? = status { return true }
+        return false
     }
 }
 

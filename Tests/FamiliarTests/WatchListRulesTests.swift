@@ -8,14 +8,14 @@ import Testing
 struct WatchListRulesTests {
     private let start = Date(timeIntervalSince1970: 1_790_000_000)
     private let shown: [String: WatchListValue] = ["seller": .text("Acme"), "price": .number(12.33), "strikethrough": .number(13.95),
-                                                   "badges": .list(["Deal", "Overall pick"]), "in_stock": .flag(true)]
+                                                   "badges": .list(["Deal", "New"]), "in_stock": .flag(true)]
 
     // MARK: what counts as right
 
     @Test func theFirstCheckThatWorksSetsWhatCountsAsRight() {
         #expect(WatchListRules.expectations(from: shown, fields: nil, expect: [:]) == shown)
         #expect(WatchListRules.expectations(from: shown, fields: ["price", "badges", "rating"], expect: [:])
-                == ["price": .number(12.33), "badges": .list(["Deal", "Overall pick"])])
+                == ["price": .number(12.33), "badges": .list(["Deal", "New"])])
     }
 
     @Test func whatThePersonSaysOverridesTheFirstCheckAndCanAddAField() {
@@ -90,10 +90,10 @@ struct WatchListRulesTests {
     }
 
     @Test func listsAreSetsWhereOrderDoesNotMatter() {
-        #expect(WatchListRules.same(.list(["Overall pick", "Deal"]), .list(["Deal", "Overall pick"])))
+        #expect(WatchListRules.same(.list(["New", "Deal"]), .list(["Deal", "New"])))
         #expect(WatchListRules.same(.list(["Deal", "Deal "]), .list(["Deal"])))
-        #expect(!WatchListRules.same(.list(["Overall pick"]), .list(["Deal", "Overall pick"])))
-        #expect(!WatchListRules.same(.list(["Deal", "Overall pick"]), .list(["Deal"])))
+        #expect(!WatchListRules.same(.list(["New"]), .list(["Deal", "New"])))
+        #expect(!WatchListRules.same(.list(["Deal", "New"]), .list(["Deal"])))
         #expect(WatchListRules.same(.list(["Deal"]), .text("Deal")))
     }
 
@@ -117,33 +117,36 @@ struct WatchListRulesTests {
         var item = WatchListItem(key: "123")
         item.expected = expected
         item.state = ["price": .number(12.33), "strikethrough": .none]
+        item.status = .asExpected
         #expect(item.unreported == ["seller"])
+        item.status = .couldNotCheck("Offline")   // the latest check reported nothing at all
+        #expect(item.unreported.isEmpty)
     }
 
     // MARK: alerts
 
     @Test func notAsExpectedIsToldOnceAndAgainOnlyWhenItChanges() {
-        var item = firstChecked(["price": .number(12.33), "badges": .list(["Deal", "Overall pick"])])
+        var item = firstChecked(["price": .number(12.33), "badges": .list(["Deal", "New"])])
 
-        let worse = WatchListRules.apply(.checked(reading(["price": .number(12.33), "badges": .list(["Overall pick"])])), to: &item,
+        let worse = WatchListRules.apply(.checked(reading(["price": .number(12.33), "badges": .list(["New"])])), to: &item,
                                          fields: nil, expect: [:], at: start + 900)
-        let lostDeal = WatchListDifference(field: "badges", now: .list(["Overall pick"]), expected: .list(["Deal", "Overall pick"]))
+        let lostDeal = WatchListDifference(field: "badges", now: .list(["New"]), expected: .list(["Deal", "New"]))
         #expect(worse == .notAsExpected([lostDeal]))
 
         // The same differences 15 minutes later: nothing new to say.
-        #expect(WatchListRules.apply(.checked(reading(["price": .number(12.33), "badges": .list(["Overall pick"])])), to: &item,
+        #expect(WatchListRules.apply(.checked(reading(["price": .number(12.33), "badges": .list(["New"])])), to: &item,
                                      fields: nil, expect: [:], at: start + 1_800) == nil)
 
         // Not as expected in another way: told again.
-        let other = WatchListRules.apply(.checked(reading(["price": .number(13.95), "badges": .list(["Overall pick"])])), to: &item,
+        let other = WatchListRules.apply(.checked(reading(["price": .number(13.95), "badges": .list(["New"])])), to: &item,
                                          fields: nil, expect: [:], at: start + 2_700)
         #expect(other == .notAsExpected([lostDeal, WatchListDifference(field: "price", now: .number(13.95), expected: .number(12.33))]))
 
         // Back to what was expected.
-        let back = WatchListRules.apply(.checked(reading(["price": .number(12.33), "badges": .list(["Overall pick", "Deal"])])), to: &item,
+        let back = WatchListRules.apply(.checked(reading(["price": .number(12.33), "badges": .list(["New", "Deal"])])), to: &item,
                                         fields: nil, expect: [:], at: start + 3_600)
         #expect(back == .backToExpected)
-        #expect(WatchListRules.apply(.checked(reading(["price": .number(12.33), "badges": .list(["Deal", "Overall pick"])])), to: &item,
+        #expect(WatchListRules.apply(.checked(reading(["price": .number(12.33), "badges": .list(["Deal", "New"])])), to: &item,
                                      fields: nil, expect: [:], at: start + 4_500) == nil)
     }
 
@@ -214,10 +217,10 @@ struct WatchListRulesTests {
         func alert(_ kind: WatchListAlert.Kind) -> WatchListAlert {
             WatchListAlert(watchID: id, watchName: "Sale items", itemKey: "123", title: "Blue kettle", kind: kind)
         }
-        let badges = WatchListDifference(field: "badges", now: .list(["Overall pick"]), expected: .list(["Deal", "Overall pick"]))
+        let badges = WatchListDifference(field: "badges", now: .list(["New"]), expected: .list(["Deal", "New"]))
         let price = WatchListDifference(field: "price", now: .number(13.95), expected: .number(12.33))
-        #expect(alert(.notAsExpected([badges])).body == "Badges: Overall pick — expected Deal, Overall pick")
-        #expect(alert(.notAsExpected([badges, price])).body == "Badges: Overall pick — expected Deal, Overall pick\nPrice: 13.95 — expected 12.33")
+        #expect(alert(.notAsExpected([badges])).body == "Badges: New — expected Deal, New")
+        #expect(alert(.notAsExpected([badges, price])).body == "Badges: New — expected Deal, New\nPrice: 13.95 — expected 12.33")
         #expect(alert(.backToExpected).body == "Back to what you expected")
         #expect(alert(.couldNotCheck("Signed out")).body == "Couldn't check: Signed out")
         #expect(WatchListDifference(field: "in_stock", now: .flag(false), expected: .flag(true)).words == "In stock: no — expected yes")

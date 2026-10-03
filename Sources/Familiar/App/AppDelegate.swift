@@ -243,7 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if !assistant.hasConnection { assistant.reconfigure(config) }   // pick up a migrated key
             morningTasks.start()
             cardGeneration.start()
-            watchList?.runner.start()   // only once the packs are loaded, so no check runs before its script is known
+            watchList?.start()   // only once the packs are loaded, so no check runs before its script is known
         }
 
         if !assistant.hasConnection {

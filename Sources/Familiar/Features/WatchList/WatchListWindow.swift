@@ -83,7 +83,7 @@ struct WatchListView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.label).lineLimit(2).textSelection(.enabled)
                 Text(Self.words(item, checking: checking)).font(.callout)
-                    .foregroundStyle(item.status.map { if case .notAsExpected = $0 { return true } else { return false } } == true ? Color.red : Color.secondary)
+                    .foregroundStyle(item.isRed ? Color.red : Color.secondary)
                     .textSelection(.enabled)
                 if let checked = item.checkedAt {
                     Text("Checked " + Self.time(checked)).font(.caption).foregroundStyle(.secondary)
