@@ -24,6 +24,30 @@ struct ScriptJobTests {
         #expect(registry.pack(holdingScript: "mail__today")?.requires == ["MAIL_ADDRESS", "MAIL_APP_PASSWORD"])
     }
 
+    @Test func aPackNamesTheScriptsItRunsAheadAndForAWatchList() async throws {
+        let root = temporary("brief-packs")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("---\nname: Shop\nmatch:\n  urls: [shop.example.com/item/]\nbrief: summary\nwatch: summary.py\n---\nItems.",
+                  to: root.appendingPathComponent("shop/SKILL.md"))
+        try write("---\nname: Plain\n---\nNothing ahead.", to: root.appendingPathComponent("plain/SKILL.md"))
+        let registry = ToolRegistry(root: root, runner: ScriptRunner(config: Config()))
+        await registry.reload()
+        let shop = try #require(registry.packs.first { $0.dirName == "shop" })
+        let plain = try #require(registry.packs.first { $0.dirName == "plain" })
+        shop.scripts = ["summary", "offers"].map { stem in
+            ScriptTool(id: "shop__\(stem)", packDir: "shop", fileName: "\(stem).py", path: shop.dir.appendingPathComponent("scripts/\(stem).py"),
+                       description: "Fixture", inputSchema: ["type": "object", "properties": [:]], dependencies: [])
+        }
+
+        #expect(shop.brief == "summary")
+        #expect(shop.watch == "summary.py")
+        #expect(registry.script(shop.brief, in: shop)?.id == "shop__summary")
+        #expect(registry.script(shop.watch, in: shop)?.id == "shop__summary")
+        #expect(plain.brief == nil && plain.watch == nil)
+        #expect(registry.script(plain.brief, in: plain) == nil)
+        #expect(registry.script("missing", in: shop) == nil)
+    }
+
     @Test func aPackAddedInAnUpdateReachesAnExistingInstallOnce() throws {
         let bundled = temporary("bundled"), root = temporary("installed")
         defer { [bundled, root].forEach { try? FileManager.default.removeItem(at: $0) } }

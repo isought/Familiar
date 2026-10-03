@@ -54,6 +54,8 @@ final class ToolPack {
     var requires: [String] = []     // env var names the scripts need (secrets from the Keychain)
     var irreversible: [String] = [] // control labels the background lane must confirm before pressing (SKILL.md `irreversible:`)
     var sources: [String] = []      // scripts a saved job can read through (SKILL.md `sources:`, script names without .py)
+    var brief: String?              // script run ahead for the page in front, so the pen answers from it (SKILL.md `brief:`)
+    var watch: String?              // script that checks one item for a watch list (SKILL.md `watch:`)
     var body = ""
     var docs: [DocFile] = []
     var scripts: [ScriptTool] = []
@@ -99,6 +101,8 @@ final class ToolRegistry {
                 pack.requires = Self.list(fm["requires"])
                 pack.irreversible = Self.list(fm["irreversible"])
                 pack.sources = Self.list(fm["sources"])
+                pack.brief = Self.list(fm["brief"]).first
+                pack.watch = Self.list(fm["watch"]).first
                 if let m = fm["match"] as? [String: Any] {
                     pack.match.urls = Self.list(m["urls"])
                     pack.match.bundles = Self.list(m["bundles"])
@@ -225,6 +229,13 @@ final class ToolRegistry {
         packs.flatMap { pack in
             pack.scripts.filter { pack.sources.contains(($0.fileName as NSString).deletingPathExtension) }.map { (pack, $0) }
         }
+    }
+
+    /// A pack's named script (`brief:` or `watch:` in its SKILL.md), when the pack has it.
+    func script(_ name: String?, in pack: ToolPack) -> ScriptTool? {
+        guard let name, !name.isEmpty else { return nil }
+        let stem = (name as NSString).deletingPathExtension
+        return pack.scripts.first { ($0.fileName as NSString).deletingPathExtension == stem }
     }
 
     /// The pack that holds a script, for its required secrets.
