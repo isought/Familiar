@@ -9,10 +9,19 @@ final class WatchListQuiet {
     var on = true
 }
 
+/// How one run checks a watch: one item at a time, all its items in one call (a list check), or not at all, and why.
+enum WatchListPlan {
+    case eachItem((WatchListItem) async -> WatchListOutcome)
+    case wholeList(([WatchListItem]) async -> [String: WatchListOutcome])
+    case unavailable(String)
+}
+
 /// Checks watches on their schedule: every 30 seconds it starts the watches that are due, and again just after the Mac
-/// wakes. At most two item checks run at a time across all watches, and a watch never has two runs at once.
+/// wakes. At most two checks run at a time across all watches (a list check is one), and a watch never has two runs at
+/// once. Before each run, and at each tick, it takes in what people changed in the watches folder by hand.
 @MainActor
 final class WatchListRunner: ObservableObject {
+    typealias Prepare = (WatchListWatch) async -> WatchListPlan
     typealias Check = (WatchListWatch, WatchListItem) async -> WatchListOutcome
 
     let store: WatchListStore
@@ -24,8 +33,9 @@ final class WatchListRunner: ObservableObject {
     static let concurrentChecks = 2
     static let tickSeconds: Double = 30
     static let afterWakeSeconds: Double = 10
+    static let overLimit = "Not checked: a watch whose check takes one item at a time holds up to \(WatchListStore.itemLimitEach) items."
 
-    private let check: Check
+    private let prepare: Prepare
     private let now: () -> Date
     private var runs: [UUID: Task<Void, Never>] = [:]
     private var ticker: Task<Void, Never>?
@@ -35,10 +45,15 @@ final class WatchListRunner: ObservableObject {
     /// Couldn't-check alerts wait for the end of their run, so several for one reason go out as one.
     private var heldFailures: [UUID: [WatchListAlert]] = [:]
 
-    init(store: WatchListStore, check: @escaping Check, now: @escaping () -> Date = Date.init) {
+    init(store: WatchListStore, prepare: @escaping Prepare, now: @escaping () -> Date = Date.init) {
         self.store = store
-        self.check = check
+        self.prepare = prepare
         self.now = now
+    }
+
+    /// A check that takes one item at a time, for every watch.
+    convenience init(store: WatchListStore, check: @escaping Check, now: @escaping () -> Date = Date.init) {
+        self.init(store: store, prepare: { watch in .eachItem { item in await check(watch, item) } }, now: now)
     }
 
     func start() {
@@ -70,11 +85,38 @@ final class WatchListRunner: ObservableObject {
         try? store.save()
     }
 
-    /// Starts every watch that is due and not running.
+    /// Takes in what changed in the watches folder, then starts every watch that is due and not running.
     func tick() {
+        takeIn()
         let time = now()
         for watch in store.watches where runs[watch.id] == nil && WatchListSchedule.isDue(watch, at: time) {
             run(watch.id)
+        }
+        checkUnchecked()
+    }
+
+    /// Takes in what people changed in the watches folder by hand: a watch whose folder went away stops, and items no
+    /// check has looked at yet are checked right away. Before a run, and before the chat answers.
+    @discardableResult
+    func refresh() -> WatchListChanges {
+        let changes = takeIn()
+        checkUnchecked()
+        return changes
+    }
+
+    private func takeIn() -> WatchListChanges {
+        let changes = store.refresh()
+        for id in changes.removed { runs[id]?.cancel() }
+        return changes
+    }
+
+    /// Items no check has looked at yet, such as ones someone added to watch.json or ones a run left when Noteling
+    /// quit, are checked now rather than at the watch's next run. Their first check says nothing: it only finds what
+    /// counts as right.
+    private func checkUnchecked() {
+        for watch in store.watches where !watch.paused && runs[watch.id] == nil {
+            let unchecked = Set(watch.items.filter { $0.checkedAt == nil }.map(\.key))
+            if !unchecked.isEmpty { run(watch.id, items: unchecked) }
         }
     }
 
@@ -138,26 +180,60 @@ final class WatchListRunner: ObservableObject {
     }
 
     private func perform(_ id: UUID, items keys: Set<String>?, quiet: WatchListQuiet?) async {
+        refresh()   // a hand edit since the last tick counts for this run
         guard let watch = store.watch(id: id) else { return }
         if keys == nil { _ = try? store.change(id, persist: false) { $0.lastRunAt = now() } }
         let items = watch.items.filter { keys?.contains($0.key) ?? true }
+        if !items.isEmpty {
+            switch await prepare(watch) {
+            case .unavailable(let reason):
+                if !Task.isCancelled { for item in items { record(.failed(reason), watchID: id, key: item.key, quiet: quiet?.on ?? false) } }
+            case .eachItem(let check):
+                await checkEach(id, items, allowed: Set(watch.items.prefix(WatchListStore.itemLimitEach).map(\.key)), quiet: quiet, check: check)
+            case .wholeList(let check):
+                await checkList(id, items, quiet: quiet, check: check)
+            }
+        }
+        do { try store.save(id) } catch { Log.info("watch list: couldn't save: \(error.localizedDescription)") }
+        let failures = heldFailures.removeValue(forKey: id) ?? []
+        if !Task.isCancelled { WatchListRules.grouped(failures).forEach(tell) }
+    }
+
+    private func checkEach(_ id: UUID, _ items: [WatchListItem], allowed: Set<String>, quiet: WatchListQuiet?,
+                           check: @escaping (WatchListItem) async -> WatchListOutcome) async {
         await withTaskGroup(of: Void.self) { group in
             for item in items {
+                guard allowed.contains(item.key) else {
+                    if !Task.isCancelled { record(.failed(Self.overLimit), watchID: id, key: item.key, quiet: quiet?.on ?? false) }
+                    continue
+                }
                 group.addTask { @MainActor [weak self] in
                     guard let self else { return }
                     await self.acquire()
                     defer { self.release() }
                     // The watch may have been changed or stopped while this waited for a turn.
-                    guard !Task.isCancelled, let current = self.store.watch(id: id), let latest = current.item(item.key) else { return }
-                    let outcome = await self.check(current, latest)
+                    guard !Task.isCancelled, let latest = self.store.watch(id: id)?.item(item.key) else { return }
+                    let outcome = await check(latest)
                     guard !Task.isCancelled else { return }   // stopped, not a failed check
                     self.record(outcome, watchID: id, key: item.key, quiet: quiet?.on ?? false)
                 }
             }
         }
-        do { try store.save() } catch { Log.info("watch list: couldn't save: \(error.localizedDescription)") }
-        let failures = heldFailures.removeValue(forKey: id) ?? []
-        if !Task.isCancelled { WatchListRules.grouped(failures).forEach(tell) }
+    }
+
+    /// One call for all the items, taking one turn of the two.
+    private func checkList(_ id: UUID, _ items: [WatchListItem], quiet: WatchListQuiet?,
+                           check: ([WatchListItem]) async -> [String: WatchListOutcome]) async {
+        await acquire()
+        defer { release() }
+        guard !Task.isCancelled, let watch = store.watch(id: id) else { return }
+        let latest = items.compactMap { watch.item($0.key) }
+        guard !latest.isEmpty else { return }
+        let outcomes = await check(latest)
+        guard !Task.isCancelled else { return }
+        for item in latest {
+            record(outcomes[item.key] ?? .failed("The check returned nothing for this item."), watchID: id, key: item.key, quiet: quiet?.on ?? false)
+        }
     }
 
     private func record(_ outcome: WatchListOutcome, watchID: UUID, key: String, quiet: Bool) {
@@ -168,7 +244,7 @@ final class WatchListRunner: ObservableObject {
             var item = watch.items[index]
             let kind = WatchListRules.apply(outcome, to: &item, fields: watch.fields, expect: watch.expect, at: time, quiet: quiet)
             watch.items[index] = item
-            alert = kind.map { WatchListAlert(watchID: watch.id, watchName: watch.name, itemKey: key, title: item.label, kind: $0) }
+            alert = kind.map { WatchListAlert(watchID: watch.id, watchName: watch.name, itemKey: key, title: item.label, kind: $0, why: item.whyNow) }
         }
         guard let alert else { return }
         if case .couldNotCheck = alert.kind { heldFailures[watchID, default: []].append(alert) } else { tell(alert) }
@@ -194,44 +270,180 @@ struct WatchListCheckChoice: Equatable {
     let id: String              // the script's tool name, e.g. shop__watch_item
     let pack: String            // the pack's display name
     let packDir: String
-    /// Extra arguments the script takes besides `item`, with their descriptions.
+    /// Extra arguments the script takes besides the items, with their descriptions.
     var arguments: [String: String] = [:]
-    /// Arguments the script can't run without, besides `item`.
+    /// Arguments the script can't run without, besides the items.
     var required: [String] = []
     var missingSecrets: [String] = []
+    /// Its `run()` takes `items`: all of a watch's items in one call, so a watch can hold more of them.
+    var takesList = false
+
+    var itemLimit: Int { takesList ? WatchListStore.itemLimit : WatchListStore.itemLimitEach }
 }
 
-/// Runs a watch's check for one item: the pack's `watch:` script, as the person (with the pack's secrets), stopped at its
-/// time limit, given the item as they wrote it and only the extra arguments the script declares.
+/// A watch's check, found: its own check.py, or the pack's `watch:` script, with the secrets it gets.
+struct WatchListResolvedCheck {
+    var script: ScriptTool
+    var secrets: [String]
+    var missing: [String]
+    /// Its own folder, for a watch's own check.py: where it runs and what NOTELING_TOOL_DIR says.
+    var toolDir: URL?
+
+    var own: Bool { toolDir != nil }
+    var takesList: Bool { WatchListChecker.takesList(script) }
+}
+
+/// What a watch's own check.py takes, read once per version of the file.
+@MainActor
+final class WatchListSchemaCache {
+    private var cache: [String: (date: Date?, schema: ScriptSchema)] = [:]
+
+    func schema(for file: URL, introspect: (URL) async throws -> ScriptSchema) async throws -> ScriptSchema {
+        let date = WatchListFiles.modified(file)
+        if let hit = cache[file.path], hit.date == date { return hit.schema }
+        let schema = try await introspect(file)
+        cache[file.path] = (date, schema)
+        return schema
+    }
+}
+
+/// Runs a watch's check as the person: the watch's own check.py when its folder has one, else the pack's `watch:`
+/// script. Each is given the items exactly as written and only the extra arguments it declares, gets only its own
+/// secrets (a check.py, those its watch.json lists under `requires`; a pack's script, the pack's), and is stopped at its
+/// time limit. A check whose `run()` takes `items` gets them all in one call.
 @MainActor
 struct WatchListChecker {
     let registry: ToolRegistry
+    /// The watch's folder, for its own check.py.
+    var folder: (UUID) -> URL? = { _ in nil }
     var timeout: TimeInterval = 60
+    /// Runs a script and returns what its `run()` returned. Tests put a fake here: no Python, no network.
+    var run: (_ script: ScriptTool, _ args: [String: Any], _ context: ScreenContext?, _ secrets: [String], _ timeout: TimeInterval,
+              _ toolDir: URL?) async throws -> Any
+    /// Reads what a script's `run()` takes.
+    var introspect: (URL) async throws -> ScriptSchema
+    var hasSecret: (String) -> Bool = { Secrets.has($0) || ProcessInfo.processInfo.environment[$0] != nil }
+    let schemas = WatchListSchemaCache()
+
+    init(registry: ToolRegistry, folder: @escaping (UUID) -> URL? = { _ in nil }) {
+        self.registry = registry
+        self.folder = folder
+        let runner = registry.runner
+        run = { script, args, context, secrets, timeout, toolDir in
+            try await runner.result(script, args: args, context: context, secrets: secrets, timeout: timeout, toolDir: toolDir)
+        }
+        introspect = { try await runner.introspect($0) }
+    }
 
     static func choices(in registry: ToolRegistry) -> [WatchListCheckChoice] {
         registry.packs.compactMap { pack in
             guard let script = registry.script(pack.watch, in: pack) else { return nil }
-            let properties = script.inputSchema["properties"] as? [String: Any] ?? [:]
-            var arguments: [String: String] = [:]
-            for (name, schema) in properties where name != "item" {
-                arguments[name] = (schema as? [String: Any])?["description"] as? String ?? ""
-            }
-            let required = (script.inputSchema["required"] as? [String] ?? []).filter { $0 != "item" }
-            return WatchListCheckChoice(id: script.id, pack: pack.name, packDir: pack.dirName, arguments: arguments, required: required,
-                                        missingSecrets: registry.missingRequirements(for: [pack]).first?.keys ?? [])
+            return WatchListCheckChoice(id: script.id, pack: pack.name, packDir: pack.dirName, arguments: arguments(of: script),
+                                        required: (script.inputSchema["required"] as? [String] ?? []).filter { $0 != "item" && $0 != "items" },
+                                        missingSecrets: registry.missingRequirements(for: [pack]).first?.keys ?? [], takesList: takesList(script))
         }
+    }
+
+    /// The extra arguments a script takes besides the items, with their descriptions.
+    nonisolated static func arguments(of script: ScriptTool) -> [String: String] {
+        var arguments: [String: String] = [:]
+        for (name, schema) in script.inputSchema["properties"] as? [String: Any] ?? [:] where name != "item" && name != "items" {
+            arguments[name] = (schema as? [String: Any])?["description"] as? String ?? ""
+        }
+        return arguments
+    }
+
+    nonisolated static func takesList(_ script: ScriptTool) -> Bool {
+        (script.inputSchema["properties"] as? [String: Any])?["items"] != nil
+    }
+
+    /// The check a watch uses: its folder's check.py, else the pack check it names, else the only one there is.
+    func resolve(_ watch: WatchListWatch) async throws -> WatchListResolvedCheck {
+        if let folder = folder(watch.id) {
+            let file = folder.appendingPathComponent(WatchListFiles.ownCheck)
+            if FileManager.default.fileExists(atPath: file.path) {
+                let schema: ScriptSchema
+                do { schema = try await schemas.schema(for: file, introspect: introspect) }
+                catch { throw WatchListError("Its check.py can't be read: \(WatchListRules.reason(error.localizedDescription))") }
+                let script = ScriptTool(id: ToolRegistry.toolName("watch__\(folder.lastPathComponent)"), packDir: folder.lastPathComponent,
+                                        fileName: WatchListFiles.ownCheck, path: file, description: schema.description,
+                                        inputSchema: schema.inputSchema, dependencies: schema.dependencies)
+                // Noteling's own token for the team's tools is never a script's, whatever a watch.json asks for.
+                let secrets = watch.requires.filter { $0 != LinkedTools.tokenKey }
+                return WatchListResolvedCheck(script: script, secrets: secrets, missing: secrets.filter { !hasSecret($0) }, toolDir: folder)
+            }
+        }
+        // Only a script a pack names as its watch check runs, so a watch.json can't run some other script.
+        let checks = registry.packs.compactMap { pack in registry.script(pack.watch, in: pack).map { (pack, $0) } }
+        let chosen = watch.check.isEmpty ? (checks.count == 1 ? checks.first : nil) : checks.first { $0.1.id == watch.check }
+        guard let (pack, script) = chosen else {
+            if !watch.check.isEmpty { throw WatchListError("Its check, \(watch.check), isn't in your tools folder any more.") }
+            if checks.isEmpty { throw WatchListError(WatchListConversation.noChecks) }
+            throw WatchListError("Its watch.json doesn't say which check to use. Put one of these under check: "
+                + checks.map(\.1.id).joined(separator: ", ") + ".")
+        }
+        return WatchListResolvedCheck(script: script, secrets: pack.requires, missing: pack.requires.filter { !hasSecret($0) }, toolDir: nil)
+    }
+
+    func plan(_ watch: WatchListWatch) async -> WatchListPlan {
+        let check: WatchListResolvedCheck
+        do { check = try await resolve(watch) } catch { return .unavailable(WatchListStore.reason(error)) }
+        if !check.missing.isEmpty { return .unavailable("It needs \(check.missing.joined(separator: ", ")) in Settings.") }
+        if check.takesList { return .wholeList { items in await self.checkList(watch, items, check) } }
+        return .eachItem { item in await self.checkItem(watch, item, check) }
+    }
+
+    func checkItem(_ watch: WatchListWatch, _ item: WatchListItem, _ check: WatchListResolvedCheck) async -> WatchListOutcome {
+        do {
+            let result = try await run(check.script, Self.arguments(for: check.script, item: item.key, extra: watch.args),
+                                       Self.scene(for: item), check.secrets, timeout, check.toolDir)
+            return WatchListReading.parse(result)
+        } catch {
+            return .failed(Self.failure(error, limit: timeout))
+        }
+    }
+
+    func checkList(_ watch: WatchListWatch, _ items: [WatchListItem], _ check: WatchListResolvedCheck) async -> [String: WatchListOutcome] {
+        let keys = items.map(\.key)
+        let limit = WatchListRules.listTimeLimit(items: keys.count)
+        do {
+            let result = try await run(check.script, Self.arguments(for: check.script, items: keys, extra: watch.args),
+                                       Self.scene(for: watch), check.secrets, limit, check.toolDir)
+            return WatchListReading.parseList(result, keys: keys)
+        } catch {
+            let reason = Self.failure(error, limit: limit)
+            return Dictionary(keys.map { ($0, WatchListOutcome.failed(reason)) }, uniquingKeysWith: { first, _ in first })
+        }
+    }
+
+    private static func failure(_ error: Error, limit: TimeInterval) -> String {
+        if let error = error as? ScriptRunnerError, error.timedOut { return "It took longer than \(Int(limit)) seconds." }
+        if error is CancellationError { return "Stopped." }
+        return WatchListRules.reason(error.localizedDescription)
     }
 
     /// The item exactly as given, plus the watch's extra arguments the script declares; never anything else. Each goes
     /// as the type the script declares, so a zip code given as a number still arrives as text.
     nonisolated static func arguments(for script: ScriptTool, item: String, extra: [String: WatchListValue]) -> [String: Any] {
+        var args = declared(script, extra)
+        args["item"] = item
+        return args
+    }
+
+    /// All the items for a list check, as written, in the watch's order, plus the extra arguments it declares.
+    nonisolated static func arguments(for script: ScriptTool, items: [String], extra: [String: WatchListValue]) -> [String: Any] {
+        var args = declared(script, extra)
+        args["items"] = items
+        return args
+    }
+
+    nonisolated private static func declared(_ script: ScriptTool, _ extra: [String: WatchListValue]) -> [String: Any] {
         let declared = script.inputSchema["properties"] as? [String: Any] ?? [:]
         var args: [String: Any] = [:]
-        for (name, value) in extra where name != "item" {
+        for (name, value) in extra where name != "item" && name != "items" {
             guard let schema = declared[name] else { continue }
             args[name] = typed(value, as: (schema as? [String: Any])?["type"] as? String)
         }
-        args["item"] = item
         return args
     }
 
@@ -251,25 +463,8 @@ struct WatchListChecker {
         ScreenContext(appName: "Watch list", bundleID: "", windowTitle: item.label, url: item.pageURL, focused: nil, timestamp: time)
     }
 
-    func check(_ watch: WatchListWatch, _ item: WatchListItem) async -> WatchListOutcome {
-        // Only a script a pack names as its watch check runs, so a stored watch can't run some other script.
-        guard let pack = registry.packs.first(where: { registry.script($0.watch, in: $0)?.id == watch.check }),
-              let script = registry.script(pack.watch, in: pack) else {
-            return .failed("Its check, \(watch.check), isn't in your tools folder any more.")
-        }
-        if let missing = registry.missingRequirements(for: [pack]).first?.keys, !missing.isEmpty {
-            return .failed("It needs \(missing.joined(separator: ", ")) in Settings.")
-        }
-        do {
-            let result = try await registry.runner.result(script, args: Self.arguments(for: script, item: item.key, extra: watch.args),
-                                                          context: Self.scene(for: item), secrets: pack.requires, timeout: timeout)
-            return WatchListReading.parse(result)
-        } catch let error as ScriptRunnerError where error.timedOut {
-            return .failed("It took longer than \(Int(timeout)) seconds.")
-        } catch is CancellationError {
-            return .failed("Stopped.")
-        } catch {
-            return .failed(WatchListRules.reason(error.localizedDescription))
-        }
+    /// A list check sees the watch: there is no one page.
+    nonisolated static func scene(for watch: WatchListWatch, at time: Date = Date()) -> ScreenContext {
+        ScreenContext(appName: "Watch list", bundleID: "", windowTitle: watch.name, url: nil, focused: nil, timestamp: time)
     }
 }

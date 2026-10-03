@@ -797,8 +797,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func explainWatchedItem(watchID: UUID, key: String) {
-        guard let watch = watchList?.store.watch(id: watchID), let item = watch.item(key) else { showWatchList(); return }
+        guard let feature = watchList, let watch = feature.store.watch(id: watchID), let item = watch.item(key) else { showWatchList(); return }
         openChat()
-        assistant.explainWatched(watch, item: item)
+        assistant.explainWatched(watch, item: item, checkedBy: feature.checkLabel(watch))
     }
 }

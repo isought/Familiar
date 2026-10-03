@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Every watch with its items: a status dot per item (green as expected, red not as expected, grey couldn't check),
-/// what isn't as expected in plain words, when it was checked, and Why? and Open. A watch can be checked now, paused,
-/// resumed or stopped here.
+/// what isn't as expected in plain words and what the check said, when it was checked, and Why? and Open. A watch can be
+/// checked now, paused, resumed, shown in the Finder or stopped here.
 struct WatchListView: View {
     @ObservedObject var store: WatchListStore
     @ObservedObject var runner: WatchListRunner
@@ -16,7 +16,7 @@ struct WatchListView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if store.watches.isEmpty {
+            if store.watches.isEmpty && store.unreadable.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "eye").font(.system(size: 28)).foregroundStyle(.secondary)
                     Text(Self.empty).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -40,7 +40,7 @@ struct WatchListView: View {
             Button("Stop watching", role: .destructive) { stop(watch) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("Noteling stops checking these items and won't notify you about them again.")
+            Text("Noteling stops checking these items and won't notify you about them again. Its folder goes to the Trash, so you can put it back.")
         }
     }
 
@@ -51,6 +51,15 @@ struct WatchListView: View {
         }
         if let notice = store.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
         if let problem { Text(problem).font(.callout).foregroundStyle(.red) }
+        ForEach(store.unreadable.keys.sorted(), id: \.self) { folder in
+            HStack(alignment: .top) {
+                Label("Not watching the “\(folder)” folder. \(store.unreadable[folder] ?? "")", systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(.orange)
+                Spacer(minLength: 8)
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([store.directory.appendingPathComponent(folder)]) }
+                    .controlSize(.small)
+            }
+        }
     }
 
     private func section(_ watch: WatchListWatch) -> some View {
@@ -62,9 +71,19 @@ struct WatchListView: View {
                     Text(Self.subtitle(watch, checking: checking)).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
-                Button(checking ? "Checking…" : "Check now") { runner.run(watch.id) }.disabled(checking)
-                Button(watch.paused ? "Resume" : "Pause") { change(watch) { $0.paused.toggle() } }
-                Button("Stop watching") { stopping = watch }
+                Group {
+                    Button(checking ? "Checking…" : "Check now") { runner.run(watch.id) }.disabled(checking)
+                    Button(watch.paused ? "Resume" : "Pause") { change(watch) { $0.paused.toggle() } }
+                    if let folder = store.folder(for: watch.id) {
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
+                    }
+                    Button("Stop watching") { stopping = watch }
+                }
+                .controlSize(.small)
+            }
+            if let problem = store.problems[watch.id] {
+                Label(problem + " Until it's fixed, the watch keeps what it had.", systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(.orange).textSelection(.enabled)
             }
             VStack(spacing: 0) {
                 ForEach(Array(watch.items.enumerated()), id: \.element.id) { index, item in
@@ -85,6 +104,9 @@ struct WatchListView: View {
                 Text(Self.words(item, fields: watch.fields, checking: checking)).font(.callout)
                     .foregroundStyle(item.isRed ? Color.red : Color.secondary)
                     .textSelection(.enabled)
+                if let why = Self.why(item) {
+                    Text(why).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                }
                 if let checked = item.checkedAt {
                     Text("Checked " + Self.time(checked)).font(.caption).foregroundStyle(.secondary)
                 }
@@ -131,6 +153,11 @@ struct WatchListView: View {
             return (differences.map(\.words) + (unreported.isEmpty ? [] : ["Not reported: " + unreported])).joined(separator: "\n")
         case .couldNotCheck(let reason)?: return "Couldn't check: \(reason)"
         }
+    }
+
+    /// What the check said about the item in its own words, under the differences; nothing when it said nothing.
+    static func why(_ item: WatchListItem) -> String? {
+        item.whyNow.isEmpty ? nil : item.whyNow.joined(separator: "\n")
     }
 
     static func subtitle(_ watch: WatchListWatch, checking: Bool) -> String {

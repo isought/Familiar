@@ -50,22 +50,45 @@ struct WatchListRulesTests {
         #expect(item.state == ["price": .number(13.95)])
     }
 
-    @Test func changingWhatCountsAsRightComparesWithTheLastCheckAndTellsNothing() {
+    @Test func changingWhatCountsAsRightInTheChatComparesWithTheLastCheckAndTellsNothing() {
         var item = WatchListItem(key: "123")
         _ = WatchListRules.apply(.checked(reading(["price": .number(13.95)])), to: &item, fields: nil, expect: [:], at: start)
-        WatchListRules.reexpect(&item, with: ["price": .number(12.33)])
+        WatchListRules.refresh(&item, fields: nil, expect: ["price": .number(12.33)], quiet: true)
         let difference = WatchListDifference(field: "price", now: .number(13.95), expected: .number(12.33))
         #expect(item.status == .notAsExpected([difference]))
         #expect(item.notified == .notAsExpected([difference]))   // the chat showed it
         // The next check that finds the same says nothing more.
-        #expect(WatchListRules.apply(.checked(reading(["price": .number(13.95)])), to: &item, fields: nil, expect: [:], at: start + 900) == nil)
+        #expect(WatchListRules.apply(.checked(reading(["price": .number(13.95)])), to: &item, fields: nil,
+                                     expect: ["price": .number(12.33)], at: start + 900) == nil)
 
         var failing = WatchListItem(key: "456")
         _ = WatchListRules.apply(.checked(reading(["price": .number(1)])), to: &failing, fields: nil, expect: [:], at: start)
         _ = WatchListRules.apply(.failed("Offline"), to: &failing, fields: nil, expect: [:], at: start + 900)
-        WatchListRules.reexpect(&failing, with: ["price": .number(2)])
+        WatchListRules.refresh(&failing, fields: nil, expect: ["price": .number(2)], quiet: true)
         #expect(failing.status == .couldNotCheck("Offline"))   // nothing known now: an earlier check doesn't stand in for it
         #expect(failing.expected == ["price": .number(2)])
+    }
+
+    @Test func aHandEditToWhatCountsAsRightIsToldAtTheNextCheck() {
+        var item = WatchListItem(key: "123")
+        _ = WatchListRules.apply(.checked(reading(["price": .number(12.33), "seller": .text("Acme")])), to: &item, fields: nil, expect: [:], at: start)
+        WatchListRules.refresh(&item, fields: nil, expect: ["price": .number(11.99)], quiet: false)
+        let difference = WatchListDifference(field: "price", now: .number(12.33), expected: .number(11.99))
+        #expect(item.status == .notAsExpected([difference]))   // the window shows it at once
+        #expect(item.notified == .asExpected)                  // nobody told them yet
+        #expect(WatchListRules.apply(.checked(reading(["price": .number(12.33), "seller": .text("Acme")])), to: &item, fields: nil,
+                                     expect: ["price": .number(11.99)], at: start + 900) == .notAsExpected([difference]))
+
+        // Taken out of expect again: what the first check found counts once more.
+        WatchListRules.refresh(&item, fields: nil, expect: [:], quiet: false)
+        #expect(item.expected == ["price": .number(12.33), "seller": .text("Acme")])
+        #expect(item.status == .asExpected)
+
+        // Only the fields named now, and the item's own expect over the watch's.
+        item.expect = ["seller": .text("Acme Direct")]
+        WatchListRules.refresh(&item, fields: ["price"], expect: ["price": .number(12.33)], quiet: false)
+        #expect(item.expected == ["price": .number(12.33), "seller": .text("Acme Direct")])
+        #expect(item.status == .notAsExpected([WatchListDifference(field: "seller", now: .text("Acme"), expected: .text("Acme Direct"))]))
     }
 
     // MARK: comparing
@@ -255,6 +278,91 @@ struct WatchListRulesTests {
         #expect(reading.state["strikethrough"] == WatchListValue.none)
         #expect(reading.state["dimensions"] == .text(#"{"h":20,"w":10}"#))   // not flat: compared as its JSON text
         #expect(reading.facts == #"{"note":"Deal ends at 6 PM","offers":[{"price":12.33,"seller":"Acme"}]}"#)
+    }
+
+    @Test func aCheckMaySayWhyInItsOwnWords() throws {
+        func why(_ value: Any) -> [String]? {
+            guard case .checked(let reading) = WatchListReading.parse(["state": ["price": 1], "why": value] as [String: Any]) else { return nil }
+            return reading.why
+        }
+        let line = "The page shows $24.99, but the price of record is $19.99 (set 10:32 AM). The page hasn't caught up."
+        #expect(why(line) == [line])
+        #expect(why(["  First reason ", 3, NSNull(), "", "Second reason"]) == ["First reason", "Second reason"])
+        #expect(why("   ") == nil)
+        #expect(why(42) == nil)
+        #expect(why((1...9).map { "Reason \($0)" })?.count == 5)
+        #expect(why(String(repeating: "x", count: 400))?.first?.count == 301)   // 300 and an ellipsis
+
+        var item = WatchListItem(key: "123")
+        _ = WatchListRules.apply(.checked(WatchListReading(title: nil, url: nil, state: ["price": .number(1)], facts: nil, why: [line])),
+                                 to: &item, fields: nil, expect: [:], at: start)
+        #expect(item.why == [line] && item.whyNow == [line])
+        _ = WatchListRules.apply(.failed("Offline"), to: &item, fields: nil, expect: [:], at: start + 900)
+        #expect(item.whyNow.isEmpty)   // an earlier check's words never stand in for now
+        _ = WatchListRules.apply(.checked(reading(["price": .number(1)])), to: &item, fields: nil, expect: [:], at: start + 1_800)
+        #expect(item.why == nil)       // a check that says nothing leaves nothing
+    }
+
+    @Test func aNotificationPutsTheDifferenceFirstThenTheChecksFirstReasonInTwoLinesAtMost() {
+        let price = WatchListDifference(field: "price", now: .number(24.99), expected: .number(19.99))
+        func body(_ kind: WatchListAlert.Kind, _ why: [String]) -> String {
+            WatchListAlert(watchID: UUID(), watchName: "Sale items", itemKey: "123", title: "Blue kettle", kind: kind, why: why).body
+        }
+        let reason = "The page shows $24.99, but the price of record is $19.99 (set 10:32 AM). The page hasn't caught up."
+        #expect(body(.notAsExpected([price]), []) == "Price: 24.99 — expected 19.99")
+        #expect(body(.notAsExpected([price]), [reason]) == "Price: 24.99 — expected 19.99\n" + reason)
+        #expect(body(.notAsExpected([price]), ["First.", "Second.", "Third."]) == "Price: 24.99 — expected 19.99\nFirst.\nSecond.")
+        #expect(body(.backToExpected, ["The price of record caught up."]) == "Back to what you expected\nThe price of record caught up.")
+        #expect(body(.couldNotCheck("Offline"), [reason]) == "Couldn't check: Offline")
+
+        let long = String(repeating: "word ", count: 40) + "end"
+        let clipped = WatchListRules.notificationLines([long])
+        #expect(clipped.count == 1)
+        #expect(clipped[0].count <= 120 && clipped[0].hasSuffix("word…"))   // cut at a word
+        #expect(WatchListRules.notificationLines(["Line one\nLine two\nLine three"]) == ["Line one", "Line two"])
+        #expect(WatchListRules.clipWords(String(repeating: "x", count: 200), 120).count == 120)   // one long word: cut inside it
+    }
+
+    @Test func aListChecksResultsAreMatchedByOrderOrByKey() {
+        let keys = ["123", "456", "789"]
+        func result(_ price: Double) -> [String: Any] { ["title": "Item", "state": ["price": price]] }
+        func price(_ outcome: WatchListOutcome?) -> Double? {
+            guard case .checked(let reading)? = outcome, case .number(let price)? = reading.state["price"] else { return nil }
+            return price
+        }
+
+        let ordered = WatchListReading.parseList([result(1), result(2), ["error": "Item 789 isn't on the shop"]], keys: keys)
+        #expect(price(ordered["123"]) == 1 && price(ordered["456"]) == 2)
+        #expect(ordered["789"] == .failed("Item 789 isn't on the shop"))
+
+        let keyed = WatchListReading.parseList(["456": result(2), "123": result(1), "789": NSNull(), "999": result(9)] as [String: Any], keys: keys)
+        #expect(price(keyed["123"]) == 1 && price(keyed["456"]) == 2)
+        #expect(keyed["789"] == .failed("The check returned nothing for this item."))
+        #expect(keyed["999"] == nil)   // not an item: left out
+
+        let missing = WatchListReading.parseList(["123": result(1), "item-456": result(2)] as [String: Any], keys: keys)
+        #expect(price(missing["123"]) == 1)
+        #expect(missing["456"] == .failed("The check returned nothing for this item. It returned results for item-456."))
+
+        let short = WatchListReading.parseList([result(1), result(2)], keys: keys)
+        #expect(Set(short.values.map { "\($0)" }).count == 1)
+        #expect(short["123"] == .failed("The check returned 2 results for 3 items, so they can't be matched to the items in order."))
+
+        let failed = WatchListReading.parseList(["error": "Signed out of the shop"], keys: keys)
+        #expect(failed.count == 3 && failed.values.allSatisfy { $0 == .failed("Signed out of the shop") })
+        #expect(WatchListReading.parseList(["title": "x", "state": ["price": 1]] as [String: Any], keys: keys)["123"]
+                == .failed("The check returned one result, not one for each item."))
+        #expect(WatchListReading.parseList("done", keys: keys)["789"]
+                == .failed("The check didn't return a list of results, or results keyed by item."))
+        #expect(WatchListReading.parseList([result(1), "x", result(3)], keys: keys)["456"]
+                == .failed("The check's result for this item isn't an object with a state."))
+    }
+
+    @Test func aListCheckHasAMinuteAndASecondPerItemAtMostTenMinutes() {
+        #expect(WatchListRules.listTimeLimit(items: 1) == 61)
+        #expect(WatchListRules.listTimeLimit(items: 50) == 110)
+        #expect(WatchListRules.listTimeLimit(items: 200) == 260)
+        #expect(WatchListRules.listTimeLimit(items: 2_000) == 600)
     }
 
     @Test func anErrorOrNoStateMeansItCouldNotCheck() {
