@@ -34,7 +34,7 @@ enum ExecutionTools {
             }
         }
 
-        let root = registry.root
+        let root = registry.root, linkedRoot = registry.linkedRoot
         for definition in BuiltinTools.definitions(background: background && control != nil) {
             guard let name = definition["name"] as? String else { continue }
             routes.append(ToolRoute(match: .tool(name: name), definition: definition) { _, input, _ in
@@ -44,7 +44,7 @@ enum ExecutionTools {
                 }
                 if name == "look_at_screen" { return await lookAtScreen() }
                 if name == "read_screen" { return await ScreenText.readFrontmost() }
-                return BuiltinTools.execute(name, input, root: root)
+                return BuiltinTools.execute(name, input, root: root, linkedRoot: linkedRoot)
             })
         }
 

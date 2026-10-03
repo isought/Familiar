@@ -25,10 +25,10 @@ final class ContextNotesService {
     }
 
     /// Keeps a note in a tool pack. Editing an existing note preserves its original pack, even if its scene would
-    /// currently select a different pack.
+    /// currently select a different pack; one from the team's linked tools is kept in a pack of your own instead.
     func save(_ note: StickyNote, appName: String?) async throws -> ToolPack {
         let pack: ToolPack
-        if let existing = registry.pack(holding: note.id) {
+        if let existing = registry.pack(holding: note.id), !existing.linked {
             pack = existing
         } else {
             pack = try await registry.packForNote(anchor: note.anchor, appName: appName)

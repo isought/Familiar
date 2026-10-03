@@ -232,10 +232,11 @@ enum NoteStore {
         return s.isEmpty ? "notes" : s
     }
 
-    /// Creates a minimal pack (a SKILL.md with a match rule) so the note has a home. Returns the pack folder.
+    /// Creates a minimal pack (a SKILL.md with a match rule) so the note has a home, in `dirName` when given, else
+    /// in a folder named for the scene. Returns the pack folder.
     @discardableResult
-    static func ensurePack(for anchor: NoteAnchor, appName: String?, root: URL) throws -> URL {
-        let dir = root.appendingPathComponent(packSlug(for: anchor, appName: appName))
+    static func ensurePack(for anchor: NoteAnchor, appName: String?, root: URL, dirName: String? = nil) throws -> URL {
+        let dir = root.appendingPathComponent(dirName ?? packSlug(for: anchor, appName: appName))
         let skill = dir.appendingPathComponent("SKILL.md")
         guard !FileManager.default.fileExists(atPath: skill.path) else { return dir }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

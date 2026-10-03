@@ -32,7 +32,9 @@ enum WatchLearnComposition {
             guard ConversationBackend.make(config: settings) != nil else {
                 throw ClaudeError(message: ConversationBackend.setupMessage(config: settings) + " Then press Try again.")
             }
-            return try await WatchSummarizer.summarize(recording, purpose: purpose, config: settings, onStatus: onStatus)
+            var draft = try await WatchSummarizer.summarize(recording, purpose: purpose, config: settings, onStatus: onStatus)
+            draft.packDir = registry.personalPackDir(for: draft.packDir)   // a folder of the team's pack name would hide theirs
+            return draft
         }, write: { draft in
             let files = try PackWriter.write(draft, root: registry.root)
             let prefix = registry.root.path + "/"

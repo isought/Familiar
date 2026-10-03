@@ -60,6 +60,7 @@ final class ToolPack {
     var docs: [DocFile] = []
     var scripts: [ScriptTool] = []
     var notes: [StickyNote] = []    // notes.json: what people stuck to this tool's controls with the pen
+    var linked = false              // from the team's linked tools (`LinkedTools`), which only an update changes
     var isGlobal: Bool { match.isEmpty }
 
     init(dirName: String, dir: URL) {
@@ -70,35 +71,52 @@ final class ToolPack {
     }
 }
 
-/// `~/.noteling/tools/<pack>/{SKILL.md, docs/**, scripts/*.py}`
+/// `~/.noteling/tools/<pack>/{SKILL.md, docs/**, scripts/*.py}`, then the team's linked tools, in the same shape.
 @MainActor
 final class ToolRegistry {
+    /// Your own tools folder: the only one Noteling writes packs, notes or workflows into.
     let root: URL
+    /// The team's tools: a copy of the linked repository, replaced whole on each update, so never written to. A pack
+    /// of your own with the same folder name is used instead of the linked one.
+    var linkedRoot: URL?
     let runner: ScriptRunner
     private(set) var packs: [ToolPack] = []
     private(set) var lastError: String?
+    private var reloading: Task<Void, Never>?
 
     init(root: URL, runner: ScriptRunner) {
         self.root = root
         self.runner = runner
     }
 
+    /// Reloads run one after another, so the one started last is the one that counts, even when an update replaces
+    /// the linked tools while an earlier reload is still reading them.
     func reload() async {
+        let previous = reloading
+        let next = Task { await previous?.value; await self.load() }
+        reloading = next
+        await next.value
+    }
+
+    private func load() async {
         let fm = FileManager.default
         try? fm.createDirectory(at: root, withIntermediateDirectories: true)
         var result: [ToolPack] = []
-        let entries = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-        for dir in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue,   // follows symlinks
-                  !dir.lastPathComponent.hasPrefix(".") else { continue }
+        let own = Self.packFolders(in: root)
+        let ownNames = Set(own.map(\.lastPathComponent))
+        let linked = linkedRoot.map { Self.packFolders(in: $0) } ?? []
+        for dir in linked where ownNames.contains(dir.lastPathComponent) {
+            Log.info("tools: your own \(dir.lastPathComponent) is used instead of the linked one")
+        }
+        for (dir, isLinked) in own.map({ ($0, false) }) + linked.filter({ !ownNames.contains($0.lastPathComponent) }).map({ ($0, true) }) {
             let pack = ToolPack(dirName: dir.lastPathComponent, dir: dir)
+            pack.linked = isLinked
             if let skill = try? String(contentsOf: dir.appendingPathComponent("SKILL.md"), encoding: .utf8) {
                 let (fm, body) = Self.parseFrontmatter(skill)
                 pack.name = fm["name"] as? String ?? pack.dirName
                 pack.description = fm["description"] as? String ?? ""
                 pack.body = body.trimmingCharacters(in: .whitespacesAndNewlines)
-                pack.requires = Self.list(fm["requires"])
+                pack.requires = Self.list(fm["requires"]).filter { $0 != LinkedTools.tokenKey }   // that token is Noteling's own
                 pack.irreversible = Self.list(fm["irreversible"])
                 pack.sources = Self.list(fm["sources"])
                 pack.brief = Self.list(fm["brief"]).first
@@ -117,7 +135,34 @@ final class ToolRegistry {
         packs = result
         let scriptCount = packs.reduce(0) { $0 + $1.scripts.count }
         let noteCount = packs.reduce(0) { $0 + $1.notes.count }
-        Log.info("tools: \(packs.count) pack(s), \(scriptCount) script(s), \(noteCount) note(s) in \(root.path); runtime: \(runner.summary)")
+        let linkedCount = packs.filter(\.linked).count
+        let place = root.path + (linkedCount > 0 ? " and \(linkedCount) linked in \(linkedRoot?.path ?? "")" : "")
+        Log.info("tools: \(packs.count) pack(s), \(scriptCount) script(s), \(noteCount) note(s) in \(place); runtime: \(runner.summary)")
+    }
+
+    /// The packs a tools folder holds: its folders (or links to one), not hidden ones, by name.
+    nonisolated static func packFolders(in root: URL) -> [URL] {
+        let fm = FileManager.default
+        let entries = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        return entries.filter { dir in
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: dir.path, isDirectory: &isDir) && isDir.boolValue   // follows symlinks
+                && !dir.lastPathComponent.hasPrefix(".")
+        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    /// The folder in your own tools for a new pack called `name`: that name, unless only the linked tools have a pack
+    /// of it. One of yours would hide theirs, so yours gets a name of its own beside it.
+    func personalPackDir(for name: String) -> String {
+        let fm = FileManager.default
+        func linkedOnly(_ n: String) -> Bool {
+            guard let linkedRoot else { return false }
+            return fm.fileExists(atPath: linkedRoot.appendingPathComponent(n).path) && !fm.fileExists(atPath: root.appendingPathComponent(n).path)
+        }
+        guard linkedOnly(name) else { return name }
+        var candidate = name + "-mine", n = 2
+        while linkedOnly(candidate) { candidate = "\(name)-mine-\(n)"; n += 1 }
+        return candidate
     }
 
     // MARK: notes
@@ -125,44 +170,53 @@ final class ToolRegistry {
     /// Where notes are kept now; tool packs only hold notes from before it, until they are moved.
     var notesStore: NotesStore?
 
-    /// Every note whose anchor is on the current scene: the store's, then any still kept in a pack.
+    /// Every note whose anchor is on the current scene: the store's, then any still kept in a pack that the store
+    /// has no copy of and didn't remove (a linked pack's copy is never changed, so the store's word counts).
     func notes(for ctx: ScreenContext?) -> [StickyNote] {
         let stored = notesStore?.notes(for: ctx) ?? []
-        return stored + packNotes(for: ctx).filter { note in !stored.contains { $0.id == note.id } }
+        return stored + packNotes(for: ctx).filter { notesStore?.supersedes($0.id) != true }
     }
 
+    /// Each note once: your own packs come first, so your copy of a team note wins.
     private func packNotes(for ctx: ScreenContext?) -> [StickyNote] {
         guard let ctx else { return [] }
-        return packs.flatMap { $0.notes.filter { $0.anchor.matchesScene(ctx) } }
+        var seen = Set<String>()
+        return packs.flatMap { $0.notes.filter { $0.anchor.matchesScene(ctx) } }.filter { seen.insert($0.id).inserted }
     }
 
     func pack(holding noteID: String) -> ToolPack? {
         packs.first { $0.notes.contains { $0.id == noteID } }
     }
 
-    /// The pack a new note belongs to: the first pack whose match rules cover the note's scene, else one created for it.
+    /// The pack a new note belongs to: the first of your own packs whose match rules cover the note's scene, else one
+    /// created for it in your own tools folder.
     func packForNote(anchor: NoteAnchor, appName: String?) async throws -> ToolPack {
-        if let p = select(for: anchor.sceneContext).active.first { return p }
-        let dir = try NoteStore.ensurePack(for: anchor, appName: appName, root: root)
+        if let p = select(for: anchor.sceneContext).active.first(where: { !$0.linked }) { return p }
+        let dir = try NoteStore.ensurePack(for: anchor, appName: appName, root: root,
+                                           dirName: personalPackDir(for: NoteStore.packSlug(for: anchor, appName: appName)))
         await reload()
-        guard let p = packs.first(where: { $0.dir.lastPathComponent == dir.lastPathComponent }) else {
+        guard let p = packs.first(where: { !$0.linked && $0.dir.lastPathComponent == dir.lastPathComponent }) else {
             throw ClaudeError(message: "Could not create a pack for the note in \(dir.path).")
         }
         return p
     }
 
-    /// Adds or replaces a note (by id) in its pack and writes notes.json.
+    /// Adds or replaces a note (by id) in its pack and writes notes.json. Never in a linked pack.
     func put(_ note: StickyNote, in pack: ToolPack) throws {
+        guard !pack.linked else {
+            throw ClaudeError(message: "\(pack.name) comes from the team's linked tools, which Noteling doesn't change. The note wasn't saved there.")
+        }
         var notes = pack.notes.filter { $0.id != note.id }
         notes.append(note)
         try NoteStore.save(notes, packDir: pack.dir)
         pack.notes = notes
     }
 
+    /// Takes a note out of its pack. A linked pack's file stays as the team wrote it; the notes store remembers the removal.
     func removeNote(id: String) throws {
         guard let pack = pack(holding: id) else { return }
         let notes = pack.notes.filter { $0.id != id }
-        try NoteStore.save(notes, packDir: pack.dir)
+        if !pack.linked { try NoteStore.save(notes, packDir: pack.dir) }
         pack.notes = notes
     }
 

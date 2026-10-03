@@ -33,29 +33,41 @@ enum BuiltinTools {
         ]
     }
 
-    static func execute(_ name: String, _ input: [String: Any], root: URL) -> ToolResult {
+    /// `root` is your own tools folder, `linkedRoot` the team's linked tools. A path names a file the way the prompt
+    /// lists it (`<pack>/docs/…`), in the folder its pack is loaded from: your own when you have that pack, as the
+    /// registry decides.
+    static func execute(_ name: String, _ input: [String: Any], root: URL, linkedRoot: URL? = nil) -> ToolResult {
+        let roots = [root] + (linkedRoot.map { [$0] } ?? [])
         switch name {
         case "read_file":
-            guard let rel = input["path"] as? String, let url = resolve(rel, root: root) else { return .text("Invalid path.", isError: true) }
+            guard let rel = input["path"] as? String, let url = resolve(rel, roots: roots)?.url else { return .text("Invalid path.", isError: true) }
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { return .text("File not found: \(rel)", isError: true) }
             return .text(text.count > 40_000 ? String(text.prefix(40_000)) + "\n…(truncated)" : text)
         case "grep":
             guard let pattern = input["pattern"] as? String,
                   let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return .text("Invalid pattern.", isError: true) }
-            let base = (input["path"] as? String).flatMap { resolve($0, root: root) } ?? root
-            guard let e = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey]) else { return .text("No files.", isError: true) }
+            // Your whole folder, then the linked packs you have none of your own for; or the one place asked for.
+            var bases: [(dir: URL, root: URL)] = [(root, root)]
+            if let linkedRoot {
+                let own = Set(ToolRegistry.packFolders(in: root).map(\.lastPathComponent))
+                bases += ToolRegistry.packFolders(in: linkedRoot).filter { !own.contains($0.lastPathComponent) }.map { ($0, linkedRoot) }
+            }
+            if let path = input["path"] as? String, let one = resolve(path, roots: roots) { bases = [(one.url, one.root)] }
             var hits: [String] = []
-            for case let url as URL in e {
-                guard ["md", "markdown", "txt", "py", "json", "csv", "yaml", "yml"].contains(url.pathExtension.lowercased()),
-                      let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-                let rel = url.path.replacingOccurrences(of: root.path + "/", with: "")
-                for (i, line) in text.components(separatedBy: "\n").enumerated() {
-                    if re.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil {
-                        hits.append("\(rel):\(i + 1): \(line.trimmingCharacters(in: .whitespaces).prefix(240))")
-                        if hits.count >= 60 { break }
+            search: for (base, top) in bases {
+                guard let e = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey]) else { continue }
+                for case let url as URL in e {
+                    guard ["md", "markdown", "txt", "py", "json", "csv", "yaml", "yml"].contains(url.pathExtension.lowercased()),
+                          let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                    let rel = relative(url, to: top)
+                    for (i, line) in text.components(separatedBy: "\n").enumerated() {
+                        if re.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil {
+                            hits.append("\(rel):\(i + 1): \(line.trimmingCharacters(in: .whitespaces).prefix(240))")
+                            if hits.count >= 60 { break }
+                        }
                     }
+                    if hits.count >= 60 { hits.append("…(more matches omitted)"); break search }
                 }
-                if hits.count >= 60 { hits.append("…(more matches omitted)"); break }
             }
             return .text(hits.isEmpty ? "No matches." : hits.joined(separator: "\n"))
         case "look_at_screen":
@@ -68,10 +80,24 @@ enum BuiltinTools {
         }
     }
 
-    private static func resolve(_ rel: String, root: URL) -> URL? {
+    /// The file a tools-relative path names, and the folder it is in: the first folder with its pack, else your own.
+    /// Never anything outside that folder.
+    private static func resolve(_ rel: String, roots: [URL]) -> (url: URL, root: URL)? {
+        let pack = rel.split(separator: "/").first.map(String.init) ?? ""
+        let root = roots.first { !pack.isEmpty && FileManager.default.fileExists(atPath: $0.appendingPathComponent(pack).path) } ?? roots[0]
+        let base = root.standardizedFileURL.path
         let url = root.appendingPathComponent(rel).standardizedFileURL
-        guard url.path.hasPrefix(root.standardizedFileURL.path) else { return nil }
-        return url
+        guard url.path == base || url.path.hasPrefix(base + "/") else { return nil }
+        return (url, root)
+    }
+
+    /// A found file's path as the prompt lists it, relative to its tools folder (which the walk may hand back resolved).
+    private static func relative(_ url: URL, to root: URL) -> String {
+        for base in [root.path, root.resolvingSymlinksInPath().path] where url.path.hasPrefix(base + "/") {
+            return String(url.path.dropFirst(base.count + 1))
+        }
+        let resolved = url.resolvingSymlinksInPath().path, base = root.resolvingSymlinksInPath().path + "/"
+        return resolved.hasPrefix(base) ? String(resolved.dropFirst(base.count)) : url.path
     }
 }
 
