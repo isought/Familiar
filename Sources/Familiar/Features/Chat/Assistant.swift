@@ -56,6 +56,14 @@ final class Assistant: ObservableObject {
     var onOpenSources: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onRunSource: ((UUID) -> Void)?
+    /// The watch list in general chat: tools to watch items on a schedule, and to list, check, change or stop watches.
+    var watchList: WatchListConversation? {
+        didSet {
+            watchList?.onChange = { [weak self] receipt in self?.watchListChanged(receipt) }
+            watchList?.onOfferConnect = { [weak self] _ in self?.offerConnect() }
+        }
+    }
+    var onOpenWatchList: (() -> Void)?
     private var pendingSourceTabs: [String] = []   // added to the reply's tabs when the turn ends
     private var offeredRuns: [String: UUID] = [:]  // Run now tab title → job
 
@@ -103,6 +111,7 @@ final class Assistant: ObservableObject {
     static let retryTab = "Try again"
     static let openSourcesTab = "Open Manage sources"
     static let openSettingsTab = "Open Settings"
+    static let openWatchListTab = "Open Watch List"
     static let reservedTabs = [continueTab, skipContextTab, keepTab, fullDraftTab, discardTab, retryTab]
 
     init(config: Config, watcher: ContextWatcher, registry: ToolRegistry, shell: ShellState, learning: WatchLearnSession,
@@ -175,6 +184,7 @@ final class Assistant: ObservableObject {
     func askSuggestion(_ s: String) {
         if s == Self.openSourcesTab, let onOpenSources { onOpenSources(); return }
         if s == Self.openSettingsTab, let onOpenSettings { onOpenSettings(); return }
+        if s == Self.openWatchListTab, let onOpenWatchList { onOpenWatchList(); return }
         if let id = offeredRuns.removeValue(forKey: s) {
             suggestions.removeAll { $0 == s }
             onRunSource?(id)
@@ -789,7 +799,7 @@ final class Assistant: ObservableObject {
         ["type": "image", "source": ["type": "base64", "media_type": shot.mediaType, "data": shot.data.base64EncodedString()]]
     }
 
-    private func packsSection(_ ctx: ScreenContext?, notes: Bool = true) -> String {
+    func packsSection(_ ctx: ScreenContext?, notes: Bool = true) -> String {
         PackContextProvider.context(for: ctx, registry: registry, docsLimit: config.docsStuffLimitChars,
                                     includeNotes: notes).promptSection
     }
@@ -811,7 +821,8 @@ final class Assistant: ObservableObject {
     /// Set by the app; nil in headless runs without control.
     var control: ComputerController? { desktop?.control }
 
-    private func send(content: [[String: Any]], ctx: ScreenContext?, title: String, messageID: UUID? = nil) async {
+    /// `allowsControl: false` keeps the mouse and keyboard out of a request that only reads and explains.
+    func send(content: [[String: Any]], ctx: ScreenContext?, title: String, messageID: UUID? = nil, allowsControl: Bool = true) async {
         guard let client else {
             transcript.append(ChatMessage(role: .error, text: ConversationBackend.setupMessage(config: config)))
             finishRequest()
@@ -821,7 +832,7 @@ final class Assistant: ObservableObject {
         suggestions = []
         status = "Thinking…"
         let discussingCard = cardConversation?.card != nil
-        let controlAllowed = config.allowControl && desktop != nil && !watching && !discussingCard
+        let controlAllowed = allowsControl && config.allowControl && desktop != nil && !watching && !discussingCard
         let background = controlAllowed && backgroundControl
         let id = UUID()
         requestMessageID = messageID
@@ -842,7 +853,7 @@ final class Assistant: ObservableObject {
                     guard let self else { return .text("unavailable", isError: true) }
                     return await self.lookAtScreen(ctx, generation: generation)
                 }
-                let sourceRoutes = sourceConversation?.routes() ?? []
+                let sourceRoutes = (sourceConversation?.routes() ?? []) + (watchList?.routes() ?? [])
                 if controlAllowed, let desktop {
                     return try await desktop.prepare(id: id, registry: registry, context: ctx, background: background,
                                                      title: title, additionalRoutes: sourceRoutes, lookAtScreen: capture)
@@ -935,6 +946,12 @@ final class Assistant: ObservableObject {
     private func sourceChanged(_ receipt: String) {
         transcript.append(ChatMessage(role: .receipt, text: receipt))
         if !pendingSourceTabs.contains(Self.openSourcesTab) { pendingSourceTabs.append(Self.openSourcesTab) }
+    }
+
+    /// A watch-list tool changed something: a factual line on the pad, and a way to see it in the Watch List.
+    private func watchListChanged(_ receipt: String) {
+        transcript.append(ChatMessage(role: .receipt, text: receipt))
+        if !pendingSourceTabs.contains(Self.openWatchListTab) { pendingSourceTabs.append(Self.openWatchListTab) }
     }
 
     /// The chat offered to run a job: a tab the person can tap. Nothing runs until they do.

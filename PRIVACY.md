@@ -69,6 +69,16 @@ This is off until you link a repository in **Settings → Team tools from GitHub
 - **What the team's tools do.** They work like the packs in your own tools folder: their documents and notes can be sent with your questions as described above, and their scripts run on your Mac and can contact the services they were written for. Notes kept in the repository are copied into your `notes/` folder.
 - **Unlinking.** Clear the address and choose **Save**: the copy and `linked-tools.json` are deleted. Notes copied from the team's tools stay in `notes/` until you remove them.
 
+## Watch lists
+
+**What is stored.** When you ask Noteling to watch items, it keeps your watch list in `watch-list.json` in its folder, which only your macOS user account can read. For each watch, the file holds its name, the items as you gave them (ids or page addresses), how often to check, and any details you gave for the check, such as a zip code. For each item, it holds what counts as right and what the latest check found: the item's title and address, the values the check reported, any other facts it returned (up to 8,000 characters), when it ran, and what Noteling last told you about the item. There is no history: each check replaces the one before. Stopping a watch deletes it from the file, and deleting the file deletes them all.
+
+**Checks run on a schedule.** While Noteling is running, it runs your tool-pack checks on a schedule, every 15 minutes unless you choose otherwise, on your Mac and with the secrets those packs need. Like any pack script, a check can contact the service it was written for. Checking doesn't send anything to Claude.
+
+**Notifications go through macOS.** An alert shows the item's title, the watch's name and what isn't as expected. macOS keeps it in Notification Center, and shows it on your lock screen if your notification settings allow that. You can turn Noteling's notifications off in System Settings → Notifications.
+
+**What goes to Claude.** When you create, list, check or change a watch in chat, what the checks found becomes part of that conversation. When you ask why an item isn't as expected, from a notification or the Watch List, the request includes the item's address and title, what counts as right, what the latest check found and when, its facts, and the tool pack for that page.
+
 ## How long it is kept
 
 - Watch Me recordings are deleted when you keep or discard the draft, when you clear the chat pad, or when you quit. Anything left behind by a crash is deleted after 7 days.

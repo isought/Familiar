@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let origami = OrigamiFlightController()
     private let settings = SettingsWindowController()
     private let watchDraftWindow = WatchDraftWindowController()
+    private var watchList: WatchListFeature?
     private var savedBubbleFrame: NSRect?
     private var dragOffset: NSPoint?     // cursor position relative to the panel origin while dragging
     private let control = ComputerController()
@@ -240,6 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupHotKey()
         setupWatcher()
         setupWand()
+        setupWatchList()
         requestPermissionsOnFirstRun()
         Task {
             runner.networkEnv = await ScriptNetwork.current()   // before the first script: the Mac's proxy and certificates
@@ -250,6 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if !assistant.hasConnection { assistant.reconfigure(config) }   // pick up a migrated key
             morningTasks.start()
             cardGeneration.start()
+            watchList?.start()   // only once the packs are loaded, so no check runs before its script is known
         }
 
         if !assistant.hasConnection {
@@ -353,6 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(stopWorkMenuItem)
         tasksMenuItem = NSMenuItem(title: "Background Tasks…", action: #selector(menuShowTasks), keyEquivalent: "")
         menu.addItem(tasksMenuItem)
+        menu.addItem(NSMenuItem(title: "Watch List…", action: #selector(showWatchList), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open Chat", action: #selector(openChat), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Show Bubble", action: #selector(menuShowBubble), keyEquivalent: ""))
         hideMenuItem = NSMenuItem(title: "Hide Bubble", action: #selector(menuHideBubble), keyEquivalent: "")
@@ -538,6 +542,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         morningTasks?.shutdown()
         morningPanel?.close()
         watchDraftWindow.close()
+        watchList?.stop()
         execution.cancel()
         control.end()          // never leave a ghost cursor behind
         taskPanel.close()
@@ -734,6 +739,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.taskPanel.updateSharing(self.config.hideFromScreenShare)
             self.morningPanel.updateSharing(self.config.hideFromScreenShare)
             self.watchDraftWindow.updateSharing(self.config.hideFromScreenShare)
+            self.watchList?.window.updateSharing(self.config.hideFromScreenShare)
             self.control.maxLongEdge = self.config.maxImageLongEdge
             self.control.hideFromScreenShare = self.config.hideFromScreenShare
             self.control.preciseClicks = self.config.backgroundPreciseClicks
@@ -765,4 +771,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc private func fixScreenPermission() { if !Permissions.requestScreenRecording() { Permissions.openScreenRecordingSettings() } }
     @objc private func fixAXPermission() { Permissions.requestAccessibility(); Permissions.openAccessibilitySettings() }
+
+    // MARK: watch list
+
+    /// Items checked on a schedule by a pack's `watch:` script: the chat's tools, the alerts and the window. The
+    /// schedule starts once the packs have loaded (in `applicationDidFinishLaunching`).
+    private func setupWatchList() {
+        let feature = WatchListFeature(registry: registry)
+        feature.notifier.activate()
+        feature.notifier.onOpen = { [weak self] watchID, key in self?.openWatchedItem(watchID: watchID, key: key) }
+        feature.window.onWhy = { [weak self] watchID, key in self?.explainWatchedItem(watchID: watchID, key: key) }
+        assistant.watchList = feature.conversation
+        assistant.onOpenWatchList = { [weak self] in self?.showWatchList() }
+        watchList = feature
+    }
+
+    @objc private func showWatchList() {
+        watchList?.window.show(hideFromScreenShare: config.hideFromScreenShare)
+    }
+
+    /// A clicked notification explains its item in the chat while it is still red or grey; otherwise the window shows it.
+    private func openWatchedItem(watchID: UUID, key: String) {
+        guard watchList?.store.watch(id: watchID)?.item(key)?.needsExplaining == true else { showWatchList(); return }
+        explainWatchedItem(watchID: watchID, key: key)
+    }
+
+    private func explainWatchedItem(watchID: UUID, key: String) {
+        guard let watch = watchList?.store.watch(id: watchID), let item = watch.item(key) else { showWatchList(); return }
+        openChat()
+        assistant.explainWatched(watch, item: item)
+    }
 }
