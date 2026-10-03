@@ -250,8 +250,18 @@ final class WatchListConversation {
         if watch.paused { result["paused"] = true }
         if let fields = watch.fields {
             result["fields"] = fields
-            let other = Set(watch.items.flatMap { $0.state.map { Array($0.keys) } ?? [] }).subtracting(fields).subtracting(watch.expect.keys)
+            let reported = Set(watch.items.flatMap { $0.state.map { Array($0.keys) } ?? [] })
+            let other = reported.subtracting(fields).subtracting(watch.expect.keys)
             if !other.isEmpty { result["also_reported"] = other.sorted() }
+            // A name the check doesn't use would never be watched: say so, rather than stay green.
+            let checked = watch.items.filter { $0.status?.isVerdict == true }
+            let missing = checked.isEmpty ? [] : fields.filter { field in checked.allSatisfy { $0.state?[field] == nil } }
+            if !missing.isEmpty {
+                result["fields_not_reported"] = missing
+                result["fields_note"] = "The check doesn't report \(missing.joined(separator: " or ")), so \(missing.count == 1 ? "it isn't" : "they aren't") watched. "
+                    + (reported.isEmpty ? "" : "It reports: \(reported.sorted().joined(separator: ", ")). ")
+                    + "Tell the person, and to watch the right ones, stop this watch and create it again with those names in fields."
+            }
         }
         if !watch.expect.isEmpty { result["expect"] = watch.expect.mapValues(Self.brief) }
         if !watch.args.isEmpty { result["args"] = watch.args.mapValues(\.json) }
@@ -276,10 +286,11 @@ final class WatchListConversation {
                 if item.status?.isVerdict == true, let state = item.state {
                     row["now"] = state.filter { expected[$0.key] != nil }.mapValues(Self.brief)
                 }
-                if !item.unreported.isEmpty { row["not_reported"] = item.unreported }
             } else {
                 row["counts_as_right"] = "what its first check that works shows" + (watch.expect.isEmpty ? "" : ", with expect")
             }
+            let unreported = item.unreported(named: watch.fields)
+            if !unreported.isEmpty { row["not_reported"] = unreported }
             if let checked = item.checkedAt { row["checked"] = Self.time(checked, now: now()) }
             return row
         }

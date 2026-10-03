@@ -111,6 +111,19 @@ struct WatchListConversationTests {
         #expect(fixture.store.watches.first?.fields == ["price", "badges"])
     }
 
+    @Test func aFieldTheCheckDoesNotReportIsNamedRatherThanLeftGreen() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let result = try fixture.object(try await fixture.call("watch_items", ["items": ["1", "2"], "fields": ["sale_price"]]))
+        #expect(result["fields_not_reported"] as? [String] == ["sale_price"])
+        #expect(result["fields_note"] as? String == "The check doesn't report sale_price, so it isn't watched. It reports: price. "
+            + "Tell the person, and to watch the right ones, stop this watch and create it again with those names in fields.")
+        let items = try #require(result["items"] as? [[String: Any]])
+        #expect(items.map { $0["not_reported"] as? [String] } == [["sale_price"], ["sale_price"]])
+        let watch = try #require(fixture.store.watches.first)
+        #expect(WatchListView.words(watch.items[0], fields: watch.fields, checking: false) == "As expected · not reported: Sale price")
+    }
+
     @Test func aCheckThatNeedsSettingsSaysSoAndOffersThem() async throws {
         var shop = Fixture.shop
         shop.missingSecrets = ["SHOP_TOKEN"]
@@ -289,7 +302,7 @@ struct WatchListConversationTests {
         item.state = ["price": .number(1)]
         #expect(WatchListView.words(item, checking: false) == "As expected · not reported: In stock")
         item.status = .notAsExpected([WatchListDifference(field: "price", now: .number(13.95), expected: .number(12.33))])
-        #expect(WatchListView.words(item, checking: false) == "Price: 13.95 — expected 12.33")
+        #expect(WatchListView.words(item, checking: false) == "Price: 13.95 — expected 12.33\nNot reported: In stock")
         item.status = .couldNotCheck("Signed out")
         #expect(WatchListView.words(item, checking: false) == "Couldn't check: Signed out")
         item.url = "file:///etc/hosts"

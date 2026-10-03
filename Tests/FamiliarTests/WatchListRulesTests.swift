@@ -118,9 +118,10 @@ struct WatchListRulesTests {
         item.expected = expected
         item.state = ["price": .number(12.33), "strikethrough": .none]
         item.status = .asExpected
-        #expect(item.unreported == ["seller"])
+        #expect(item.unreported() == ["seller"])
+        #expect(item.unreported(named: ["price", "rating"]) == ["rating", "seller"])   // a field the person named counts too
         item.status = .couldNotCheck("Offline")   // the latest check reported nothing at all
-        #expect(item.unreported.isEmpty)
+        #expect(item.unreported().isEmpty)
     }
 
     // MARK: alerts

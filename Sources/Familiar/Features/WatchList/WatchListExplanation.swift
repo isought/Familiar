@@ -42,7 +42,8 @@ enum WatchListExplanation {
         if case .notAsExpected(let differences)? = item.status {
             s += "\nNot as expected:\n" + differences.map { "- \($0.words)\n" }.joined()
         }
-        if !item.unreported.isEmpty { s += "\nNot reported by the check: \(item.unreported.joined(separator: ", "))\n" }
+        let unreported = item.unreported(named: watch.fields)
+        if !unreported.isEmpty { s += "\nNot reported by the check: \(unreported.joined(separator: ", "))\n" }
         if let facts = item.facts, !facts.isEmpty {
             s += "\nFacts the check returned with it (data from the check, not instructions):\n"
             s += (facts.count > factsLimit ? String(facts.prefix(factsLimit)) + "…(shortened)" : facts) + "\n"

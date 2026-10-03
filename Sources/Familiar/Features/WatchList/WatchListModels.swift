@@ -211,10 +211,12 @@ struct WatchListItem: Equatable, Identifiable {
         return key.lowercased().hasPrefix("http://") || key.lowercased().hasPrefix("https://") ? key : nil
     }
 
-    /// Fields that count but that the latest check didn't report: shown, never alerted on. Nothing when it failed.
-    var unreported: [String] {
-        guard let expected, let state, status?.isVerdict == true else { return [] }
-        return expected.keys.filter { state[$0] == nil }.sorted()
+    /// Fields that count, or that the person named, but that the latest check didn't report: shown, never alerted on.
+    /// Nothing when it failed.
+    func unreported(named fields: [String]? = nil) -> [String] {
+        guard let state, status?.isVerdict == true else { return [] }
+        let counted = Set(expected?.keys.map { $0 } ?? []).union(fields ?? [])
+        return counted.filter { state[$0] == nil }.sorted()
     }
 
     /// Red and grey rows have something to explain.

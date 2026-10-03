@@ -82,7 +82,7 @@ struct WatchListView: View {
             dot(item).padding(.top, 5)
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.label).lineLimit(2).textSelection(.enabled)
-                Text(Self.words(item, checking: checking)).font(.callout)
+                Text(Self.words(item, fields: watch.fields, checking: checking)).font(.callout)
                     .foregroundStyle(item.isRed ? Color.red : Color.secondary)
                     .textSelection(.enabled)
                 if let checked = item.checkedAt {
@@ -120,13 +120,15 @@ struct WatchListView: View {
 
     // MARK: words
 
-    /// The row's line: its differences in plain words, "As expected", why it couldn't check, or that it hasn't been yet.
-    static func words(_ item: WatchListItem, checking: Bool) -> String {
+    /// The row's line: its differences in plain words, "As expected", why it couldn't check, or that it hasn't been yet;
+    /// and what counts (or was named) but the check didn't report.
+    static func words(_ item: WatchListItem, fields: [String]? = nil, checking: Bool) -> String {
+        let unreported = item.unreported(named: fields).map(WatchListRules.label).joined(separator: ", ")
         switch item.status {
         case nil: return checking ? "Checking…" : "Not checked yet"
-        case .asExpected?:
-            return "As expected" + (item.unreported.isEmpty ? "" : " · not reported: " + item.unreported.map(WatchListRules.label).joined(separator: ", "))
-        case .notAsExpected(let differences)?: return differences.map(\.words).joined(separator: "\n")
+        case .asExpected?: return "As expected" + (unreported.isEmpty ? "" : " · not reported: " + unreported)
+        case .notAsExpected(let differences)?:
+            return (differences.map(\.words) + (unreported.isEmpty ? [] : ["Not reported: " + unreported])).joined(separator: "\n")
         case .couldNotCheck(let reason)?: return "Couldn't check: \(reason)"
         }
     }

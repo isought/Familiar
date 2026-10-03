@@ -283,9 +283,10 @@ repeated. The site-specific part is a pack script, named in SKILL.md with `watch
   argument the script doesn't take and asks for one it requires.
 - It returns an object with `title` (string), an optional `url` (the page to open), `state` and optional `facts`.
   `state` holds flat fields, each a string, number, bool, null or list of strings: the things worth watching, e.g.
-  `{"seller": "Acme", "price": 12.33, "strikethrough": 13.95, "badges": ["Deal"], "in_stock": true}`. Up to 40 fields
-  count, and a value that isn't flat is compared as its JSON text. `facts` is anything else that helps explain the item;
-  up to 8,000 characters are kept.
+  `{"seller": "Acme", "price": 12.33, "strikethrough": 13.95, "badges": ["Deal"], "in_stock": true}`. Report every field
+  every time, with null when it has no value: a field missing from the first check that works isn't watched. Up to 40
+  fields count, and a value that isn't flat is compared as its JSON text. `facts` is anything else that helps explain
+  the item; up to 8,000 characters are kept.
 - An `error` key, an exception, no `state` object, or running past 60 seconds means "couldn't check". The reason shown
   is the first line of the error, without the script's file name or the Python error type.
 - It runs through the bundled uv like any pack script, with the pack's `requires:` secrets and `NOTELING_CONTEXT` set
@@ -310,7 +311,9 @@ person named, then any `expect` values they gave (which can add fields). An item
 its first later success. `change_watch` with `expect` changes it for every item and compares again with the last check.
 Numbers are equal within 0.005; text is trimmed, then exact; lists of strings are sets (order doesn't matter, and an
 empty list is none); null is a value of its own ("none"). A number or yes/no given as text ("12.33", "$12.33", "yes")
-counts as that number or answer. A field the check doesn't report is shown as not reported and never alerted on.
+counts as that number or answer. A field the check doesn't report is shown as not reported and never alerted on. A
+field the person named that no item reports is called out in the `watch_items` result, with the fields the check does
+report, so a wrong name never just stays green.
 
 **When it notifies.** Never on an item's first check, since the chat shows it, and never for a result the chat waited
 for. Otherwise it notifies when an item goes from as expected to not as expected, when it is not as expected in another
