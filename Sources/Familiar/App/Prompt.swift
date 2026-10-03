@@ -277,7 +277,7 @@ enum Prompt {
     }
 
     /// A pack that knows the page knows what people there need from the pen better than the default shape does.
-    static let packShapeFirst = "If the active tool pack says how to answer when someone circles or points at something, use its shape and length instead of the one below.\n"
+    static let packShapeFirst = "If the active tool pack says how to answer when someone circles or points at something, follow the pack exactly and skip the shape below, including its closing question.\n"
 
     /// Notes people stuck on controls: the ones on what was picked, then the rest of the scene.
     /// The notes a request carries, each as its author's claim with its age, and any check run on it.

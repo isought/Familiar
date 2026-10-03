@@ -3,7 +3,10 @@ import SwiftUI
 import FamiliarContracts
 import FamiliarRuntime
 
-/// `Noteling --ask "question" [url] [--shot]`: headless question through the real Claude tool loop, no screenshot, no UI.
+/// `Noteling --ask "question" [url] [--shot] [--api] [--pen "what was pointed at"]`: headless question through the real
+/// Claude tool loop, no screenshot, no UI. A pack that briefs the page runs its brief first, as in the app; `--pen`
+/// asks as a pen pick on a control with that label instead of a typed question; `--api` uses the API key whatever the
+/// config says.
 @MainActor
 func runHeadlessAsk() async {
     let args = CommandLine.arguments
@@ -12,6 +15,7 @@ func runHeadlessAsk() async {
     let url = i + 2 < args.count && !args[i + 2].hasPrefix("--") ? args[i + 2] : "https://expenses.internal.example.com/reports/new"
     var config = Config.load()
     if args.contains("--claude-cli") { config.connectionMode = "claudeCode" }
+    if args.contains("--api") { config.connectionMode = "api" }
     guard let client = ConversationBackend.make(config: config) else {
         print(ConversationBackend.setupMessage(config: config)); exit(1)
     }
@@ -29,7 +33,21 @@ func runHeadlessAsk() async {
     }
     let packContext = PackContextProvider.context(for: ctx, registry: registry, docsLimit: config.docsStuffLimitChars,
                                                    includeMissingRequirements: false)
-    let text = Prompt.context(ctx, recent: []) + packContext.promptSection + "\n## Question\n\(question)\n"
+    var brief = ""
+    let briefs = PageBriefs(registry: registry)
+    if briefs.source(for: ctx) != nil {
+        let started = Date()
+        if let b = await briefs.brief(for: ctx, wait: 30) {
+            brief = Prompt.brief(b)
+            print("brief: \(b.script) \(b.failed ? "failed" : "ok") in \(String(format: "%.1f", Date().timeIntervalSince(started)))s, \(b.text.count) chars")
+        }
+    }
+    var ask = "\n## Question\n\(question)\n"
+    if let p = args.firstIndex(of: "--pen"), p + 1 < args.count {
+        let element = AXElementInfo(role: "AXStaticText", title: args[p + 1], frame: .zero)
+        ask = "\n" + Prompt.wandInstruction(target: WandTarget(screenPoint: .zero, element: element, windowOwner: "Google Chrome", windowTitle: title), ctx: ctx)
+    }
+    let text = Prompt.context(ctx, recent: []) + packContext.promptSection + brief + ask
     // --control: expose the computer toolset (no HUD in headless mode). Only meaningful when the user asked for it.
     let controlOn = args.contains("--control")
     let control = ComputerController()
