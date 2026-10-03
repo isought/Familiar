@@ -72,7 +72,8 @@ enum WatchListRules {
     ///   item is not how they were last told it was;
     /// - never on the item's first check, and never when `quiet` (the person sees the result where they asked, in the
     ///   chat): the result only becomes what they were told.
-    /// Expectations come from the first check that works, so an item whose first check failed gets them later.
+    /// What counts as right starts from the first check that works, so an item whose first check failed gets it later;
+    /// `expect` is the watch's own, and the item's own `expect` goes over it.
     static func apply(_ outcome: WatchListOutcome, to item: inout WatchListItem, fields: [String]?,
                       expect: [String: WatchListValue], at time: Date, quiet: Bool = false) -> WatchListAlert.Kind? {
         let silent = quiet || item.checkedAt == nil
@@ -91,7 +92,10 @@ enum WatchListRules {
             if let url = reading.url { item.url = url }
             item.state = reading.state
             item.facts = reading.facts
-            let expected = item.expected ?? expectations(from: reading.state, fields: fields, expect: expect)
+            item.why = reading.why
+            let captured = item.captured ?? reading.state
+            item.captured = captured
+            let expected = expectations(from: captured, fields: fields, expect: expect.merging(item.expect) { $1 })
             item.expected = expected
             let verdict = compare(reading.state, with: expected)
             item.status = verdict
@@ -127,17 +131,41 @@ enum WatchListRules {
         } + alerts.filter { if case .couldNotCheck = $0.kind { return false } else { return true } }
     }
 
-    /// The person changed what counts as right (in the chat, which shows the result): the item is compared again with
-    /// what its last check showed, and that is what they were told. An item that couldn't be checked keeps its status,
-    /// and one that never worked gets the new values with the rest of its expectations at its first check that works.
-    static func reexpect(_ item: inout WatchListItem, with expect: [String: WatchListValue]) {
-        guard var expected = item.expected else { return }
-        for (field, value) in expect { expected[field] = value }
+    /// What counts as right changed (the person said so in the chat, or edited watch.json): it is worked out again from
+    /// what the item's first check found, so a value they take out of `expect` goes back to that, and the item is
+    /// compared again with what its latest check showed. With `quiet` (the chat shows the result) that is what they were
+    /// told; after a hand edit the next check tells them if it isn't as they now expect. An item that couldn't be
+    /// checked keeps its status, and one that never worked gets it all at its first check that works.
+    static func refresh(_ item: inout WatchListItem, fields: [String]?, expect: [String: WatchListValue], quiet: Bool) {
+        guard let captured = item.captured else { item.expected = nil; return }
+        let expected = expectations(from: captured, fields: fields, expect: expect.merging(item.expect) { $1 })
         item.expected = expected
         guard let state = item.state, item.status?.isVerdict == true else { return }
         let verdict = compare(state, with: expected)
         item.status = verdict
-        item.notified = verdict
+        if quiet { item.notified = verdict }
+    }
+
+    /// The check's own words as a notification shows them, after the differences: its first reason first, in at most
+    /// two lines, each cut at a word to fit.
+    static func notificationLines(_ why: [String]) -> [String] {
+        let lines = why.flatMap { $0.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) } }.filter { !$0.isEmpty }
+        return lines.prefix(2).map { clipWords($0, 120) }
+    }
+
+    /// Cut at the last space that keeps it within `limit` characters, with an ellipsis; mid-word only for one long word.
+    static func clipWords(_ text: String, _ limit: Int) -> String {
+        guard text.count > limit else { return text }
+        let cut = text.prefix(limit - 1)
+        if let space = cut.lastIndex(where: \.isWhitespace), cut.distance(from: cut.startIndex, to: space) >= limit / 2 {
+            return cut[..<space].trimmingCharacters(in: .whitespaces) + "…"
+        }
+        return String(cut) + "…"
+    }
+
+    /// How long a list check may run: a minute, and a second more for each item, at most 10 minutes.
+    static func listTimeLimit(items: Int) -> TimeInterval {
+        min(600, 60 + TimeInterval(max(0, items)))
     }
 
     /// "in_stock" → "In stock", "strikeThrough" → "Strike through", "SKU" → "SKU".

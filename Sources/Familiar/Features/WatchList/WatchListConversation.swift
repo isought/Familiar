@@ -19,6 +19,8 @@ final class WatchListConversation {
     var onChange: ((String) -> Void)?
     /// A check needs secrets in Settings. The chat never takes a password itself.
     var onOfferConnect: ((String) -> Void)?
+    /// Whether a watch's check takes all its items in one call (a list check), so it can hold up to 200 of them.
+    var takesList: (WatchListWatch) async -> Bool = { _ in false }
     /// Checks still running after this carry on; the Watch List window shows them when they finish.
     var waitLimit: Double = 90
     var now: () -> Date = Date.init
@@ -39,7 +41,7 @@ final class WatchListConversation {
         let expect: [String: Any] = ["type": "object", "description": "What counts as right for every item, field → value, e.g. {\"price\": 12.33, \"badges\": [\"Deal\"], \"in_stock\": true}. Overrides what the first check shows."]
         return [
             route("watch_items", Self.watchItemsDescription, [
-                "items": items("The items exactly as the person gave them: ids or page addresses. Up to 50."),
+                "items": items("The items exactly as the person gave them: ids or page addresses. Up to 50, or 200 when the check takes a whole list at once."),
                 "name": ["type": "string", "description": "A short name for the watch, e.g. \"Sale items\"."],
                 "every_minutes": minutes,
                 "fields": items("Only keep an eye on these things the check reports, e.g. [\"price\", \"badges\"]. Default: everything it reports."),
@@ -64,10 +66,12 @@ final class WatchListConversation {
 
     static let watchItemsDescription = "Watch items for the person and tell them when one is not as it should be right now. Use it when they ask to watch, keep an eye on or monitor items (product ids or page addresses); it is not Watch Me, which records them doing a task. Their team's check for the site checks each item on a schedule, and a Mac notification tells them when an item stops being as expected or changes again, when it is back, or when it can't be checked twice in a row. This creates the watch, checks every item once now, and returns per item its title, status, what it shows now and what counts as right: what its first check shows, unless expect says otherwise. Then confirm in one or two lines what you are watching, what counts as right, and how often, and that they can change what counts as right (expect here, or change_watch later). If notifications are off, say so."
 
+    /// Each tool first takes in what people changed in the watches folder by hand, so it answers from the files as they are.
     private func route(_ name: String, _ description: String, _ properties: [String: Any], required: [String],
                        action: @escaping ([String: Any]) async throws -> String) -> ToolRoute {
         ToolRoute(match: .tool(name: name), definition: ["name": name, "description": description,
-            "input_schema": ["type": "object", "additionalProperties": false, "properties": properties, "required": required]]) { _, input, _ in
+            "input_schema": ["type": "object", "additionalProperties": false, "properties": properties, "required": required]]) { [weak self] _, input, _ in
+            self?.runner.refresh()
             do { return .text(try await action(input)) }
             catch { return .text(error.localizedDescription, isError: true) }
         }
@@ -81,12 +85,14 @@ final class WatchListConversation {
             throw WatchListError("You're already watching \(WatchListStore.watchLimit) lists, the most Noteling keeps. Stop one first.")
         }
         let choice = try resolveCheck(input["check"])
+        try Self.fit(keys.count, in: choice.itemLimit)
         let (minutes, minutesNote) = try Self.minutes(input["every_minutes"])
         var args = try Self.values(input["args"], "args")
         args.removeValue(forKey: "item")
+        args.removeValue(forKey: "items")
         try Self.checkArguments(args, for: choice)
         let name = uniqueName(Self.text(input["name"]) ?? Self.defaultName(keys))
-        let watch = WatchListWatch(name: name, check: choice.id, items: keys.map(WatchListItem.init(key:)), args: args,
+        let watch = WatchListWatch(name: name, check: choice.id, items: keys.map { WatchListItem(key: $0) }, args: args,
                                    fields: try Self.fields(input["fields"]), expect: try Self.values(input["expect"], "expect"),
                                    everyMinutes: minutes, createdAt: now())
         try store.add(watch)
@@ -105,8 +111,10 @@ final class WatchListConversation {
     }
 
     private func list() async -> String {
-        guard !store.watches.isEmpty else { return "Nothing is being watched." + (store.notice.map { " " + $0 } ?? "") }
+        let unreadable = store.unreadable.keys.sorted().map { ["folder": $0, "problem": store.unreadable[$0]!] }
+        guard !store.watches.isEmpty || !unreadable.isEmpty else { return "Nothing is being watched." + (store.notice.map { " " + $0 } ?? "") }
         var result: [String: Any] = ["watches": store.watches.map(summary)]
+        if !unreadable.isEmpty { result["folders_not_watched"] = unreadable }
         if let notice = store.notice { result["notice"] = notice }
         result["notifications"] = await notificationLine()
         return Self.json(result)
@@ -140,6 +148,8 @@ final class WatchListConversation {
         guard !adding.isEmpty || !removing.isEmpty || minutes != nil || !expect.isEmpty || paused != nil else {
             throw WatchListError("Nothing to change: give items to add or remove, how often, what counts as right, or paused.")
         }
+        let limit = adding.isEmpty ? WatchListStore.itemLimit
+            : await takesList(watch) ? WatchListStore.itemLimit : WatchListStore.itemLimitEach
         var changes: [String] = [], added: [String] = [], notFound: [String] = []
         try store.change(watch.id) { w in
             for key in removing {
@@ -153,10 +163,12 @@ final class WatchListConversation {
             }
             if !added.isEmpty { changes.append("added \(Self.count(added.count))") }
             guard !w.items.isEmpty else { throw WatchListError("That would leave nothing to watch. To stop watching it, use stop_watch.") }
+            if !added.isEmpty { try Self.fit(w.items.count, in: limit) }
             if let every = minutes?.0, every != w.everyMinutes { w.everyMinutes = every; changes.append("checks \(w.everyWords)") }
             if !expect.isEmpty {
                 for (field, value) in expect { w.expect[field] = value }
-                for index in w.items.indices { WatchListRules.reexpect(&w.items[index], with: expect) }
+                // The chat shows the result, so it is what the person was told.
+                for index in w.items.indices { WatchListRules.refresh(&w.items[index], fields: w.fields, expect: w.expect, quiet: true) }
                 changes.append("what counts as right")
             }
             if let paused, paused != w.paused { w.paused = paused; changes.append(paused ? "paused" : "resumed") }
@@ -177,7 +189,7 @@ final class WatchListConversation {
         let watch = try resolve(input["watch"])
         runner.cancel(watch.id)
         try store.remove(watch.id)
-        let receipt = "Stopped watching “\(Self.clip(watch.name, 80))”."
+        let receipt = "Stopped watching “\(Self.clip(watch.name, 80))”. Its folder is in the Trash, if you want it back."
         onChange?(receipt)
         return receipt + " It no longer checks or notifies."
     }
@@ -244,9 +256,13 @@ final class WatchListConversation {
 
     static let stillChecking = "Some items are still being checked. The Watch List window shows them when they are done, and a notification comes only if one is not as expected later."
 
-    /// A watch as the chat reads it, compact: per item its title, status, what it shows now and what counts as right.
+    /// A watch as the chat reads it, compact: per item its title, status, what it shows now, what counts as right and
+    /// what the check said in its own words; where its folder is, and whether its watch.json can be read.
     private func summary(_ watch: WatchListWatch) -> [String: Any] {
-        var result: [String: Any] = ["watch": watch.name, "id": watch.id.uuidString, "every_minutes": watch.everyMinutes, "check": watch.check]
+        var result: [String: Any] = ["watch": watch.name, "id": watch.id.uuidString, "every_minutes": watch.everyMinutes,
+                                     "check": store.ownCheck(for: watch.id) == nil ? watch.check : "its own check.py"]
+        if let folder = store.folder(for: watch.id) { result["folder"] = (folder.path as NSString).abbreviatingWithTildeInPath }
+        if let problem = store.problems[watch.id] { result["problem"] = problem + " Until it's fixed, the watch keeps what it had." }
         if watch.paused { result["paused"] = true }
         if let fields = watch.fields {
             result["fields"] = fields
@@ -291,6 +307,8 @@ final class WatchListConversation {
             }
             let unreported = item.unreported(named: watch.fields)
             if !unreported.isEmpty { row["not_reported"] = unreported }
+            // The check's own words: quote them as they are, never in other words.
+            if !item.whyNow.isEmpty { row["why"] = item.whyNow }
             if let checked = item.checkedAt { row["checked"] = Self.time(checked, now: now()) }
             return row
         }
@@ -321,6 +339,14 @@ final class WatchListConversation {
     static func text(_ raw: Any?) -> String? {
         let text = (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return text.isEmpty ? nil : text
+    }
+
+    /// A watch holds up to 50 items, or 200 when its check takes them all at once.
+    static func fit(_ count: Int, in limit: Int) throws {
+        guard count > limit else { return }
+        throw WatchListError(limit == WatchListStore.itemLimitEach
+            ? "Its check takes one item at a time, so a watch holds up to \(limit) items. Split them into watches of \(limit)."
+            : "A watch holds up to \(limit) items. Split them into two watches.")
     }
 
     /// Items as given: texts (or numbers, for ids), trimmed, each once.

@@ -76,20 +76,22 @@ final class ScriptRunner {
     }
 
     /// The script's own result, for code that uses it directly (a saved job reading its source, a watch list's check),
-    /// with no size cap. It stops with its caller, and at `timeout`.
+    /// with no size cap. It stops with its caller, and at `timeout`. `toolDir` is the folder a script outside a pack
+    /// (a watch's own check.py) calls home, instead of its pack's.
     func result(_ tool: ScriptTool, args: [String: Any] = [:], context: ScreenContext? = nil, secrets: [String] = [],
-                timeout: TimeInterval = 90) async throws -> Any {
-        try await execute(tool, args: args, context: context, secrets: secrets, timeout: timeout, stopsWithCaller: true)["result"] ?? NSNull()
+                timeout: TimeInterval = 90, toolDir: URL? = nil) async throws -> Any {
+        try await execute(tool, args: args, context: context, secrets: secrets, timeout: timeout, stopsWithCaller: true,
+                          toolDir: toolDir)["result"] ?? NSNull()
     }
 
     private func execute(_ tool: ScriptTool, args: [String: Any], context: ScreenContext?, secrets: [String],
-                         timeout: TimeInterval = 90, stopsWithCaller: Bool = false) async throws -> [String: Any] {
+                         timeout: TimeInterval = 90, stopsWithCaller: Bool = false, toolDir home: URL? = nil) async throws -> [String: Any] {
         guard let (exe, cmdArgs) = command(helper: "run_tool.py", script: tool.path, deps: tool.dependencies) else {
             throw ScriptRunnerError(message: "no Python runtime")
         }
         let stdin = try JSONSerialization.data(withJSONObject: args)
         var env = networkEnv.merging(extraEnv) { _, configured in configured }
-        let toolDir = tool.path.deletingLastPathComponent().deletingLastPathComponent().path
+        let toolDir = (home ?? tool.path.deletingLastPathComponent().deletingLastPathComponent()).path
         env["NOTELING_TOOL_DIR"] = toolDir
         env["FAMILIAR_TOOL_DIR"] = toolDir   // earlier name, kept for existing packs
         for key in secrets { if let v = Secrets.get(key) { env[key] = v } }

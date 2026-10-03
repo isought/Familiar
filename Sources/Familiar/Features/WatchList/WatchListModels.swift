@@ -93,11 +93,9 @@ enum WatchListValue: Equatable {
         text.count > limit ? String(text.prefix(limit)) + "…" : text
     }
 
+    /// Compact JSON, with numbers as written (13.95, not 13.949999999999999).
     static func jsonText(_ value: Any, limit: Int) -> String {
-        let options: JSONSerialization.WritingOptions = [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed]
-        guard JSONSerialization.isValidJSONObject([value]),
-              let data = try? JSONSerialization.data(withJSONObject: value, options: options) else { return clip("\(value)", limit) }
-        return clip(String(decoding: data, as: UTF8.self), limit)
+        clip(WatchListJSON.compact(value), limit)
     }
 }
 
@@ -173,18 +171,25 @@ extension WatchListStatus: Codable {
     }
 }
 
-/// One watched item: the key exactly as the person gave it (an id or a page address), what its last check found, what
-/// counts as right for it, and what the person was last told about it.
+/// One watched item: the key exactly as the person gave it (an id or a page address) and what counts as right for it
+/// alone, which watch.json holds; then what its checks found and what the person was last told, which latest.json holds.
 struct WatchListItem: Equatable, Identifiable {
     var key: String
+    /// What counts as right for this item only, as the person said it: over the watch's own `expect`.
+    var expect: [String: WatchListValue] = [:]
     var title: String?
     var url: String?
-    /// What counts as right: set by its first check that works, then by what the person says. Nil until then.
+    /// Everything its first check that worked reported: what counts as right starts from this. Nil until then.
+    var captured: [String: WatchListValue]?
+    /// What counts as right now: `captured` (only the watch's `fields`, when it names some), then the watch's `expect`,
+    /// then the item's own. Worked out again whenever either changes.
     var expected: [String: WatchListValue]?
     /// What its last check that worked reported.
     var state: [String: WatchListValue]?
     /// The rest of what that check returned, as JSON text, for an explanation. Never shown as a cause by itself.
     var facts: String?
+    /// What that check said about the item in its own words (`why`): shown as the check wrote it, never by the model.
+    var why: [String]?
     var checkedAt: Date?
     var status: WatchListStatus?
     /// Checks in a row that couldn't check.
@@ -195,9 +200,19 @@ struct WatchListItem: Equatable, Identifiable {
     /// They were told it couldn't be checked; cleared when a check works again.
     var notifiedCouldNotCheck = false
 
-    init(key: String) { self.key = key }
+    init(key: String, expect: [String: WatchListValue] = [:]) {
+        self.key = key
+        self.expect = expect
+    }
 
     var id: String { key }
+
+    /// What the check said in its own words, while its latest check says how the item is. A check that failed has
+    /// nothing to say: an earlier check's words are never shown in its place.
+    var whyNow: [String] {
+        guard status?.isVerdict == true else { return [] }
+        return why ?? []
+    }
 
     /// Its title from the check, or the key as given.
     var label: String {
@@ -233,6 +248,8 @@ struct WatchListItem: Equatable, Identifiable {
     }
 }
 
+/// The earlier single `watch-list.json`, read once to move its watches into folders (`WatchListStore`), and written by
+/// tests to stand in for it. Folders use `WatchListFiles` instead.
 extension WatchListItem: Codable {
     private enum CodingKeys: String, CodingKey {
         case key, title, url, expected, state, facts, checkedAt, status, failures, notified, notifiedCouldNotCheck
@@ -255,11 +272,11 @@ extension WatchListItem: Codable {
     }
 }
 
-/// A list of items checked together on a schedule by one pack's `watch:` script.
+/// A list of items checked together on a schedule: by the pack's `watch:` script, or by the watch's own check.py.
 struct WatchListWatch: Equatable, Identifiable {
     var id = UUID()
     var name: String
-    /// The check: a pack script's tool name, e.g. shop__watch_item.
+    /// The check: a pack script's tool name, e.g. shop__watch_item. A check.py in the watch's folder is used instead.
     var check: String
     var items: [WatchListItem]
     /// Extra arguments the person gave for the check, e.g. a zip code. Passed only if the script declares them.
@@ -271,6 +288,8 @@ struct WatchListWatch: Equatable, Identifiable {
     var everyMinutes = WatchListWatch.defaultMinutes
     var paused = false
     var createdAt = Date()
+    /// The secrets its own check.py gets, by the names packs use. A pack's check gets the pack's own instead.
+    var requires: [String] = []
     var lastRunAt: Date?
 
     static let defaultMinutes = 15
@@ -279,7 +298,7 @@ struct WatchListWatch: Equatable, Identifiable {
 
     init(id: UUID = UUID(), name: String, check: String, items: [WatchListItem], args: [String: WatchListValue] = [:],
          fields: [String]? = nil, expect: [String: WatchListValue] = [:], everyMinutes: Int = WatchListWatch.defaultMinutes,
-         paused: Bool = false, createdAt: Date = Date(), lastRunAt: Date? = nil) {
+         paused: Bool = false, createdAt: Date = Date(), requires: [String] = [], lastRunAt: Date? = nil) {
         self.id = id
         self.name = name
         self.check = check
@@ -290,6 +309,7 @@ struct WatchListWatch: Equatable, Identifiable {
         self.everyMinutes = WatchListWatch.clamp(everyMinutes)
         self.paused = paused
         self.createdAt = createdAt
+        self.requires = requires
         self.lastRunAt = lastRunAt
     }
 
@@ -302,6 +322,66 @@ struct WatchListWatch: Equatable, Identifiable {
     }
 
     func item(_ key: String) -> WatchListItem? { items.first { $0.key == key } }
+
+    /// What its watch.json holds.
+    var definition: WatchListDefinition {
+        WatchListDefinition(id: id, name: name, check: check, items: items.map { .init(key: $0.key, expect: $0.expect) }, args: args,
+                            fields: fields, expect: expect, everyMinutes: everyMinutes, paused: paused, createdAt: createdAt,
+                            requires: requires)
+    }
+
+    /// Takes in a definition (a watch.json changed by hand, or a change from the chat): items keep what their checks
+    /// found, by key; new items start unchecked; and what counts as right is worked out again for every item. `quiet`
+    /// when the person sees the result where they made the change. The watch keeps its id.
+    mutating func adopt(_ definition: WatchListDefinition, quiet: Bool) {
+        name = definition.name
+        check = definition.check
+        args = definition.args
+        fields = definition.fields
+        expect = definition.expect
+        everyMinutes = WatchListWatch.clamp(definition.everyMinutes)
+        paused = definition.paused
+        createdAt = definition.createdAt
+        requires = definition.requires
+        let earlier = Dictionary(items.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        items = definition.items.map { entry in
+            var item = earlier[entry.key] ?? WatchListItem(key: entry.key)
+            item.expect = entry.expect
+            WatchListRules.refresh(&item, fields: fields, expect: expect, quiet: quiet)
+            return item
+        }
+    }
+}
+
+/// A watch as its watch.json says it: what to check, what counts as right and how often; not what the checks found.
+struct WatchListDefinition: Equatable {
+    struct Item: Equatable {
+        var key: String
+        var expect: [String: WatchListValue] = [:]
+    }
+
+    var id: UUID
+    var name: String
+    var check: String
+    var items: [Item]
+    var args: [String: WatchListValue] = [:]
+    var fields: [String]?
+    var expect: [String: WatchListValue] = [:]
+    var everyMinutes = WatchListWatch.defaultMinutes
+    var paused = false
+    var createdAt: Date
+    var requires: [String] = []
+    /// Keys a person added that Noteling doesn't use, kept as they wrote them (compact JSON) when it writes the file.
+    var other: String?
+
+    /// The same definition, apart from the id and the keys Noteling doesn't use.
+    func sameSettings(as other: WatchListDefinition) -> Bool {
+        var a = self, b = other
+        a.id = b.id
+        a.other = nil
+        b.other = nil
+        return a == b
+    }
 }
 
 extension WatchListWatch: Codable {
@@ -337,12 +417,24 @@ struct WatchListReading: Equatable {
     var url: String?
     var state: [String: WatchListValue]
     var facts: String?
+    /// The check's own words about the item, when it said something.
+    var why: [String]?
+
+    init(title: String?, url: String?, state: [String: WatchListValue], facts: String?, why: [String]? = nil) {
+        self.title = title
+        self.url = url
+        self.state = state
+        self.facts = facts
+        self.why = why
+    }
 
     static let fieldLimit = 40
     static let factsLimit = 8_000
+    static let whyLimit = 5
+    static let whyLineLimit = 300
 
-    /// A check's return value: `title`, optional `url`, `state` (an object of flat fields) and optional `facts`. An
-    /// `error`, or no `state` object, means it couldn't check.
+    /// A check's return value: `title`, optional `url`, `state` (an object of flat fields), optional `facts` and an
+    /// optional `why` (a short string, or a list of them). An `error`, or no `state` object, means it couldn't check.
     static func parse(_ value: Any?) -> WatchListOutcome {
         guard let object = value as? [String: Any] else { return .failed("The check didn't return what it found.") }
         if let error = object["error"], !(error is NSNull), !"\(error)".trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -364,7 +456,64 @@ struct WatchListReading: Equatable {
             return trimmed.isEmpty ? nil : WatchListValue.clip(trimmed, limit)
         }
         let facts = object["facts"].flatMap { $0 is NSNull ? nil : WatchListValue.jsonText($0, limit: factsLimit) }
-        return .checked(WatchListReading(title: text("title", 300), url: text("url", 2_000), state: state, facts: facts))
+        return .checked(WatchListReading(title: text("title", 300), url: text("url", 2_000), state: state, facts: facts,
+                                         why: whyLines(object["why"])))
+    }
+
+    /// `why` as the check wrote it: a string or a list of strings, each trimmed and kept short; nil when it said nothing.
+    static func whyLines(_ value: Any?) -> [String]? {
+        let raw: [Any]
+        switch value {
+        case let text as String: raw = [text]
+        case let list as [Any]: raw = list
+        default: return nil
+        }
+        let lines = raw.compactMap { entry -> String? in
+            guard let text = entry as? String else { return nil }
+            let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return line.isEmpty ? nil : WatchListValue.clip(line, whyLineLimit)
+        }
+        return lines.isEmpty ? nil : Array(lines.prefix(whyLimit))
+    }
+
+    /// What a list check returned for all its items: a list of per-item results in the items' order, or an object of
+    /// per-item results keyed by item. A list of another length can't be matched to the items, so every item is "couldn't
+    /// check"; with an object, an item it has no result for is "couldn't check", and a key that is no item is left out.
+    /// An `error` for the whole run, or anything else, is "couldn't check" for every item, with the run's reason.
+    static func parseList(_ value: Any?, keys: [String]) -> [String: WatchListOutcome] {
+        func all(_ reason: String) -> [String: WatchListOutcome] {
+            Dictionary(keys.map { ($0, .failed(reason)) }, uniquingKeysWith: { first, _ in first })
+        }
+        func one(_ entry: Any?) -> WatchListOutcome {
+            if entry == nil || entry is NSNull { return .failed("The check returned nothing for this item.") }
+            guard entry is [String: Any] else { return .failed("The check's result for this item isn't an object with a state.") }
+            return parse(entry)
+        }
+        if let list = value as? [Any] {
+            guard list.count == keys.count else {
+                return all("The check returned \(list.count) result\(list.count == 1 ? "" : "s") for \(keys.count) item\(keys.count == 1 ? "" : "s"), "
+                    + "so they can't be matched to the items in order.")
+            }
+            return Dictionary(zip(keys, list).map { ($0, one($1)) }, uniquingKeysWith: { first, _ in first })
+        }
+        guard let object = value as? [String: Any] else {
+            return all("The check didn't return a list of results, or results keyed by item.")
+        }
+        let wanted = Set(keys)
+        if !wanted.contains("error"), let error = object["error"], !(error is NSNull) {
+            return all(WatchListRules.reason(error as? String ?? WatchListValue.jsonText(error, limit: 300)))
+        }
+        if !wanted.contains("state"), object["state"] != nil, object.keys.allSatisfy({ !wanted.contains($0) }) {
+            return all("The check returned one result, not one for each item.")
+        }
+        let others = object.keys.filter { !wanted.contains($0) }.sorted()
+        let hint = others.isEmpty ? "" : " It returned results for " + WatchListValue.clip(others.prefix(5).joined(separator: ", "), 200)
+            + (others.count > 5 ? " and \(others.count - 5) more" : "") + "."
+        var outcomes: [String: WatchListOutcome] = [:]
+        for key in keys where outcomes[key] == nil {
+            outcomes[key] = object.keys.contains(key) ? one(object[key]) : .failed("The check returned nothing for this item." + hint)
+        }
+        return outcomes
     }
 }
 
@@ -385,12 +534,15 @@ struct WatchListAlert: Equatable {
     /// The item's title (or its key), or the watch's name when the alert is about several items.
     var title: String
     var kind: Kind
+    /// What the check said about the item in its own words, if anything.
+    var why: [String] = []
 
-    /// In plain words: one line per difference, "Back to what you expected", or why it couldn't check.
+    /// In plain words: one line per difference, "Back to what you expected", or why it couldn't check. Then, when the
+    /// check said why in its own words, its first reason: the difference comes first, since a notification shows little.
     var body: String {
         switch kind {
-        case .notAsExpected(let differences): return differences.map(\.words).joined(separator: "\n")
-        case .backToExpected: return "Back to what you expected"
+        case .notAsExpected(let differences): return (differences.map(\.words) + WatchListRules.notificationLines(why)).joined(separator: "\n")
+        case .backToExpected: return (["Back to what you expected"] + WatchListRules.notificationLines(why)).joined(separator: "\n")
         case .couldNotCheck(let reason): return "Couldn't check: \(reason)"
         case .couldNotCheckItems(let count, let reason): return "Couldn't check \(count) items: \(reason)"
         }
