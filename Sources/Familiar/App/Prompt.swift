@@ -228,6 +228,19 @@ enum Prompt {
         return s
     }
 
+    /// What the page's own tools said, run ahead for the page in front (a pack's `brief:` script).
+    static func brief(_ b: PageBriefs.Brief, now: Date = Date()) -> String {
+        let age = max(0, Int(now.timeIntervalSince(b.at)))
+        let when = b.at.formatted(date: .omitted, time: .standard)
+        if b.failed {
+            return "\n## The page's tools couldn't run (\(b.script), \(when))\n\(b.text)\n"
+                + "Say plainly what couldn't be checked and why. Don't fill the gap with a guess.\n"
+        }
+        return "\n## What the page's tools say (\(b.script), run at \(when), \(age) s ago)\n"
+            + "This is the \(b.pack) pack's own reading of this page. Answer from it; call a tool only for something it "
+            + "doesn't cover.\n```json\n\(b.text)\n```\n"
+    }
+
     static func wandInstruction(target: WandTarget, ctx: ScreenContext?) -> String {
         var s: String
         if target.isRegion {
@@ -238,6 +251,7 @@ enum Prompt {
                 for e in target.regionElements { s += "- \(e.summary)\n" }
             }
             s += "The violet ink stroke on the full screenshot is their drawing. The second image is a crop of the circled area.\n\n"
+            s += packShapeFirst
             s += """
             Respond in this shape, under 90 words before the Suggestions line:
             1. One line naming what they circled, as it appears on screen (the group, table, chart or set of fields).
@@ -251,6 +265,7 @@ enum Prompt {
         if let e = target.element { s += "Accessibility says it is: \(e.label)\n" }
         if let t = target.windowTitle, !t.isEmpty { s += "Window: “\(t)”\(target.windowOwner.map { " (\($0))" } ?? "")\n" }
         s += "The spot is marked with a violet ring on the full screenshot. The second image is a zoomed crop around it.\n\n"
+        s += packShapeFirst
         s += """
         Respond in this shape, under 80 words before the Suggestions line:
         1. One line naming what they pointed at, as it appears on screen.
@@ -260,6 +275,9 @@ enum Prompt {
         """
         return s
     }
+
+    /// A pack that knows the page knows what people there need from the pen better than the default shape does.
+    static let packShapeFirst = "If the active tool pack says how to answer when someone circles or points at something, use its shape and length instead of the one below.\n"
 
     /// Notes people stuck on controls: the ones on what was picked, then the rest of the scene.
     /// The notes a request carries, each as its author's claim with its age, and any check run on it.

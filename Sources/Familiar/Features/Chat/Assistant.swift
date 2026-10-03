@@ -40,6 +40,8 @@ final class Assistant: ObservableObject {
     var onShowNotes: (() -> Void)?        // the badge was clicked: the app shows the notes on the page
     /// Where how notes get used is kept, on this Mac only.
     var notesUsage: NotesUsageLog?
+    /// The page's own tools, run ahead when a page arrives; the pen and typed questions answer from them.
+    var briefs: PageBriefs?
     var onOpenWatchDraft: ((_ title: String, _ markdown: String) -> Void)?
     var onSetControlLane: ((_ allow: Bool, _ background: Bool) -> Void)?   // the app persists both and reconfigures
     var cardConversation: CardConversation?
@@ -508,6 +510,8 @@ final class Assistant: ObservableObject {
         let ctx = watcher.current ?? watcher.sample()
         chatBusy = true
         let generation = captureGeneration
+        let briefing = cardConversation?.card == nil && briefs?.source(for: ctx) != nil
+        if briefing { briefs?.prefetch(ctx) }
 
         Task {
             var content: [[String: Any]] = []
@@ -542,9 +546,15 @@ final class Assistant: ObservableObject {
                 }
             }
             guard generation == captureGeneration else { finishRequest(); return }
+            var brief = ""
+            if briefing {
+                status = "Checking this page…"
+                if let b = await briefs?.brief(for: ctx, wait: 10) { brief = Prompt.brief(b) }
+                guard generation == captureGeneration else { finishRequest(); return }
+            }
             let context = cardConversation?.card == nil
                 ? Prompt.context(ctx, recent: watcher.history) + packsSection(ctx) + (sourceConversation?.context ?? "") : ""
-            let text = context + page + "\n## Question\n\(q)\n"
+            let text = context + brief + page + "\n## Question\n\(q)\n"
             content.append(["type": "text", "text": text])
             diagnoseChat(.contextReady)
             await send(content: content, ctx: ctx, title: q, messageID: m.id)
@@ -579,6 +589,9 @@ final class Assistant: ObservableObject {
         notesUsage?.record("pick", counts: ["onTarget": target.notes.count, "notOnScreen": target.notOnScreen.count, "checks": checked.count],
                            tags: ["kind": target.isRegion ? "circle" : target.named != nil ? "sticker" : "point"],
                            notes: (target.notes + off).map(\.id))
+
+        let briefing = briefs?.source(for: ctx) != nil
+        if briefing { briefs?.prefetch(ctx) }
 
         Task {
             status = "Capturing screen…"
@@ -642,9 +655,15 @@ final class Assistant: ObservableObject {
                                        notes: [note.id])
                 }
             }
+            var brief = ""
+            if briefing {
+                status = "Checking this page…"
+                if let b = await briefs?.brief(for: ctx, wait: 10) { brief = Prompt.brief(b) }
+                guard generation == captureGeneration else { status = ""; finishRequest(); return }
+            }
             let sent = Set((target.notes + off).map(\.id))
             let elsewhere = registry.notes(for: ctx).filter { !sent.contains($0.id) }
-            let text = Prompt.context(ctx, recent: watcher.history) + packsSection(ctx, notes: false) + "\n"
+            let text = Prompt.context(ctx, recent: watcher.history) + packsSection(ctx, notes: false) + brief + "\n"
                 + Prompt.wandInstruction(target: target, ctx: ctx)
                 + Prompt.notes(onTarget: target.notes, notOnScreen: off, furtherDown: target.furtherDown, elsewhere: elsewhere, checks: checks)
             content.append(["type": "text", "text": text])

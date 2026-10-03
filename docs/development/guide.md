@@ -251,6 +251,13 @@ match:
 ---
 Free-form overview that is always included when the pack is active.
 ```
+Two optional keys name scripts by file name (without `.py`):
+- `brief: <script>`: run as soon as a page the pack matches comes to the front, with no arguments (the script reads
+  the page from `NOTELING_CONTEXT`). Its result is kept for two minutes per page address and sent with the pen's request
+  and with typed questions on that page as "What the page's tools say", so the answer needs no tool round trips. The
+  pen waits up to 10 seconds for a run in progress; a failed run is kept for 30 seconds and the answer says what
+  couldn't be checked. A pack whose body says how to answer a pen pick gets its own shape instead of the default one.
+- `watch: <script>`: the check a watch list runs for each item (see Watch list).
 Scripts: a top-level `run(...)` with type hints and a docstring becomes a tool; the docstring's `Args:` section
 becomes parameter descriptions; the return value is JSON-serialised back to the model. Dependencies go in a
 PEP 723 header and are installed by the bundled `uv` on first use:

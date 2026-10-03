@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let shell = ShellState()
     private let wand = WandController()
     private let notesStore = NotesStore()
+    private var briefs: PageBriefs!
     private let notesShortcut = NotesShortcut()
     private let notesUsage = NotesUsageLog()
     private let hideHint = HideHint()
@@ -65,7 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ownTools = config.resolvedToolsDir.standardizedFileURL.path.hasPrefix(Config.dir.standardizedFileURL.path)
         notesStore.moveNotes(fromPacksIn: config.resolvedToolsDir, rename: ownTools)
         registry.notesStore = notesStore
+        briefs = PageBriefs(registry: registry)
         assistant = Assistant(config: config, watcher: watcher, registry: registry, shell: shell, learning: learning, execution: execution, desktop: desktop)
+        assistant.briefs = briefs
         assistant.onStartWand = { [weak self] in self?.startWand() }
         assistant.onCancelWand = { [weak self] in if self?.wand.isActive == true { self?.wand.cancel() } }
         assistant.onOpenWatchDraft = { [weak self] title, markdown in
@@ -388,6 +391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watcher.onChange = { [weak self] ctx in
             guard let self else { return }
             if self.wand.isShowingNotes { self.wand.hideNotes() }   // another page: its notes go with it
+            self.briefs.prefetch(ctx)   // a page whose pack briefs it: read it now, so the pen answers without waiting
             let here = self.registry.notes(for: ctx)
             self.assistant.notesHere = here
             if !here.isEmpty {
